@@ -1,0 +1,39 @@
+name: Refresh Job Listings
+
+# Runs the ingestion pipeline twice a day so job listings stay fresh.
+# Free on GitHub Actions (private repos get 2,000 min/month; this uses ~2-5 min/run,
+# so ~60 runs/month is nowhere close to the limit).
+#
+# SETUP REQUIRED — add these as repo secrets before this will work:
+#   GitHub repo -> Settings -> Secrets and variables -> Actions -> New repository secret
+#     SUPABASE_URL = (same value as in your local .env)
+#     SUPABASE_KEY = (same value as in your local .env)
+#
+# Times are UTC. 06:00 UTC ≈ 7am Lagos / 8am Nairobi. 18:00 UTC ≈ 7pm Lagos / 8pm Nairobi.
+# Adjust the cron lines below if you want different times.
+
+on:
+  schedule:
+    - cron: "0 6 * * *"   # 06:00 UTC
+    - cron: "0 18 * * *"  # 18:00 UTC
+  workflow_dispatch: {}    # lets you click "Run workflow" manually on GitHub to test
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run ingestion pipeline
+        run: node ingest/pipeline.js
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
