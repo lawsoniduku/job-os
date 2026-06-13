@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 
-const API = "http://localhost:3000";
+const API = import.meta.env.VITE_API_URL || "http://localhost:3000";
 
 // ============================================================
 // UTILITIES
@@ -523,7 +523,7 @@ function InterviewPanel({ job, onClose }) {
 // ============================================================
 // QUICK PROMPTS
 // ============================================================
-const SEARCH_PROMPTS = [
+const PROMPTS = [
   "Remote customer service open to Nigerians",
   "People analytics roles open to Africa",
   "Virtual assistant remote worldwide",
@@ -532,15 +532,6 @@ const SEARCH_PROMPTS = [
   "Software engineer remote global",
   "HR generalist remote Africa",
   "Digital marketing manager remote Kenya"
-];
-
-const CHAT_PROMPTS = [
-  "What remote roles can I do from Nigeria?",
-  "What salary should I expect as a data analyst in Lagos?",
-  "How do I tailor my CV for a remote role?",
-  "What is the difference between people analytics and HR?",
-  "Which companies are known to hire from Africa?",
-  "How do I find jobs open to my location?",
 ];
 
 // ============================================================
@@ -614,7 +605,7 @@ export default function JobCopilot() {
           <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-600 to-violet-600 flex items-center justify-center font-bold text-sm shrink-0">JC</div>
           <div>
             <div className="text-sm font-semibold leading-tight">Job Copilot</div>
-            <div className="text-xs text-zinc-500">AI job search, global eligibility</div>
+            <div className="text-xs text-zinc-500">Africa's AI job engine</div>
           </div>
         </div>
         <div className="flex items-center gap-3">
@@ -638,17 +629,17 @@ export default function JobCopilot() {
         {messages.length === 0 && (
           <div className="space-y-6">
             <div className="text-center pt-6">
-              <div className="text-3xl mb-2">💬</div>
-              <h2 className="text-lg font-semibold">Ask me anything about your job search</h2>
+              <div className="text-3xl mb-2">🌍</div>
+              <h2 className="text-lg font-semibold">Find jobs that are actually open to you</h2>
               <p className="text-sm text-zinc-500 mt-1 max-w-md mx-auto">
-                Ask about roles, salaries, how to position your CV, which companies hire from your country, or what to search for. I'll answer directly — and suggest a search when it helps.
+                We filter out jobs restricted to specific countries. Only roles genuinely open to African candidates — global remote, worldwide, EMEA — make it through.
               </p>
             </div>
             <div>
-              <p className="text-xs text-zinc-600 mb-3 text-center">{tab === "chat" ? "Try asking" : "Try these searches"}</p>
+              <p className="text-xs text-zinc-600 mb-3 text-center">Try these searches</p>
               <div className="grid grid-cols-2 gap-2">
-                {(tab === "chat" ? CHAT_PROMPTS : SEARCH_PROMPTS).map((p,i) => (
-                  <button key={i} onClick={() => tab === "chat" ? runChat(p) : runSearch(p)}
+                {PROMPTS.map((p,i) => (
+                  <button key={i} onClick={() => runSearch(p)}
                     className="text-left text-xs text-zinc-400 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 hover:border-zinc-600 px-3 py-2.5 rounded-xl transition leading-snug">
                     {p}
                   </button>
