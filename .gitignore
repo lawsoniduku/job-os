@@ -1,0 +1,9 @@
+node_modules/
+.env
+.env.*
+dist/
+build/
+*.log
+.DS_Store
+job-os-ui/node_modules/
+job-os-ui/dist/

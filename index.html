@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Job OS</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: system-ui, Arial;
+      background: #f3f4f6;
+    }
+
+    /* TOP BAR */
+    header {
+      background: #ffffff;
+      padding: 16px;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      position: sticky;
+      top: 0;
+      border-bottom: 1px solid #e5e7eb;
+      z-index: 10;
+    }
+
+    input, select {
+      padding: 10px;
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      outline: none;
+    }
+
+    input {
+      width: 300px;
+    }
+
+    button {
+      padding: 10px 14px;
+      background: #2563eb;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: #1d4ed8;
+    }
+
+    /* LAYOUT */
+    .container {
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      gap: 20px;
+      padding: 20px;
+    }
+
+    /* FILTER PANEL */
+    .filters {
+      background: white;
+      padding: 15px;
+      border-radius: 10px;
+      height: fit-content;
+      border: 1px solid #e5e7eb;
+    }
+
+    .filters h3 {
+      margin-top: 0;
+    }
+
+    .filter-item {
+      margin-bottom: 12px;
+    }
+
+    /* JOB LIST */
+    .jobs {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .card {
+      background: white;
+      padding: 16px;
+      border-radius: 10px;
+      border: 1px solid #e5e7eb;
+      cursor: pointer;
+      transition: 0.2s;
+    }
+
+    .card:hover {
+      box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+      transform: translateY(-2px);
+    }
+
+    .title {
+      font-size: 16px;
+      font-weight: 600;
+      color: #111827;
+    }
+
+    .meta {
+      font-size: 13px;
+      color: #6b7280;
+      margin-top: 4px;
+    }
+
+    .desc {
+      font-size: 13px;
+      color: #4b5563;
+      margin-top: 10px;
+      line-height: 1.4;
+    }
+
+    .badge {
+      display: inline-block;
+      font-size: 11px;
+      padding: 3px 8px;
+      background: #e0f2fe;
+      color: #0369a1;
+      border-radius: 999px;
+      margin-top: 8px;
+    }
+  </style>
+</head>
+
+<body>
+
+<header>
+  <input id="search" placeholder="Search jobs (e.g. data analyst)" />
+
+  <select id="sort">
+    <option value="newest">Newest</option>
+    <option value="company">Company</option>
+  </select>
+
+  <button onclick="loadJobs()">Search</button>
+</header>
+
+<div class="container">
+
+  <!-- FILTERS -->
+  <div class="filters">
+    <h3>Filters</h3>
+
+    <div class="filter-item">
+      <label>
+        <input type="checkbox" id="remote" />
+        Remote only
+      </label>
+    </div>
+
+    <div class="filter-item">
+      <input id="company" placeholder="Company" />
+    </div>
+
+    <div class="filter-item">
+      <input id="location" placeholder="Location" />
+    </div>
+
+    <button onclick="loadJobs()">Apply Filters</button>
+  </div>
+
+  <!-- JOB LIST -->
+  <div class="jobs" id="jobs"></div>
+
+</div>
+
+<script>
+const API = "http://localhost:3000";
+
+async function loadJobs() {
+  const q = document.getElementById("search").value;
+  const remote = document.getElementById("remote").checked;
+  const company = document.getElementById("company").value;
+  const location = document.getElementById("location").value;
+
+  let url = `${API}/jobs/search?q=${q || ""}&remote=${remote}&company=${company || ""}&location=${location || ""}`;
+
+  const res = await fetch(url);
+  const data = await res.json();
+
+  let jobs = data.data || [];
+
+  // SIMPLE SORTING (frontend level for now)
+  const sort = document.getElementById("sort").value;
+
+  if (sort === "company") {
+    jobs.sort((a, b) => (a.company || "").localeCompare(b.company || ""));
+  }
+
+  const container = document.getElementById("jobs");
+  container.innerHTML = "";
+
+  jobs.forEach(job => {
+    const card = document.createElement("div");
+    card.className = "card";
+
+    card.onclick = () => {
+      window.open(job.apply_url, "_blank");
+    };
+
+    card.innerHTML = `
+      <div class="title">${job.title || job.position || "No Title"}</div>
+      <div class="meta">${job.company || ""} • ${job.location || "Remote/Global"}</div>
+      <div class="desc">${(job.description || "").slice(0, 160)}...</div>
+      <div class="badge">Apply Now</div>
+    `;
+
+    container.appendChild(card);
+  });
+}
+
+// initial load
+loadJobs();
+</script>
+
+</body>
+</html>
