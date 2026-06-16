@@ -20,6 +20,7 @@ import { fetchRemoteOK } from "./connectors/feeds/remoteok.js";
 import { fetchHimalayas } from "./connectors/feeds/himalayas.js";
 import { fetchJobicy } from "./connectors/feeds/jobicy.js";
 import { fetchArbeitnow } from "./connectors/feeds/arbeitnow.js";
+import { fetchMyJobMag } from "./connectors/feeds/myjobmag.js";
 import {
   GREENHOUSE_COMPANIES, LEVER_COMPANIES, ASHBY_COMPANIES,
   WORKABLE_COMPANIES, SMARTRECRUITERS_COMPANIES,
@@ -47,6 +48,7 @@ async function run() {
     fetchHimalayas({ limit: 300 }),
     fetchJobicy({ count: 100 }),
     fetchArbeitnow({ pages: 2 }),
+    fetchMyJobMag(),
   ]);
   let jobs = [];
   for (const s of settled) if (s.status === "fulfilled") jobs.push(...s.value);
