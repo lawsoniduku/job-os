@@ -101,6 +101,8 @@ export const ROLE_TAXONOMY = [
       "frontend engineer","full stack engineer","fullstack engineer",
       "web developer","mobile developer","ios developer","android developer",
       "react developer","node developer","python developer","java developer",
+      "android engineer","ios engineer","mobile engineer","backend api engineer",
+      "api engineer","embedded engineer","firmware engineer",
       "rails developer","php developer","golang developer",
       "devops engineer","platform engineer","site reliability engineer",
       "sre","infrastructure engineer","cloud engineer","aws engineer",
@@ -199,10 +201,8 @@ export const ROLE_TAXONOMY = [
       "operations coordinator","business operations manager",
       "operations analyst","business analyst","process analyst",
       "strategy manager","strategy consultant","strategy analyst","process improvement specialist",
-      "lean specialist","six sigma","project manager","programme manager",
-      "project coordinator","project lead","delivery manager",
-      "scrum master","agile coach","change manager","transformation manager",
-      "supply chain manager","logistics manager","procurement manager","chief of staff"
+      "lean specialist","six sigma","transformation manager","chief of staff",
+      "store manager","retail manager","branch operations manager","area manager","floor manager"
     ],
     keywords: ["process","efficiency","kpi","metrics","jira","confluence",
       "asana","monday.com","notion","okrs","reporting"]
@@ -212,14 +212,11 @@ export const ROLE_TAXONOMY = [
     department: "Finance",
     aliases: [
       "finance manager","financial controller","controller",
-      "accountant","senior accountant","management accountant",
-      "financial accountant","accounts payable","accounts receivable",
-      "bookkeeper","payroll specialist","treasury analyst",
+      "payroll specialist","treasury analyst",
       "fp&a","fp&a analyst","financial planning analyst",
       "financial analyst","finance analyst","investment analyst",
       "risk analyst","credit analyst","fraud analyst","revenue analyst",
       "budget analyst","tax specialist","tax analyst",
-      "audit specialist","internal auditor","external auditor",
       "chief financial officer","cfo","vp finance","head of finance"
     ],
     keywords: ["ifrs","gaap","quickbooks","xero","sap","oracle",
@@ -233,6 +230,7 @@ export const ROLE_TAXONOMY = [
       "interaction designer","visual designer","graphic designer",
       "brand designer","web designer","motion designer",
       "ux researcher","user researcher","design researcher",
+      "art director","creative director","design director",
       "design lead","head of design","design manager","senior designer"
     ],
     keywords: ["figma","sketch","adobe xd","prototyping","wireframing",
@@ -246,12 +244,176 @@ export const ROLE_TAXONOMY = [
       "bdr","account executive","ae","enterprise sales","b2b sales",
       "inside sales","outside sales","field sales","sales manager",
       "sales director","vp sales","chief revenue officer","cro",
-      "revenue operations","revops","sales operations","sales engineer",
-      "solutions engineer","partnerships manager","bd manager",
+      "revenue operations","revops","sales operations",
       "business development manager","commercial manager","regional sales manager"
     ],
     keywords: ["salesforce","hubspot","outreach","salesloft","cold calling",
       "pipeline","quota","arr","mrr","deal closing","prospecting"]
+  },
+  {
+    cluster: "Solutions Architecture / Pre-Sales",
+    department: "Sales",
+    aliases: [
+      "solutions architect","solution architect","solutions engineer","pre-sales engineer",
+      "presales engineer","sales engineer","technical account manager","solutions consultant",
+      "implementation consultant","implementation manager","integration consultant",
+      "partner development manager","partnerships manager","alliances manager",
+      "channel manager","solutions specialist","solution specialist","solution lead",
+      "network solution lead","enterprise architect","cloud solutions architect",
+      "principal architect","solutions architecture","customer solutions engineer",
+      "field engineer (sales)","deployment engineer","onboarding engineer"
+    ],
+    keywords: ["pre-sales","presales","solution design","poc","proof of concept",
+      "technical demo","rfp","customer onboarding","architecture","integration","partnerships"]
+  },
+  {
+    cluster: "Accounting / Audit",
+    department: "Finance",
+    aliases: [
+      "accountant","chartered accountant","staff accountant","senior accountant",
+      "account officer","accounts officer","accounts payable","accounts receivable",
+      "bookkeeper","auditor","internal auditor","external auditor","audit manager",
+      "audit associate","tax accountant","cost accountant","management accountant",
+      "financial accountant","accounting manager","accounting officer","account executive (finance)",
+      "accounts clerk","accounting clerk","payroll accountant","reconciliation officer"
+    ],
+    keywords: ["ledger","reconciliation","trial balance","journal entries","audit",
+      "icai","ican","acca","cpa","financial statements","vat","tax returns"]
+  },
+  {
+    cluster: "Healthcare / Medical",
+    department: "Healthcare",
+    aliases: [
+      "nurse","registered nurse","nursing officer","midwife","doctor","physician",
+      "medical officer","medical doctor","house officer","clinical officer",
+      "pharmacist","pharmacy technician","lab scientist","laboratory scientist",
+      "medical laboratory scientist","radiographer","physiotherapist","dentist",
+      "dental surgeon","optometrist","health officer","public health officer",
+      "community health worker","clinical pharmacist","matron","caregiver","care assistant",
+      "health records officer","nutritionist","dietitian","medical sales representative"
+    ],
+    keywords: ["patient care","clinical","diagnosis","treatment","ward","icu",
+      "phlebotomy","pharmacology","mbbs","nursing","medical","hospital"]
+  },
+  {
+    cluster: "Civil / Mechanical / Electrical Engineering",
+    department: "Engineering (Physical)",
+    aliases: [
+      "civil engineer","structural engineer","mechanical engineer","electrical engineer",
+      "electronics engineer","chemical engineer","petroleum engineer","mining engineer",
+      "industrial engineer","production engineer","maintenance engineer","project engineer",
+      "site engineer","field engineer","quantity surveyor","building engineer",
+      "hvac engineer","instrumentation engineer","process engineer","quality engineer",
+      "automotive engineer","marine engineer","geotechnical engineer","water engineer",
+      "biomedical engineer","telecom engineer","rf engineer","power engineer","facilities engineer"
+    ],
+    keywords: ["autocad","solidworks","construction","hse","maintenance","cad",
+      "piping","fabrication","commissioning","plant","drilling","survey"]
+  },
+  {
+    cluster: "Education / Teaching",
+    department: "Education",
+    aliases: [
+      "teacher","lecturer","tutor","instructor","professor","assistant professor",
+      "teaching assistant","school teacher","primary teacher","secondary teacher",
+      "subject teacher","head teacher","headmaster","headmistress","principal",
+      "academic coordinator","education officer","curriculum developer","education consultant",
+      "trainer","corporate trainer","exam invigilator","school administrator","dean","registrar (education)"
+    ],
+    keywords: ["curriculum","lesson plan","classroom","pedagogy","students","syllabus",
+      "teaching","academic","e-learning","grading","tutoring"]
+  },
+  {
+    cluster: "Legal",
+    department: "Legal",
+    aliases: [
+      "lawyer","legal officer","legal counsel","corporate counsel","in-house counsel",
+      "attorney","solicitor","barrister","legal associate","legal advisor",
+      "legal assistant","paralegal","company secretary","legal manager","head of legal",
+      "general counsel","compliance officer","compliance manager","contracts manager",
+      "legal analyst","litigation associate","legal practitioner",
+      "commercial counsel","tax counsel","privacy counsel","employment counsel"
+    ],
+    keywords: ["contracts","litigation","compliance","regulatory","due diligence",
+      "legal advice","corporate law","drafting","negotiation","statutory"]
+  },
+  {
+    cluster: "Admin / Office Support",
+    department: "Administration",
+    aliases: [
+      "administrative officer","admin officer","admin assistant","administrative assistant",
+      "office administrator","office manager","office assistant","receptionist",
+      "front desk officer","secretary","personal assistant","executive assistant",
+      "data entry officer","data entry clerk","clerk","office clerk","filing clerk",
+      "administrative coordinator","facilities officer","front office executive","office coordinator"
+    ],
+    keywords: ["scheduling","filing","correspondence","office management","minutes",
+      "calendar","reception","clerical","administrative support"]
+  },
+  {
+    cluster: "Supply Chain / Logistics",
+    department: "Operations",
+    aliases: [
+      "supply chain officer","supply chain manager","logistics officer","logistics manager",
+      "procurement officer","procurement manager","purchasing officer","buyer",
+      "warehouse officer","warehouse manager","inventory officer","inventory manager",
+      "store keeper","storekeeper","fleet officer","fleet manager","distribution officer",
+      "import export officer","customs officer","shipping officer","dispatch officer",
+      "demand planner","supply planner","materials manager","logistics coordinator"
+    ],
+    keywords: ["procurement","inventory","warehouse","supply chain","logistics",
+      "shipping","freight","distribution","sourcing","fleet","stock"]
+  },
+  {
+    cluster: "Banking / Financial Services",
+    department: "Finance",
+    aliases: [
+      "relationship manager","banking officer","bank teller","teller","branch manager",
+      "credit officer","loan officer","mortgage officer","investment banker",
+      "wealth manager","portfolio manager","retail banking officer","corporate banking officer",
+      "treasury officer","trade finance officer","banking operations officer","cashier",
+      "personal banker","business banker","account relationship manager","banking analyst"
+    ],
+    keywords: ["banking","loans","deposits","credit","kyc","aml","branch",
+      "retail banking","corporate banking","treasury","financial services"]
+  },
+  {
+    cluster: "Content / Writing",
+    department: "Marketing",
+    aliases: [
+      "content writer","copywriter","content creator","content strategist",
+      "editor","copy editor","proofreader","technical writer","blog writer",
+      "content manager","content marketer","journalist","reporter","scriptwriter",
+      "social media writer","seo writer","content producer","communications officer",
+      "communications manager","pr officer","public relations officer"
+    ],
+    keywords: ["content","copywriting","editing","blog","seo content","storytelling",
+      "publishing","editorial","communications","press release"]
+  },
+  {
+    cluster: "Project / Program Management",
+    department: "Operations",
+    aliases: [
+      "project manager","program manager","programme manager","project coordinator",
+      "project lead","project officer","scrum master","agile coach","delivery manager",
+      "project director","pmo","project management officer","portfolio manager (projects)",
+      "technical program manager","implementation manager","change manager"
+    ],
+    keywords: ["project management","pmp","prince2","agile","scrum","gantt",
+      "stakeholder","milestones","deliverables","kanban","budget"]
+  },
+  {
+    cluster: "Skilled Trades / Field",
+    department: "Operations",
+    aliases: [
+      "electrician","plumber","welder","mechanic","technician","driver",
+      "security guard","security officer","cleaner","janitor","cook","chef",
+      "waiter","waitress","tailor","carpenter","painter","generator technician",
+      "field technician","maintenance technician","installation technician","ac technician",
+      "machine operator","factory worker","production operator","forklift operator"
+    ],
+    keywords: ["repair","installation","maintenance","technical","manual",
+      "equipment","machinery","hands-on","field work"]
   }
 ];
 
@@ -303,6 +465,9 @@ const SHORT_TOKENS = {
   va: "Virtual Assistant", ea: "Virtual Assistant", pa: "Virtual Assistant",
   seo: "Digital Marketing", sem: "Digital Marketing", ppc: "Digital Marketing", smm: "Digital Marketing",
   fpa: "Finance", "fp&a": "Finance",
+  // new broad-market short tokens
+  pmp: "Project / Program Management", pmo: "Project / Program Management",
+  rn: "Healthcare / Medical",
 };
 
 // Bare role nouns: lower weight than a full alias, but enough to route
@@ -312,19 +477,37 @@ const BARE_NOUN_HINTS = {
   design: "Design / UX", designer: "Design / UX",
   sales: "Sales", selling: "Sales",
   marketing: "Digital Marketing",
-  finance: "Finance", accounting: "Finance", accountant: "Finance",
+  finance: "Finance",
   operations: "Operations", ops: "Operations",
   support: "Customer Support",
   recruiter: "Talent Acquisition", recruiting: "Talent Acquisition", recruitment: "Talent Acquisition",
-  developer: "Software Engineering", engineer: "Software Engineering", engineering: "Software Engineering",
+  developer: "Software Engineering",
   analyst: "Data Analytics", analytics: "Data Analytics", data: "Data Analytics",
+  // new broad-market bare nouns
+  nurse: "Healthcare / Medical", nursing: "Healthcare / Medical", medical: "Healthcare / Medical",
+  doctor: "Healthcare / Medical", pharmacist: "Healthcare / Medical",
+  teacher: "Education / Teaching", teaching: "Education / Teaching", lecturer: "Education / Teaching",
+  lawyer: "Legal", legal: "Legal", paralegal: "Legal",
+  accountant: "Accounting / Audit", accounting: "Accounting / Audit", auditor: "Accounting / Audit",
+  procurement: "Supply Chain / Logistics", logistics: "Supply Chain / Logistics", warehouse: "Supply Chain / Logistics",
+  receptionist: "Admin / Office Support", secretary: "Admin / Office Support", administrative: "Admin / Office Support",
+  banking: "Banking / Financial Services", teller: "Banking / Financial Services",
+  electrician: "Skilled Trades / Field", plumber: "Skilled Trades / Field",
+  driver: "Skilled Trades / Field", technician: "Skilled Trades / Field",
+  // NOTE: bare "engineer" intentionally removed — it forced civil/mechanical/etc.
+  // into Software Engineering. Specific aliases ("civil engineer", "software
+  // engineer") now decide via specificity scoring instead.
 };
 
 // ============================================================
 // CLUSTER DETECTION — score-based, longest/most-specific wins
 // ============================================================
 function detectCluster(query) {
-  const q = ` ${query.toLowerCase()} `;
+  // Normalize separators: slashes, pipes, commas, parens become spaces so
+  // titles like "Backend / API Engineer, Billing" match cleanly. Collapse
+  // whitespace and pad so boundary regexes work at the edges.
+  const cleaned = String(query).toLowerCase().replace(/[\/|,()\[\]{}]+/g, " ").replace(/\s+/g, " ");
+  const q = ` ${cleaned} `;
   const scores = {};
   const bump = (c, n) => { if (c) scores[c] = Math.max(scores[c] || 0, n); };
   const add = (c, n) => { if (c) scores[c] = (scores[c] || 0) + n; };
@@ -523,6 +706,8 @@ const WORLDWIDE_DESC_STRONG = [
   "open to candidates worldwide", "open to applicants worldwide", "hire from anywhere",
   "work from anywhere in the world", "open to international applicants", "hiring globally",
   "candidates from any country", "no matter where you are", "anywhere in the world",
+  "work from anywhere", "remote (work from anywhere)", "work from anywhere)",
+  "fully remote worldwide", "remote worldwide", "globally remote", "remote, anywhere",
   "open to candidates in africa", "candidates based in africa", "across africa", "open to nigeria",
 ];
 
@@ -606,7 +791,7 @@ const NON_ENGLISH_MARKERS = [
 // to catch roles whose location field is just "Remote" but whose body ties them
 // to a specific country (e.g. "Headquarters: Cluj-Napoca, Romania").
 const FOREIGN_COUNTRIES = [
-  "united states", "usa", "u.s.", "united kingdom", "canada", "germany", "france",
+  "united states", "usa", "u.s.", "united kingdom", "uk", "u.k.", "canada", "germany", "france",
   "spain", "italy", "netherlands", "ireland", "poland", "portugal", "romania",
   "bulgaria", "serbia", "ukraine", "greece", "turkey", "hungary", "austria",
   "belgium", "denmark", "norway", "finland", "switzerland", "sweden",
@@ -624,9 +809,18 @@ const FOREIGN_COUNTRIES = [
  * Word-boundary matching throughout (fixes "campus only"/"remote user" bugs).
  */
 export function checkEligibility(job, country) {
-  const title = ` ${(job.title || "").toLowerCase()} `;
-  const loc = (job.location || "").toLowerCase();
-  const desc = (job.description || "").toLowerCase();
+  // Some scraped descriptions lose their spaces ("Data AnalystLocation : Remote,
+  // UKFull-time"). Insert spaces at word boundaries BEFORE lowercasing so glued
+  // words separate and word-boundary matching works:
+  //   - lower→Upper:        "AnalystLocation" -> "Analyst Location"
+  //   - UPPER→Upperlower:   "UKFull"          -> "UK Full"  (acronym + word)
+  const deglue = (s) =>
+    String(s || "")
+      .replace(/([a-z])([A-Z])/g, "$1 $2")
+      .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
+  const title = ` ${deglue(job.title).toLowerCase()} `;
+  const loc = deglue(job.location).toLowerCase();
+  const desc = deglue(job.description).toLowerCase();
   const region = (job.eligibility_region || "").toLowerCase();
   const titleDesc = ` ${title} ${desc} `;
   const all = ` ${loc} ${desc} ${region} `;
@@ -656,6 +850,49 @@ export function checkEligibility(job, country) {
   if (hasAny(title, FOREIGN_GEO)) return E("excluded", "Title names a specific location", false);
   if (hasAny(titleDesc, RESTRICTION_PHRASES)) return E("excluded", "Role restricted to a specific region", false);
 
+  // 1e. Non-English DESCRIPTION → drop, even if the location field says "Anywhere".
+  // Catches local-market roles (e.g. Brazilian/Mexican companies posting in
+  // Portuguese/Spanish) that mislabel their location as worldwide. We detect by
+  // (a) Portuguese/Spanish marker words, or (b) heavy diacritic density.
+  const NON_EN_DESC = [
+    "estamos","nossa","nosso","você","trabalho","empresa","vaga","vagas","sobre",
+    "experiência","conhecimento","atuar","responsável","equipe","desenvolvimento",
+    "nuestra","nuestro","buscamos","trabajo","empresa","experiencia","conocimiento",
+    "responsable","equipo","habilidades","requisitos","ofrecemos","únete",
+  ];
+  let nonEnHits = 0;
+  for (const w of NON_EN_DESC) if (hasPhrase(desc, w)) nonEnHits++;
+  const diac = (desc.match(/[àâãäçéêíóôõúñ]/g) || []).length;
+  const diacRatio = diac / Math.max(desc.length, 1);
+  if (nonEnHits >= 3 || diacRatio > 0.015) {
+    return E("excluded", "Non-English posting (local-market role)", false);
+  }
+
+  // 1f. Body ties the role to a SPECIFIC foreign country (and the user isn't
+  // targeting it) → overrides a "worldwide" location field. Real postings phrase
+  // this many ways ("based in X", "Location: Remote, UK", "Headquarters: Mexico…
+  // Mexico City"), so instead of matching fixed phrases we check whether a
+  // foreign country name appears NEAR a location cue word.
+  const LOC_CUES = ["location", "based", "headquarters", "hq", "office", "reside",
+    "authorized to work", "eligible to work", "must be", "candidates in", "role is in"];
+  const userTerms = COUNTRY_TERMS[country] || [];
+  function bodyTiesToForeignCountry() {
+    for (const c of FOREIGN_COUNTRIES) {
+      if (userTerms.some((t) => t === c) || country === c) continue; // user's own target
+      if (!hasPhrase(desc, c)) continue;
+      // country is mentioned — is it near a location cue? scan a window.
+      const idx = desc.indexOf(c);
+      if (idx === -1) continue;
+      const window = desc.slice(Math.max(0, idx - 60), idx + 60);
+      if (LOC_CUES.some((cue) => window.includes(cue))) return c;
+    }
+    return null;
+  }
+  const tiedCountry = bodyTiesToForeignCountry();
+  if (tiedCountry) {
+    return E("excluded", `Body ties the role to ${tiedCountry}`, false);
+  }
+
   // 2. Explicit target in LOCATION field → certain.
   const locField = ` ${loc} ${region} `;
   if (country === "africa") {
@@ -684,7 +921,13 @@ export function checkEligibility(job, country) {
   if (!bare) return E("excluded", `Location tied to ${job.location}`, false);
 
   // Bare "Remote": read description for positive signal or country tie.
-  if (hasAny(desc, WORLDWIDE_DESC_STRONG)) return E("likely", "JD: open to anyone, anywhere");
+  // A strong worldwide phrase in the body ("work from anywhere", "open to
+  // candidates worldwide") is as definitive as a worldwide location field, so
+  // it's "certain" — but only if the body doesn't ALSO tie it to a country.
+  if (hasAny(desc, WORLDWIDE_DESC_STRONG)) {
+    if (hasAny(desc, FOREIGN_COUNTRIES)) return E("likely", "Remote, worldwide language but a country is mentioned");
+    return E("certain", "JD: open to anyone, anywhere");
+  }
   if (hasAny(desc, FOREIGN_COUNTRIES)) return E("excluded", "Remote, but body ties it to a specific country", false);
   return E("possible", "Remote — region unconfirmed");
 }
@@ -770,10 +1013,20 @@ export function scoreJobLocally(job, intent) {
   const descAliasHit = intent.matchedAliases?.some((a) => hasPhrase(desc, a));
   const titleCluster = detectCluster(job.title || "").cluster; // what the TITLE really is
 
-  if (titleAliasHit) roleScore = 52;                                  // query alias in title = best
-  else if (titleCluster && titleCluster === intent.cluster) roleScore = 46;  // title's own cluster matches
-  else if (titleCluster && intent.cluster && titleCluster !== intent.cluster) roleScore = 6; // title is clearly a DIFFERENT role
-  else if (descAliasHit) roleScore = 24;                            // query alias in body
+  // Does the title contain the user's ACTUAL search phrase (not just a sibling
+  // alias in the same cluster)? "data analyst" search -> "Data Analyst" title is
+  // a bullseye; "Product Analyst" is same-cluster but NOT what they asked for.
+  const queryPhrase = (intent.rawQuery || "")
+    .toLowerCase()
+    .replace(/\b(jobs?|roles?|positions?|open|to|me|remote|that|are|for|in|the|a|an)\b/g, " ")
+    .replace(/\s+/g, " ").trim();
+  const exactTitleHit = queryPhrase.length >= 4 && hasPhrase(title, queryPhrase);
+
+  if (exactTitleHit) roleScore = 55;                                  // exact query phrase in title = bullseye
+  else if (titleAliasHit) roleScore = 45;                             // a (possibly sibling) cluster alias in title
+  else if (titleCluster && titleCluster === intent.cluster) roleScore = 42;  // title's own cluster matches
+  else if (titleCluster && intent.cluster && titleCluster !== intent.cluster) roleScore = 6; // clearly different role
+  else if (descAliasHit) roleScore = 22;                            // query alias in body
   else if (intent.cluster && job.role_cluster === intent.cluster) {
     // only the stored label matches. Trust it ONLY if there's some textual signal
     // (a query keyword in title/desc); otherwise it's a likely mislabel -> weak.
@@ -810,18 +1063,24 @@ export function scoreJobLocally(job, intent) {
     return { score: Math.max(0, capped), eligibility, offTarget, breakdown: { roleScore: capped, locScore: 0 } };
   }
 
-  // STEP 3: eligibility confidence component (0–34)
-  const locScore = { certain: 34, likely: 26, possible: 14 }[eligibility.confidence] ?? 14;
+  // STEP 3: eligibility confidence component — DELIBERATELY NARROW (30–35, a
+  // 5-pt swing) so it can break ties between equally-good roles but can NEVER
+  // overtake a better role match. Role fit dominates ranking (product decision):
+  // an exact-title match (role 55) must outrank a sibling-alias match (role 48)
+  // regardless of location confidence. Since the role gap (7) exceeds the max
+  // location swing (5), role always wins.
+  const locScore = { certain: 35, likely: 32, possible: 30 }[eligibility.confidence] ?? 30;
 
-  // STEP 4: small nuance signals so equally-good roles still differentiate
+  // STEP 4: tiny tiebreaker signals — kept SMALL (max ~3 total) so they only
+  // separate near-identical results and can never overcome a role-fit gap.
   let bonus = 0;
   const d = job.posted_at || job.created_at;
   if (d) {
     const days = (Date.now() - new Date(d)) / 86400000;
-    if (days < 3) bonus += 6; else if (days < 7) bonus += 4; else if (days < 14) bonus += 2; else if (days > 60) bonus -= 3;
+    if (days < 7) bonus += 2; else if (days < 30) bonus += 1; else if (days > 90) bonus -= 1;
   }
-  if (job.salary_min || job.salary_max) bonus += 2;       // transparent salary
-  if (job.remote === true) bonus += 1;
+  if (job.salary_min || job.salary_max) bonus += 1;       // transparent salary
+  bonus = Math.max(-1, Math.min(bonus, 3));
 
   const total = Math.max(0, Math.min(roleScore + locScore + bonus, 100));
   return { score: Math.round(total), eligibility, offTarget, breakdown: { roleScore, locScore, bonus } };

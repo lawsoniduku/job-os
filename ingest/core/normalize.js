@@ -11,8 +11,28 @@
  */
 
 // strip HTML but KEEP paragraph/line structure, collapse only spaces+tabs
+// Common mojibake → correct character. Order matters: longer sequences first.
+const MOJIBAKE = [
+  [/â€™|â€˜/g, "'"], [/â€œ|â€\u009d/g, '"'], [/â€"|â€"/g, "—"],
+  [/â€¦/g, "…"], [/â¦/g, "…"], [/Â®/g, "®"], [/Â©/g, "©"], [/Â /g, " "],
+  [/Ã©/g, "é"], [/Ã¨/g, "è"], [/Ã±/g, "ñ"], [/Ã¼/g, "ü"], [/Ã¶/g, "ö"],
+  [/â€/g, ""], [/Â/g, ""], [/â/g, ""], // stray leftovers last
+];
+
+// Spam / tracking boilerplate that RemoteOK-style reposts inject.
+const SPAM_PATTERNS = [
+  /please mention the word[^.]*\.?/gi,
+  /and tag\s+[A-Za-z0-9=+/]{6,}/gi,
+  /\(#?R[A-Za-z0-9=+/]{10,}\)/g,
+  /#R[A-Za-z0-9=+/]{6,}/g,
+  /this is a beta feature to avoid spam applicants\.?/gi,
+  /companies can search these words[^.]*\.?/gi,
+  /see this and similar jobs on linkedin\.?/gi,
+  /posted\s+\d{1,2}:\d{2}(:\d{2})?\s*(am|pm)?\.?/gi,
+];
+
 export function cleanText(html = "", max = 3000) {
-  return String(html)
+  let s = String(html)
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<\/(p|div|li|h[1-6]|tr|ul|ol|section)>/gi, "\n")
@@ -22,10 +42,26 @@ export function cleanText(html = "", max = 3000) {
     .replace(/&nbsp;/gi, " ")
     .replace(/&amp;/gi, "&")
     .replace(/&lt;/gi, "<").replace(/&gt;/gi, ">")
-    .replace(/&#\d+;/g, " ")
-    .replace(/[ \t]+/g, " ")     // collapse spaces/tabs only
-    .replace(/ *\n */g, "\n")    // trim around newlines
-    .replace(/\n{3,}/g, "\n\n")  // cap blank lines
+    .replace(/&#\d+;/g, " ");
+
+  // fix mojibake (do NOT de-glue here — it would break "LinkedIn", "PostgreSQL")
+  for (const [re, rep] of MOJIBAKE) s = s.replace(re, rep);
+
+  // strip spam/tracking boilerplate
+  for (const re of SPAM_PATTERNS) s = s.replace(re, " ");
+
+  // remove the dangling "...read more/less" toggle artifact at the very end,
+  // including when glued to a word ("organizless" -> "organiz", "human.less" -> "human.")
+  s = s.replace(/(\w)(less|more)\s*$/i, "$1").replace(/\.\s*(less|more)\s*$/i, ".");
+  s = s.replace(/\s+(less|more)\s*$/i, "");
+  s = s.replace(/\bread\s*$/i, "");
+
+  return s
+    .replace(/\*\*/g, "")        // leftover markdown bold from spam removal
+    .replace(/[ \t]+/g, " ")
+    .replace(/ *\n */g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/\s+([.,;:])/g, "$1") // tidy space-before-punctuation
     .trim()
     .slice(0, max);
 }

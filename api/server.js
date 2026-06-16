@@ -98,7 +98,7 @@ app.get("/ai/search", async (req, res) => {
       if (kw) dbQuery = dbQuery.ilike("title", `%${kw}%`); // value is parameterized -> safe
     }
 
-    const { data: rawJobs, error } = await dbQuery.limit(500);
+    const { data: rawJobs, error } = await dbQuery.limit(250);
     if (error) return res.status(500).json({ error: error.message });
     if (!rawJobs?.length) return res.json({ query: q, total: 0, data: [], message: "No jobs found. Try a broader query." });
 
@@ -115,8 +115,9 @@ app.get("/ai/search", async (req, res) => {
     console.log(`✅ eligible=${eligible.length} ❌ excluded=${excludedCount}`);
 
     // --- optional ONE-SHOT batched LLM re-rank of the top slice ---
-    // On slow local models this can hang; set LLM_RERANK=off to skip entirely.
-    const rerankOn = process.env.LLM_RERANK !== "off";
+    // OFF by default: the local scorer already ranks well, and an LLM round-trip
+    // on every search adds 2-5s of latency. Set LLM_RERANK=on to re-enable.
+    const rerankOn = process.env.LLM_RERANK === "on";
     const topN = eligible.slice(0, 8);
     const rest = eligible.slice(8);
     let finalResults = eligible;

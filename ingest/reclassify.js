@@ -22,12 +22,20 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY
 
 const PAGE = 1000;
 
-async function updateWithRetry(id, patch, tries = 2) {
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function updateWithRetry(id, patch, tries = 5) {
   for (let a = 0; a < tries; a++) {
-    const { error } = await supabase.from("jobs").update(patch).eq("id", id);
-    if (!error) return true;
-    if (a === tries - 1) console.log(`  ❌ ${id}: ${error.message}`);
-    await new Promise((r) => setTimeout(r, 400));
+    try {
+      const { error } = await supabase.from("jobs").update(patch).eq("id", id);
+      if (!error) return true;
+      throw new Error(error.message);
+    } catch (e) {
+      if (a === tries - 1) { console.log(`  ❌ ${id}: ${e.message}`); return false; }
+      // exponential backoff: 0.8s, 1.6s, 2.4s, 3.2s — gives a dropped
+      // connection time to recover before the next attempt.
+      await sleep(800 * (a + 1));
+    }
   }
   return false;
 }
@@ -39,7 +47,7 @@ async function run() {
   const { count } = await supabase.from("jobs").select("id", { count: "exact", head: true });
   console.log(`📊 Total rows: ${count ?? "?"}`);
 
-  let from = 0, done = 0, changed = 0;
+  let from = 0, done = 0, changed = 0, failed = 0;
   const clusterBefore = {};
   const clusterAfter = {};
 
@@ -75,18 +83,21 @@ async function run() {
           eligibility_region: tagged.eligibility_region,
         };
         if (descChanged) patch.description = cleanedDesc;
-        await updateWithRetry(row.id, patch);
-        if (labelChanged) changed++;
+        const okUpdate = await updateWithRetry(row.id, patch);
+        if (okUpdate && labelChanged) changed++;
+        if (!okUpdate) failed++;
+        await sleep(60); // gentle pacing so we don't saturate the connection
       }
       done++;
-      if (done % 200 === 0) console.log(`  …processed ${done}`);
+      if (done % 200 === 0) console.log(`  …processed ${done} (${changed} relabelled, ${failed} failed)`);
     }
 
     from += PAGE;
     if (rows.length < PAGE) break;
   }
 
-  console.log(`\n✅ Processed ${done} rows · ${changed} relabelled`);
+  console.log(`\n✅ Processed ${done} rows · ${changed} relabelled · ${failed} failed`);
+  if (failed > 0) console.log(`   (re-run to retry the ${failed} that failed — it only updates what changed)`);
   console.log("\nBefore (top clusters):", topN(clusterBefore));
   console.log("After  (top clusters):", topN(clusterAfter), "\n");
 }

@@ -24,7 +24,10 @@ const NON_EN_MARKERS = [
   // French
   "vous", "nous", "votre", "notre", "poste", "entreprise", "compétences", "expérience",
   // Spanish / Portuguese
-  "nosotros", "tus", "empresa", "experiencia", "trabajo", "você", "empresa", "vaga",
+  "nosotros", "tus", "empresa", "experiencia", "trabajo", "você", "vaga",
+  "remoto", "administrativo", "asistente", "assistente", "auxiliar", "profesor",
+  "enseñanza", "español", "ensino", "vagas", "salário", "horario", "flexible",
+  "atención", "desarrollador", "ingeniero", "gerente", "ventas",
 ];
 
 export function looksEnglish(text = "", { threshold = 0.45 } = {}) {
@@ -32,7 +35,13 @@ export function looksEnglish(text = "", { threshold = 0.45 } = {}) {
   if (!t.trim()) return true; // no text -> don't drop on language grounds
 
   const words = t.split(/[^a-zà-ÿ]+/).filter(Boolean);
-  if (words.length < 8) return true; // too short to judge; keep
+
+  // Even on short text (e.g. a 3-word title), if a strong non-English marker
+  // is present, drop it. This catches titles like "Auxiliar Administrativo
+  // Remoto" that the length-escape below would otherwise wave through.
+  for (const w of words) if (NON_EN_MARKERS.includes(w)) return false;
+
+  if (words.length < 8) return true; // too short to judge on density; keep
 
   let enHits = 0;
   for (const w of words) if (EN_STOP.has(w)) enHits++;

@@ -10,7 +10,27 @@ const API = import.meta.env.VITE_API_URL || "http://localhost:3000";
 // ============================================================
 function clean(t) {
   if (!t) return "";
-  return t.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
+  return String(t)
+    .replace(/<[^>]*>/g, " ")
+    // mojibake
+    .replace(/â€™|â€˜/g, "'").replace(/â€œ|â€\u009d/g, '"')
+    .replace(/â€"/g, "—").replace(/â€¦|â¦/g, "…")
+    .replace(/Â®/g, "®").replace(/Â©/g, "©").replace(/Â/g, "").replace(/â€/g, "").replace(/â/g, "")
+    // spam / tracking boilerplate from re-syndicated posts
+    .replace(/please mention the word[^.]*\.?/gi, "")
+    .replace(/and tag\s+[A-Za-z0-9=+/]{6,}/gi, "")
+    .replace(/\(#?R[A-Za-z0-9=+/]{10,}\)/g, "")
+    .replace(/#R[A-Za-z0-9=+/]{6,}/g, "")
+    .replace(/this is a beta feature to avoid spam applicants\.?/gi, "")
+    .replace(/companies can search these words[^.]*\.?/gi, "")
+    .replace(/see this and similar jobs on linkedin\.?/gi, "")
+    .replace(/posted\s+\d{1,2}:\d{2}(:\d{2})?\s*(am|pm)?\.?/gi, "")
+    .replace(/\*\*/g, "")
+    // trailing read-more/less toggle artifact
+    .replace(/(\w)(less|more)\s*$/i, "$1").replace(/\s+(less|more)\s*$/i, "")
+    .replace(/\s+([.,;:])/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 function fmtSalary(min, max) {
   if (!min && !max) return null;
@@ -202,15 +222,19 @@ function JobCard({ job, onCVMatch, onInterviewPrep }) {
         {job.employment_type && <span className="text-xs text-zinc-600 capitalize">{job.employment_type.replace("_"," ")}</span>}
       </div>
 
-      {desc && (
-        <p className="text-sm text-zinc-400 mt-3 leading-relaxed">
-          {expanded ? desc.slice(0, 600) : desc.slice(0, 180)}
+      {desc ? (
+        <p className="text-sm text-zinc-400 mt-3 leading-relaxed whitespace-pre-line">
+          {expanded ? desc : desc.slice(0, 180)}
           {desc.length > 180 && (
             <button className="text-blue-400 ml-1 hover:underline"
               onClick={e => { e.stopPropagation(); setExpanded(!expanded); }}>
-              {expanded ? " less" : "...more"}
+              {expanded ? " show less" : "…more"}
             </button>
           )}
+        </p>
+      ) : (
+        <p className="text-sm text-zinc-600 mt-3 italic">
+          No description provided — click Apply to view the full posting.
         </p>
       )}
 
