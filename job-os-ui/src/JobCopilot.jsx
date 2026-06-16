@@ -1,4 +1,7 @@
 import { useState, useRef, useEffect } from "react";
+import { useSession } from "./lib/useSession";
+import { supabase } from "./lib/supabaseClient";
+import AuthModal, { COUNTRY_LABEL } from "./AuthModal";
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:3000";
 
@@ -244,12 +247,22 @@ function JobCard({ job, onCVMatch, onInterviewPrep }) {
 // ============================================================
 // CV MATCH PANEL
 // ============================================================
-function CVMatchPanel({ job, onClose }) {
-  const [cvText, setCvText] = useState("");
+function CVMatchPanel({ job, onClose, initialCv = "", user }) {
+  const [cvText, setCvText] = useState(initialCv);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
   const [tab, setTab] = useState("match");
+  const [saveStatus, setSaveStatus] = useState("");
+
+  async function saveCv() {
+    if (!supabase || !user || !cvText.trim()) return;
+    setSaveStatus("saving");
+    const { error: saveErr } = await supabase.from("saved_cvs")
+      .upsert({ user_id: user.id, cv_text: cvText, updated_at: new Date().toISOString() });
+    setSaveStatus(saveErr ? "error" : "saved");
+    setTimeout(() => setSaveStatus(""), 2000);
+  }
 
   async function run() {
     if (!cvText.trim()) { setError("Please add your CV first."); return; }
@@ -294,6 +307,12 @@ function CVMatchPanel({ job, onClose }) {
           {!result && (
             <>
               <CVUploadArea cvText={cvText} setCvText={setCvText} />
+              {user && cvText.trim() && (
+                <button onClick={saveCv}
+                  className="text-xs text-zinc-400 hover:text-zinc-200 transition flex items-center gap-1.5">
+                  {saveStatus === "saving" ? "Saving…" : saveStatus === "saved" ? "✓ Saved to your account" : saveStatus === "error" ? "Couldn't save — try again" : "💾 Save this CV to my account"}
+                </button>
+              )}
               {error && <p className="text-sm text-red-400 bg-red-500/10 border border-red-900 rounded-xl px-4 py-3">⚠️ {error}</p>}
               <button onClick={run} disabled={loading || !cvText.trim()}
                 className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed py-3 rounded-xl font-medium transition">
@@ -373,9 +392,9 @@ function CVMatchPanel({ job, onClose }) {
 // ============================================================
 // INTERVIEW PANEL
 // ============================================================
-function InterviewPanel({ job, onClose }) {
+function InterviewPanel({ job, onClose, initialCv = "" }) {
   const [mode, setMode] = useState("questions");
-  const [cvText, setCvText] = useState("");
+  const [cvText, setCvText] = useState(initialCv);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
@@ -538,6 +557,10 @@ const PROMPTS = [
 // MAIN APP
 // ============================================================
 export default function JobCopilot() {
+  const { user, profile, authEnabled, signOut, refreshProfile } = useSession();
+  const [showAuth, setShowAuth] = useState(false);
+  const [showUserMenu, setShowUserMenu] = useState(false);
+  const [savedCv, setSavedCv] = useState("");
   const [messages, setMessages] = useState([]);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
@@ -553,16 +576,30 @@ export default function JobCopilot() {
     chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, loading]);
 
+  // Load the user's saved CV once they're signed in, so CV Match / Rewrite /
+  // Interview Prep can pre-fill it without re-uploading every time.
+  useEffect(() => {
+    if (!user || !supabase) { setSavedCv(""); return; }
+    supabase.from("saved_cvs").select("cv_text").eq("user_id", user.id).maybeSingle()
+      .then(({ data }) => setSavedCv(data?.cv_text || ""));
+  }, [user]);
+
+  async function saveSearch(q) {
+    if (!user || !supabase || !q.trim()) return;
+    await supabase.from("saved_searches").insert({ user_id: user.id, query: q.trim() });
+  }
+
   async function runSearch(q) {
     if (!q.trim()) return;
     setLoading(true); setLastQuery(q.trim());
     setMessages(m => [...m, { type:"user", text: q.trim() }]);
     try {
-      const res = await fetch(`${API}/ai/search?q=${encodeURIComponent(q.trim())}&limit=20`);
+      const countryParam = profile?.country ? `&country=${encodeURIComponent(profile.country)}` : "";
+      const res = await fetch(`${API}/ai/search?q=${encodeURIComponent(q.trim())}&limit=20${countryParam}`);
       const data = await res.json();
       setMessages(m => [...m, {
         type:"results", jobs: data.data||[], summary: data.summary||"",
-        intent: data.intent||{}, excluded: data.excluded_count||0
+        intent: data.intent||{}, excluded: data.excluded_count||0, query: q.trim()
       }]);
     } catch {
       setMessages(m => [...m, { type:"error", text:"Cannot reach the API. Is the server running on port 3000?" }]);
@@ -605,7 +642,7 @@ export default function JobCopilot() {
           <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-600 to-violet-600 flex items-center justify-center font-bold text-sm shrink-0">JC</div>
           <div>
             <div className="text-sm font-semibold leading-tight">Job Copilot</div>
-            <div className="text-xs text-zinc-500">Africa's AI job engine</div>
+            <div className="text-xs text-zinc-500">AI job search, global eligibility</div>
           </div>
         </div>
         <div className="flex items-center gap-3">
@@ -620,6 +657,41 @@ export default function JobCopilot() {
           {messages.length > 0 && (
             <button onClick={() => { setMessages([]); setChatHistory([]); setLastQuery(""); }}
               className="text-xs text-zinc-600 hover:text-zinc-400">Clear</button>
+          )}
+          {authEnabled && (
+            user ? (
+              <div className="relative">
+                <button onClick={() => setShowUserMenu(v => !v)}
+                  className="w-8 h-8 rounded-full bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center text-xs font-medium transition">
+                  {(profile?.full_name || user.email || "?")[0].toUpperCase()}
+                </button>
+                {showUserMenu && (
+                  <div className="absolute right-0 top-10 bg-zinc-950 border border-zinc-800 rounded-xl py-1.5 w-56 shadow-xl z-40">
+                    <div className="px-3 py-2 border-b border-zinc-800">
+                      <div className="text-xs text-zinc-300 truncate">{user.email}</div>
+                      {profile?.country && (
+                        <div className="text-[11px] text-zinc-500 mt-0.5">
+                          📍 {COUNTRY_LABEL[profile.country] || profile.country}
+                        </div>
+                      )}
+                    </div>
+                    <button onClick={() => { setShowUserMenu(false); setShowAuth("profile"); }}
+                      className="w-full text-left px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-900">
+                      Edit location
+                    </button>
+                    <button onClick={() => { signOut(); setShowUserMenu(false); }}
+                      className="w-full text-left px-3 py-2 text-xs text-red-400 hover:bg-zinc-900">
+                      Sign out
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <button onClick={() => setShowAuth(true)}
+                className="text-xs font-medium bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 px-3 py-1.5 rounded-xl transition">
+                Sign in
+              </button>
+            )
           )}
         </div>
       </div>
@@ -671,11 +743,17 @@ export default function JobCopilot() {
             <div key={i} className="space-y-3">
               <div className="text-sm text-zinc-300">{m.summary}</div>
               {m.intent && (
-                <div className="flex flex-wrap gap-1.5">
+                <div className="flex flex-wrap gap-1.5 items-center">
                   {m.intent.cluster && <Badge className="text-purple-400 bg-purple-500/10 border-purple-900">{m.intent.cluster}</Badge>}
                   {m.intent.locationCountry && <Badge className="text-blue-400 bg-blue-500/10 border-blue-900">📍 {m.intent.locationCountry}</Badge>}
                   {m.intent.remoteOnly && <Badge className="text-emerald-400 bg-emerald-500/10 border-emerald-900">🌐 Remote</Badge>}
                   {m.excluded > 0 && <Badge className="text-red-400 bg-red-500/10 border-red-900">{m.excluded} restricted removed</Badge>}
+                  {user && m.query && (
+                    <button onClick={() => saveSearch(m.query)}
+                      className="text-xs text-zinc-500 hover:text-zinc-300 transition ml-auto">
+                      💾 Save this search
+                    </button>
+                  )}
                 </div>
               )}
               {m.jobs.length === 0 ? (
@@ -738,11 +816,21 @@ export default function JobCopilot() {
             {tab === "search" ? "Search" : "Send"}
           </button>
         </div>
-        <p className="text-xs text-zinc-700 text-center mt-1.5">Powered by Qwen via Ollama · Geo-restricted roles are filtered out</p>
+        <p className="text-xs text-zinc-700 text-center mt-1.5">Geo-restricted roles are filtered out automatically</p>
       </div>
 
-      {cvModal && <CVMatchPanel job={cvModal} onClose={() => setCvModal(null)} />}
-      {interviewModal && <InterviewPanel job={interviewModal} onClose={() => setInterviewModal(null)} />}
+      {cvModal && <CVMatchPanel job={cvModal} onClose={() => setCvModal(null)} initialCv={savedCv} user={user} />}
+      {interviewModal && <InterviewPanel job={interviewModal} onClose={() => setInterviewModal(null)} initialCv={savedCv} />}
+      {showAuth && (
+        <AuthModal
+          mode={showAuth === "profile" ? "profile" : "signin"}
+          user={user}
+          currentCountry={profile?.country}
+          onClose={() => setShowAuth(false)}
+          onAuthed={() => setShowAuth(false)}
+          onProfileSaved={refreshProfile}
+        />
+      )}
     </div>
   );
 }

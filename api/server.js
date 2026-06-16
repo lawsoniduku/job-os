@@ -27,6 +27,7 @@ import {
   scoreJobLocally,
   getAliasesForCluster,
   ROLE_TAXONOMY,
+  LOCATION_INTELLIGENCE,
 } from "./roleIntelligence.js";
 import { generateJSON, generateText, isLLMHealthy, llmConfig, llmState } from "../lib/llm.js";
 
@@ -64,11 +65,26 @@ app.get("/health", async (_req, res) => {
 // ============================================================
 app.get("/ai/search", async (req, res) => {
   try {
-    const { q, limit: limitParam = "20" } = req.query;
+    const { q, limit: limitParam = "20", country: profileCountry } = req.query;
     if (!q) return res.status(400).json({ error: "Missing query" });
     const limit = Math.min(parseInt(limitParam) || 20, 50);
 
     const intent = parseIntent(q);
+
+    // If the query itself didn't specify a location, fall back to the
+    // logged-in user's profile country (sent by the frontend as ?country=).
+    // Explicit query terms always win — this only fills in when locationCountry
+    // is null, e.g. "remote data analyst jobs" from a Nigerian user becomes
+    // scoped to Nigeria without them typing it every time.
+    if (!intent.locationCountry && profileCountry) {
+      // Only accept a country that is an actual key in the engine's location map
+      // (plus the broad region keys). Anything else is ignored, never trusted raw.
+      const VALID = new Set([...Object.keys(LOCATION_INTELLIGENCE), "africa"]);
+      if (/^[a-z_]+$/.test(profileCountry) && VALID.has(profileCountry)) {
+        intent.locationCountry = profileCountry;
+      }
+    }
+
     console.log(`🔍 "${q}" -> cluster=${intent.cluster} country=${intent.locationCountry} remote=${intent.remoteOnly}`);
 
     // --- retrieval: prefer cluster, fall back to safe keyword ilike ---
