@@ -21,11 +21,13 @@ import { fetchHimalayas } from "./connectors/feeds/himalayas.js";
 import { fetchJobicy } from "./connectors/feeds/jobicy.js";
 import { fetchArbeitnow } from "./connectors/feeds/arbeitnow.js";
 import { fetchMyJobMag } from "./connectors/feeds/myjobmag.js";
+import { fetchTeamtailor } from "./connectors/feeds/teamtailor.js";
+import { fetchBreezy } from "./connectors/feeds/breezy.js";
 import {
   GREENHOUSE_COMPANIES, LEVER_COMPANIES, ASHBY_COMPANIES,
   WORKABLE_COMPANIES, SMARTRECRUITERS_COMPANIES,
 } from "./connectors/registry.js";
-import { looksEnglish } from "./core/language.js";
+import { looksEnglish, looksEnglishJob } from "./core/language.js";
 import { dedupe } from "./core/dedup.js";
 import { tagJob } from "./core/tag.js";
 
@@ -49,6 +51,8 @@ async function run() {
     fetchJobicy({ count: 100 }),
     fetchArbeitnow({ pages: 2 }),
     fetchMyJobMag(),
+    fetchTeamtailor(),
+    fetchBreezy(),
   ]);
   let jobs = [];
   for (const s of settled) if (s.status === "fulfilled") jobs.push(...s.value);
@@ -56,7 +60,7 @@ async function run() {
 
   // 2. LANGUAGE FILTER (kills non-English postings at the source)
   const before = jobs.length;
-  jobs = jobs.filter((j) => looksEnglish(`${j.title} ${j.description}`));
+  jobs = jobs.filter((j) => looksEnglishJob(j));
   console.log(`🌍 English-only: ${jobs.length} (dropped ${before - jobs.length} non-English)`);
 
   // 3. DEDUP (url + content key)
@@ -98,7 +102,29 @@ async function run() {
     if (success) ok += batch.length; else fail += batch.length;
     await sleep(150); // gentle pacing so we don't overwhelm the connection
   }
-  console.log(`\n✅ UPSERTED: ${ok} | ❌ FAILED: ${fail}\n`);
+  console.log(`\n✅ UPSERTED: ${ok} | ❌ FAILED: ${fail}`);
+
+  // 6. TOUCH last_seen_at for EVERY job seen this run (new or existing).
+  // The upsert above ignores duplicates, so it never refreshes existing rows.
+  // We separately stamp last_seen_at = now() for all apply_urls in this batch,
+  // updating ONLY that column (so cleaned descriptions / reclassified clusters
+  // are never overwritten). This powers the nightly stale-job prune: jobs that
+  // stop appearing in feeds stop being touched, and age out after 60 days.
+  const nowIso = new Date().toISOString();
+  const urls = jobs.map((j) => j.apply_url).filter(Boolean);
+  let touched = 0;
+  for (let i = 0; i < urls.length; i += BATCH) {
+    const slice = urls.slice(i, i + BATCH);
+    try {
+      const { error } = await supabase
+        .from("jobs")
+        .update({ last_seen_at: nowIso })
+        .in("apply_url", slice);
+      if (!error) touched += slice.length;
+    } catch { /* non-fatal: prune just waits another cycle */ }
+    await sleep(120);
+  }
+  console.log(`🕒 last_seen refreshed: ${touched}\n`);
 }
 
 run();

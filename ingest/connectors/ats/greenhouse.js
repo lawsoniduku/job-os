@@ -14,8 +14,11 @@ import { normalizeJob } from "../../core/normalize.js";
 
 const UA = { "User-Agent": "Mozilla/5.0 (compatible; job-copilot/3.1)", Accept: "application/json" };
 
-async function fetchBoard({ slug, name, region }) {
-  const url = `https://boards-api.greenhouse.io/v1/boards/${slug}/jobs?content=true`;
+async function fetchBoard({ slug, name, region, apiBase }) {
+  // Most boards live on boards-api.greenhouse.io. Some (e.g. EU-hosted) may need
+  // a different base; allow an override per-company in the registry.
+  const base = apiBase || "https://boards-api.greenhouse.io";
+  const url = `${base}/v1/boards/${slug}/jobs?content=true`;
   const res = await axios.get(url, { timeout: 12000, headers: UA });
   return (res.data?.jobs || [])
     .map((j) =>

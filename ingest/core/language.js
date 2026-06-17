@@ -18,17 +18,31 @@ const EN_STOP = new Set([
 ]);
 
 // strong non-English markers (frequent words that rarely appear in EN JDs)
+// IMPORTANT: only include words that are DISTINCTLY non-English. Words spelled
+// the same in English (e.g. "flexible") or near-identical English cognates must
+// NOT be here — they cause valid English jobs to be dropped. ("flexible" alone
+// was silently killing every JD that mentioned "flexible hours".)
 const NON_EN_MARKERS = [
-  // German
+  // German (distinct)
   "und", "wir", "für", "mit", "sie", "deine", "unsere", "stellenangebot", "mitarbeiter", "aufgaben", "kenntnisse",
-  // French
-  "vous", "nous", "votre", "notre", "poste", "entreprise", "compétences", "expérience",
-  // Spanish / Portuguese
+  // French (distinct)
+  "vous", "nous", "votre", "notre", "entreprise", "compétences", "expérience",
+  "professeur", "français", "recherchons", "emploi",
+  // Spanish / Portuguese (distinct — removed English cognates like "flexible",
+  // "remoto" stays since it's clearly ES/PT not EN, but ambiguous EN words removed)
   "nosotros", "tus", "empresa", "experiencia", "trabajo", "você", "vaga",
-  "remoto", "administrativo", "asistente", "assistente", "auxiliar", "profesor",
-  "enseñanza", "español", "ensino", "vagas", "salário", "horario", "flexible",
-  "atención", "desarrollador", "ingeniero", "gerente", "ventas",
+  "remoto", "asistente", "assistente", "auxiliar", "profesor",
+  "enseñanza", "español", "ensino", "vagas", "salário",
+  "atención", "desarrollador", "ingeniero", "ventas",
 ];
+// Words intentionally REMOVED from the list because they are valid English or
+// ambiguous and were causing false drops:
+//   "flexible"       — identical in EN; appears in most JDs ("flexible hours")
+//   "administrativo" — too close to EN "administrative"; "administrativo" exact
+//                       still rare, but the risk/benefit favors removal
+//   "horario"        — low value; "poste"/"gerente" removed (gerente≈manager
+//                       context, "poste" = FR/ES but also appears in EN tech)
+//   "poste", "gerente", "administrativo", "horario", "flexible"
 
 export function looksEnglish(text = "", { threshold = 0.45 } = {}) {
   const t = String(text).toLowerCase();
@@ -58,4 +72,34 @@ export function looksEnglish(text = "", { threshold = 0.45 } = {}) {
   if (nonEnDensity > 0.03) return false;
   if (diacriticRatio > 0.02) return false;
   return enDensity >= threshold / 10; // density is small numbers; scaled threshold
+}
+
+/**
+ * Job-level English check that TRUSTS THE TITLE.
+ * A genuinely non-English job almost always has a non-English title. So if the
+ * title is clearly English (no non-EN markers, no heavy diacritics), we keep the
+ * job even if the description has a few accented words ("café", "résumé") or
+ * stray foreign characters — which previously caused valid English jobs like
+ * "Assistant Transport Officer" to be dropped on description noise alone.
+ * Only when the title itself looks non-English do we drop.
+ */
+export function looksEnglishJob(job = {}) {
+  const title = String(job.title || "").trim();
+  const desc = String(job.description || "").trim();
+
+  // 1. If the title carries a hard non-English marker, drop immediately.
+  const titleWords = title.toLowerCase().split(/[^a-zà-ÿ]+/).filter(Boolean);
+  for (const w of titleWords) if (NON_EN_MARKERS.includes(w)) return false;
+
+  // 2. If the title is heavily accented (clearly a non-EN language), drop.
+  const titleDiac = (title.toLowerCase().match(/[àâäçéèêëîïôöùûüßñõ]/g) || []).length;
+  if (title.length > 0 && titleDiac / title.length > 0.08) return false;
+
+  // 3. Title looks English (or is too short to judge) -> trust it, keep the job.
+  //    We still run the full check on the combined text, but only DROP if BOTH
+  //    the combined text fails AND the title wasn't a clear English signal.
+  if (titleWords.length >= 2 && looksEnglish(title)) return true;
+
+  // 4. Fallback: judge on title + description together (original behavior).
+  return looksEnglish(`${title} ${desc}`);
 }

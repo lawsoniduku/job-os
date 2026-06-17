@@ -17,6 +17,10 @@ export const GREENHOUSE_COMPANIES = [
   { slug: "paystack", name: "Paystack", region: "Africa" },   // ✅ 9
   { slug: "jumia",    name: "Jumia",    region: "Africa" },   // ✅ 5
   { slug: "carbon",   name: "Carbon",   region: "Nigeria" },  // ✅ 9
+  // Moniepoint is on Greenhouse's EU instance — needs the eu apiBase, which is
+  // why an earlier probe on the default domain returned 0. Verify with verify.js.
+  { slug: "moniepoint", name: "Moniepoint", region: "Nigeria",
+    apiBase: "https://boards-api.eu.greenhouse.io" },
   // global volume (worldwide-remote friendly)
   { slug: "gitlab",     name: "GitLab" },       // ✅ 136
   { slug: "remote",     name: "Remote.com" },   // ✅ 2

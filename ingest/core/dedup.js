@@ -8,8 +8,22 @@
  * First occurrence wins; later duplicates are dropped.
  */
 
+// Strip tracking/fragment noise but PRESERVE meaningful identifying params.
+// Some boards (e.g. MyJobMag: a_fields.php?id=123) encode the job's identity in
+// the query string — stripping the whole query collapses every job to one URL
+// and dedup nukes them all. So we keep identity-ish params (id, job, jobid,
+// gh_jid, lever id, etc.) and drop only known tracking params.
+const KEEP_PARAMS = /^(id|jobid|job_id|job|jid|gh_jid|lever|posting|pid|p|ref_id)$/i;
 function canonicalUrl(url = "") {
-  return String(url).replace(/[?#].*$/, "").replace(/\/+$/, "").toLowerCase();
+  let s = String(url).replace(/#.*$/, "").replace(/\/+$/, "").trim();
+  const qIdx = s.indexOf("?");
+  if (qIdx === -1) return s.toLowerCase();
+  const base = s.slice(0, qIdx);
+  const params = s.slice(qIdx + 1).split("&").filter(Boolean);
+  const kept = params
+    .filter((kv) => KEEP_PARAMS.test(kv.split("=")[0]))
+    .sort(); // stable order so param ordering can't create false uniques
+  return (kept.length ? `${base}?${kept.join("&")}` : base).toLowerCase();
 }
 
 function contentKey(job) {
