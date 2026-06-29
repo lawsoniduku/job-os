@@ -4,7 +4,18 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>job-os-ui</title>
+    <title>JobCopilot — Remote jobs that match your eligibility</title>
+    <meta name="description" content="Find remote jobs you're actually eligible for. Africa-first job search that filters by visa rules and work permits." />
+    <!-- Set theme BEFORE first paint to avoid a flash of the wrong theme.
+         Default is dark; only light if the user previously chose it. -->
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem("theme");
+          if (saved !== "light") document.documentElement.classList.add("dark");
+        } catch (e) { document.documentElement.classList.add("dark"); }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

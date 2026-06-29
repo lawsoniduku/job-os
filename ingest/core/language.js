@@ -1,105 +1,143 @@
 /**
  * ingest/core/language.js
  * =======================
- * Cheap, dependency-free English-likelihood check. This is what stops the
- * "German-language jobs" problem at the source (Arbeitnow et al.) instead of
- * letting them leak into search.
+ * Language gate for incoming job postings. Keeps English-language listings,
+ * drops clearly non-English ones BEFORE they reach the database.
  *
- * Heuristic (no ML, no network):
- *   - score by English stopword density
- *   - penalise diacritic-heavy text and German/French/Spanish marker words
- * Returns true if the text is *probably* English. Tunable threshold.
+ * Design principles (learned the hard way):
+ *
+ *  1. TITLE IS AUTHORITATIVE. Descriptions are noisy — a perfectly good English
+ *     job can have an accented loanword ("café", "naïve"), a bilingual snippet,
+ *     or a company blurb in another language. Judging by the whole description
+ *     wrongly drops valid English roles. So `looksEnglishJob()` trusts the TITLE
+ *     first: if the title reads as English, we keep the job.
+ *
+ *  2. BE CONSERVATIVE. A false drop (losing a real English job) is worse than a
+ *     false keep (one foreign job slips through and gets filtered elsewhere).
+ *     When unsure, KEEP.
+ *
+ *  3. NO INNOCENT WORDS AS MARKERS. "flexible" is an English word — it was once
+ *     wrongly listed as a non-English marker and silently dropped valid jobs.
+ *     Markers below are words/diacritics that do NOT occur in normal English
+ *     job posts.
+ *
+ * Exports:
+ *   looksEnglish(text)     -> boolean   (judge an arbitrary string)
+ *   looksEnglishJob(job)   -> boolean   (judge a job; title-anchored)
  */
 
-const EN_STOP = new Set([
-  "the", "and", "for", "you", "with", "your", "our", "are", "will", "have",
-  "this", "that", "work", "team", "role", "experience", "we", "to", "of", "in",
-  "a", "is", "as", "on", "at", "or", "an", "be", "by",
-]);
-
-// strong non-English markers (frequent words that rarely appear in EN JDs)
-// IMPORTANT: only include words that are DISTINCTLY non-English. Words spelled
-// the same in English (e.g. "flexible") or near-identical English cognates must
-// NOT be here — they cause valid English jobs to be dropped. ("flexible" alone
-// was silently killing every JD that mentioned "flexible hours".)
-const NON_EN_MARKERS = [
-  // German (distinct)
-  "und", "wir", "für", "mit", "sie", "deine", "unsere", "stellenangebot", "mitarbeiter", "aufgaben", "kenntnisse",
-  // French (distinct)
-  "vous", "nous", "votre", "notre", "entreprise", "compétences", "expérience",
-  "professeur", "français", "recherchons", "emploi",
-  // Spanish / Portuguese (distinct — removed English cognates like "flexible",
-  // "remoto" stays since it's clearly ES/PT not EN, but ambiguous EN words removed)
-  "nosotros", "tus", "empresa", "experiencia", "trabajo", "você", "vaga",
-  "remoto", "asistente", "assistente", "auxiliar", "profesor",
-  "enseñanza", "español", "ensino", "vagas", "salário",
-  "atención", "desarrollador", "ingeniero", "ventas",
+// Common English function words. If several of these appear, the text is English.
+const ENGLISH_STOPWORDS = [
+  "the", "and", "for", "with", "you", "our", "are", "will", "your", "this",
+  "that", "have", "from", "team", "work", "role", "we", "to", "of", "in",
+  "as", "is", "or", "be", "an", "on", "at", "by", "a", "experience", "skills",
+  "manage", "support", "develop", "lead", "build", "ensure", "responsible",
+  "required", "preferred", "must", "should", "join", "looking", "seeking",
 ];
-// Words intentionally REMOVED from the list because they are valid English or
-// ambiguous and were causing false drops:
-//   "flexible"       — identical in EN; appears in most JDs ("flexible hours")
-//   "administrativo" — too close to EN "administrative"; "administrativo" exact
-//                       still rare, but the risk/benefit favors removal
-//   "horario"        — low value; "poste"/"gerente" removed (gerente≈manager
-//                       context, "poste" = FR/ES but also appears in EN tech)
-//   "poste", "gerente", "administrativo", "horario", "flexible"
 
-export function looksEnglish(text = "", { threshold = 0.45 } = {}) {
-  const t = String(text).toLowerCase();
-  if (!t.trim()) return true; // no text -> don't drop on language grounds
+// Strong non-English signals: words that are unambiguous in another language and
+// effectively never appear as standalone tokens in an English job description.
+// (Deliberately conservative — only high-confidence foreign function words.)
+const NON_ENGLISH_MARKERS = [
+  // French
+  "nous", "vous", "votre", "notre", "avec", "pour", "dans", "être", "vos",
+  "recherche", "entreprise", "poste", "compétences", "expérience", "métier",
+  // Spanish
+  "nosotros", "para", "trabajo", "empresa", "experiencia", "habilidades",
+  "buscamos", "requisitos", "puesto", "conocimientos",
+  // German
+  "und", "der", "die", "das", "für", "mit", "wir", "sie", "ihre", "kenntnisse",
+  "aufgaben", "unternehmen", "erfahrung", "stelle", "bewerbung",
+  // Portuguese
+  "você", "nós", "para", "empresa", "experiência", "trabalho", "vaga", "requisitos",
+  // Dutch
+  "jij", "wij", "onze", "voor", "met", "ervaring", "vereisten",
+  // Italian
+  "noi", "voi", "azienda", "esperienza", "competenze", "lavoro",
+];
 
-  const words = t.split(/[^a-zà-ÿ]+/).filter(Boolean);
+// Diacritic ranges that strongly suggest non-English text when DENSE.
+// A single accented character is fine (loanwords); many are a signal.
+const DIACRITIC_RE = /[àâäçéèêëîïôöùûüÿœ æ ñ ß ã õ ê ç]/gi;
 
-  // Even on short text (e.g. a 3-word title), if a strong non-English marker
-  // is present, drop it. This catches titles like "Auxiliar Administrativo
-  // Remoto" that the length-escape below would otherwise wave through.
-  for (const w of words) if (NON_EN_MARKERS.includes(w)) return false;
+const tokenize = (s) =>
+  (s || "")
+    .toLowerCase()
+    .replace(/<[^>]+>/g, " ")     // strip any HTML
+    .replace(/[^a-zà-ÿ\s]/gi, " ") // keep letters (incl. accented) + spaces
+    .split(/\s+/)
+    .filter(Boolean);
 
-  if (words.length < 8) return true; // too short to judge on density; keep
+/**
+ * Judge an arbitrary string. Returns true if it looks like English.
+ * Conservative: empty / very short text is treated as English (keep).
+ */
+export function looksEnglish(text) {
+  const tokens = tokenize(text);
+  if (tokens.length < 3) return true; // too little to judge — keep
 
-  let enHits = 0;
-  for (const w of words) if (EN_STOP.has(w)) enHits++;
-  const enDensity = enHits / Math.min(words.length, 200);
+  const total = tokens.length;
+  let englishHits = 0;
+  let foreignHits = 0;
 
-  let nonEnHits = 0;
-  for (const w of words) if (NON_EN_MARKERS.includes(w)) nonEnHits++;
-  const nonEnDensity = nonEnHits / Math.min(words.length, 200);
+  const stop = new Set(ENGLISH_STOPWORDS);
+  const foreign = new Set(NON_ENGLISH_MARKERS);
 
-  // diacritic ratio (German/French/etc heavy)
-  const diacritics = (t.match(/[àâäçéèêëîïôöùûüßñõ]/g) || []).length;
-  const diacriticRatio = diacritics / Math.max(t.length, 1);
+  for (const t of tokens) {
+    if (stop.has(t)) englishHits++;
+    if (foreign.has(t)) foreignHits++;
+  }
 
-  if (nonEnDensity > 0.03) return false;
-  if (diacriticRatio > 0.02) return false;
-  return enDensity >= threshold / 10; // density is small numbers; scaled threshold
+  // Diacritic density: fraction of characters that are accented.
+  const accentMatches = (text.match(DIACRITIC_RE) || []).length;
+  const accentDensity = accentMatches / Math.max(text.length, 1);
+
+  const englishRatio = englishHits / total;
+  const foreignRatio = foreignHits / total;
+
+  // Decision:
+  //  - Clear English signal (several stopwords) AND not strongly foreign -> English.
+  //  - Strong foreign signal (many foreign function words OR dense accents)
+  //    that outweighs English signal -> not English.
+  if (foreignRatio > 0.06 && foreignRatio > englishRatio) return false;
+  if (accentDensity > 0.04 && englishRatio < 0.08) return false;
+  if (englishHits >= 2 || englishRatio >= 0.05) return true;
+
+  // Ambiguous and no strong English signal: lean KEEP unless clearly foreign.
+  return foreignRatio < 0.04;
 }
 
 /**
- * Job-level English check that TRUSTS THE TITLE.
- * A genuinely non-English job almost always has a non-English title. So if the
- * title is clearly English (no non-EN markers, no heavy diacritics), we keep the
- * job even if the description has a few accented words ("café", "résumé") or
- * stray foreign characters — which previously caused valid English jobs like
- * "Assistant Transport Officer" to be dropped on description noise alone.
- * Only when the title itself looks non-English do we drop.
+ * Judge a JOB. Title-anchored: if the title reads as English, keep the job —
+ * even if the description has accented noise. Only when the title is too short
+ * or ambiguous do we consult the description.
  */
-export function looksEnglishJob(job = {}) {
-  const title = String(job.title || "").trim();
-  const desc = String(job.description || "").trim();
+export function looksEnglishJob(job) {
+  if (!job) return true;
+  const title = (job.title || "").trim();
+  const description = (job.description || "").trim();
 
-  // 1. If the title carries a hard non-English marker, drop immediately.
-  const titleWords = title.toLowerCase().split(/[^a-zà-ÿ]+/).filter(Boolean);
-  for (const w of titleWords) if (NON_EN_MARKERS.includes(w)) return false;
+  const foreign = new Set(NON_ENGLISH_MARKERS);
+  const stop = new Set(ENGLISH_STOPWORDS);
+  const titleTokens = tokenize(title);
 
-  // 2. If the title is heavily accented (clearly a non-EN language), drop.
-  const titleDiac = (title.toLowerCase().match(/[àâäçéèêëîïôöùûüßñõ]/g) || []).length;
-  if (title.length > 0 && titleDiac / title.length > 0.08) return false;
+  // Foreign function words in the title -> strong non-English signal.
+  const foreignInTitle = titleTokens.filter((t) => foreign.has(t)).length;
+  if (titleTokens.length >= 2 && foreignInTitle / titleTokens.length > 0.3) {
+    return false;
+  }
 
-  // 3. Title looks English (or is too short to judge) -> trust it, keep the job.
-  //    We still run the full check on the combined text, but only DROP if BOTH
-  //    the combined text fails AND the title wasn't a clear English signal.
-  if (titleWords.length >= 2 && looksEnglish(title)) return true;
+  // English function words in the title -> high-precision KEEP. Titles are short
+  // and curated; an English stopword present means it's an English title, and we
+  // ignore description noise (accented loanwords etc.).
+  const englishInTitle = titleTokens.filter((t) => stop.has(t)).length;
+  if (englishInTitle >= 1) return true;
 
-  // 4. Fallback: judge on title + description together (original behavior).
-  return looksEnglish(`${title} ${desc}`);
+  // Title has neither English stopwords nor foreign markers (e.g. "Développeur
+  // Web Senior", "Data Analyst", "Ingeniero de Software"). The title alone is
+  // inconclusive — defer to the full-text judgement, which weighs the
+  // description's English vs. foreign signal and accent density.
+  return looksEnglish(`${title} ${description}`);
 }
+
+export default { looksEnglish, looksEnglishJob };

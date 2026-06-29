@@ -1101,8 +1101,17 @@ export function classifyJob(title = "", description = "") {
   const titleDet = detectCluster(title);
   let cluster = titleDet.cluster;
   if (!cluster) {
+    // Title gave us nothing. Before trusting the description, demand a STRONG
+    // match — a passing mention of "support" or "service" in a JD must not drag
+    // a "Regional Policy Lead" or "IT Officer" into Customer Support. We require
+    // the body score to clear a confidence floor that single keyword/skill hits
+    // (worth only ~4 each) and lone generic aliases cannot reach. A real role
+    // alias in the body scores 50+, so 60 keeps genuine matches and drops noise.
     const bodyDet = detectCluster(`${title} ${description}`);
-    cluster = bodyDet.cluster;
+    const BODY_CONFIDENCE_FLOOR = 60;
+    if (bodyDet.cluster && bodyDet.score >= BODY_CONFIDENCE_FLOOR) {
+      cluster = bodyDet.cluster;
+    }
   }
   if (cluster) {
     const e = ROLE_TAXONOMY.find((x) => x.cluster === cluster);

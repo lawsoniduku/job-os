@@ -65,9 +65,10 @@ app.get("/health", async (_req, res) => {
 // ============================================================
 app.get("/ai/search", async (req, res) => {
   try {
-    const { q, limit: limitParam = "20", country: profileCountry } = req.query;
+    const { q, limit: limitParam = "20", offset: offsetParam = "0", country: profileCountry } = req.query;
     if (!q) return res.status(400).json({ error: "Missing query" });
     const limit = Math.min(parseInt(limitParam) || 20, 50);
+    const offset = Math.max(parseInt(offsetParam) || 0, 0);
 
     const intent = parseIntent(q);
 
@@ -130,19 +131,22 @@ app.get("/ai/search", async (req, res) => {
     }
 
     finalResults.sort((a, b) => b.score - a.score);
-    const results = finalResults.slice(0, limit);
+    const totalAvailable = finalResults.length;        // how many eligible matches exist in all
+    const results = finalResults.slice(offset, offset + limit);
+    const hasMore = offset + limit < totalAvailable;   // is there another page after this one?
 
     const locPart = intent.locationCountry ? ` open to ${intent.locationCountry} candidates`
       : intent.remoteOnly ? " that are remote" : "";
     const filteredPart = excludedCount > 0 ? ` (${excludedCount} geo-restricted filtered out)` : "";
-    const summary = results.length === 0
+    const summary = totalAvailable === 0
       ? `No results for "${q}". Try broader terms.`
-      : `Found ${results.length} ${intent.cluster || "matching"} role${results.length !== 1 ? "s" : ""}${locPart}${filteredPart}.`;
+      : `Found ${totalAvailable} ${intent.cluster || "matching"} role${totalAvailable !== 1 ? "s" : ""}${locPart}${filteredPart}.`;
 
     res.json({
       query: q,
       intent: { cluster: intent.cluster, locationCountry: intent.locationCountry, remoteOnly: intent.remoteOnly, seniority: intent.seniority },
-      total: results.length, excluded_count: excludedCount, summary, data: results,
+      total: totalAvailable, offset, limit, has_more: hasMore,
+      excluded_count: excludedCount, summary, data: results,
     });
   } catch (err) { console.error(err); res.status(500).json({ error: err.message }); }
 });

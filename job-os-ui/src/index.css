@@ -11,10 +11,19 @@ html {
 }
 
 body {
-  background: #000;
-  color: white;
+  background: #f9fafb;
+  color: #1f2937;
   font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto;
   line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Dark theme: when <html> has the "dark" class. Soft black (#0a0a0a), not pure. */
+html.dark body {
+  background: #0a0a0a;
+  color: #f4f4f5;
 }
 
 /* improve readability */
@@ -33,8 +42,12 @@ input, button {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #27272a;
+  background: #d4d4d8;
   border-radius: 10px;
+}
+
+html.dark ::-webkit-scrollbar-thumb {
+  background: #27272a;
 }
 
 ::-webkit-scrollbar-track {
