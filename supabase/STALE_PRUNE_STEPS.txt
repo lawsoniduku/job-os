@@ -1,0 +1,60 @@
+STALE JOB PRUNING — ORDERED, SAFE PROCESS
+==========================================
+Your jobs table has ~18,992 rows but each pipeline run only produces ~5,000
+live jobs. The extra ~14,000 are stale (filled/expired) — dead Apply links
+that hurt user trust. This prunes them.
+
+⚠️ Step 4 DELETES rows permanently. The order below makes it safe: nothing is
+deleted until live jobs have been re-stamped as fresh. Do NOT skip ahead.
+
+──────────────────────────────────────────────
+STEP 1 — Add the tracking column (safe, deletes nothing)
+  Supabase -> SQL Editor -> New query
+  Paste ALL of 003_prune_stale.sql -> Run
+  This adds last_seen_at and backfills every existing row from its created_at.
+
+STEP 2 — Run the pipeline ONCE to stamp live jobs fresh
+    npm run ingest
+  ⭐ CRITICAL: this run must show  "🕒 last_seen refreshed: [thousands]"
+     NOT "last_seen refreshed: 0". If it still says 0, STOP — the column
+     didn't get added; tell Claude before going further.
+  This stamps last_seen_at = now() on all ~5,000 jobs currently in feeds.
+  Stale jobs (not in feeds) keep their OLD timestamp — that's how we find them.
+
+STEP 3 — PREVIEW what would be deleted (deletes nothing yet)
+  Supabase -> SQL Editor. Run just this:
+
+    SELECT count(*) FROM public.jobs
+      WHERE last_seen_at < now() - interval '45 days';
+
+  Then eyeball a sample:
+
+    SELECT title, company, source, last_seen_at
+      FROM public.jobs
+      WHERE last_seen_at < now() - interval '45 days'
+      ORDER BY last_seen_at ASC
+      LIMIT 25;
+
+  Sanity check: the count should be roughly your "extra" rows (~10-14k),
+  and the sample should look like genuinely old listings. If the count is
+  near your WHOLE table (18k) or near 0, STOP and tell Claude — something's
+  off with the timestamps.
+
+STEP 4 — DELETE (only after preview looks right)
+  Supabase -> SQL Editor. Run the DELETE line from 003b_prune_execute.sql:
+
+    DELETE FROM public.jobs
+      WHERE last_seen_at < now() - interval '45 days';
+
+STEP 5 — Verify what remains
+    SELECT count(*) AS remaining FROM public.jobs;
+  Should be roughly your live-job count (~5,000, plus recent multi-run overlap).
+
+──────────────────────────────────────────────
+TUNING: 45 days is the default window. Want tighter? Use '30 days'.
+Looser/safer first pass? Use '60 days'. Just change the interval in the DELETE.
+
+AFTER IT WORKS: commit both SQL files to git (safe, no secrets):
+  git add supabase/migrations/003_prune_stale.sql supabase/migrations/003b_prune_execute.sql
+  git commit -m "Add stale-job pruning (last_seen_at tracking + prune)"
+  git push origin main

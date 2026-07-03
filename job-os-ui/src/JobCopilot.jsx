@@ -646,8 +646,31 @@ export default function JobCopilot() {
     await supabase.from("saved_searches").insert({ user_id: user.id, query: q.trim() });
   }
 
-  // Apply the active date filter + newest-first sort to a batch of jobs.
-  // Shared by the initial search and "Show more" so both behave identically.
+  // Sort a results block for DISPLAY only (doesn't touch stored data/pagination).
+  // "match" = highest match score first (default, backend relevance order).
+  // "newest" = most recent posting first.
+  function sortJobsForDisplay(jobs, sortBy) {
+    if (sortBy === "newest") {
+      return [...jobs].sort((a, b) => {
+        const ta = new Date(a.posted_at || a.created_at || 0).getTime();
+        const tb = new Date(b.posted_at || b.created_at || 0).getTime();
+        return tb - ta;
+      });
+    }
+    // default: by match score, highest first
+    return [...jobs].sort((a, b) => (b.score || 0) - (a.score || 0));
+  }
+
+  // Change the sort for a specific results message and re-render.
+  function setResultSort(msgIndex, sortBy) {
+    setMessages(m => m.map((mm, i) => i === msgIndex ? { ...mm, sortBy } : mm));
+  }
+
+  // Apply the active date filter to a batch of jobs.
+  // We do NOT force newest-first sorting — the backend's relevance score already
+  // ranks results well. Forcing date-sort here buries highly-relevant older jobs
+  // behind less-relevant newer ones, creating artificial gaps in results.
+  // Users who want recent-only should use the date filter dropdown explicitly.
   function processJobs(jobs) {
     let out = jobs;
     if (datePosted !== "any") {
@@ -658,11 +681,7 @@ export default function JobCopilot() {
         return t && t >= cutoff;
       });
     }
-    return [...out].sort((a, b) => {
-      const ta = new Date(a.posted_at || a.created_at || 0).getTime();
-      const tb = new Date(b.posted_at || b.created_at || 0).getTime();
-      return tb - ta;
-    });
+    return out;
   }
 
   const PAGE_SIZE = 20;
@@ -890,15 +909,32 @@ export default function JobCopilot() {
                 </div>
               ) : (
                 <>
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-xs text-gray-600 dark:text-zinc-500">
+                      Showing {m.jobs.length}{m.total ? ` of ${m.total}` : ""} matches
+                    </p>
+                    <div className="flex items-center gap-1 text-xs">
+                      <span className="text-gray-500 dark:text-zinc-500 mr-1">Sort:</span>
+                      <button onClick={() => setResultSort(i, "match")}
+                        className={`px-2.5 py-1 rounded-lg font-medium transition ${(m.sortBy || "match") === "match"
+                          ? "bg-blue-600 text-white"
+                          : "bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-zinc-300 hover:bg-gray-200 dark:hover:bg-zinc-700"}`}>
+                        Best match
+                      </button>
+                      <button onClick={() => setResultSort(i, "newest")}
+                        className={`px-2.5 py-1 rounded-lg font-medium transition ${m.sortBy === "newest"
+                          ? "bg-blue-600 text-white"
+                          : "bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-zinc-300 hover:bg-gray-200 dark:hover:bg-zinc-700"}`}>
+                        Newest
+                      </button>
+                    </div>
+                  </div>
                   <div className="grid gap-3">
-                    {m.jobs.map((job,j) => (
+                    {sortJobsForDisplay(m.jobs, m.sortBy || "match").map((job,j) => (
                       <JobCard key={job.id || j} job={job} onCVMatch={j => setCvModal(j)} onInterviewPrep={j => setInterviewModal(j)} />
                     ))}
                   </div>
                   <div className="text-center pt-1">
-                    <p className="text-xs text-gray-600 dark:text-zinc-500 mb-2">
-                      Showing {m.jobs.length}{m.total ? ` of ${m.total}` : ""} matches
-                    </p>
                     {m.hasMore && (
                       <button onClick={() => fetchMore(i)} disabled={loadingMore}
                         className="bg-gray-100 dark:bg-zinc-800 hover:bg-gray-200 dark:hover:bg-zinc-700 text-gray-800 dark:text-zinc-200 border border-gray-300 dark:border-zinc-700 px-5 py-2 rounded-xl text-sm font-medium transition disabled:opacity-50 disabled:cursor-not-allowed">

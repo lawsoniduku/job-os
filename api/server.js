@@ -99,6 +99,13 @@ app.get("/ai/search", async (req, res) => {
       if (kw) dbQuery = dbQuery.ilike("title", `%${kw}%`); // value is parameterized -> safe
     }
 
+    // Order by recency BEFORE the limit. Without an explicit order, Postgres
+    // returns an arbitrary (physical-order) slice of matching rows, so with a
+    // large table the .limit(250) can silently exclude entire date ranges of
+    // valid matches. Ordering by posted_at makes the candidate pool the 250
+    // most-recent matches — predictable, and covering all recent dates.
+    dbQuery = dbQuery.order("posted_at", { ascending: false, nullsFirst: false });
+
     const { data: rawJobs, error } = await dbQuery.limit(250);
     if (error) return res.status(500).json({ error: error.message });
     if (!rawJobs?.length) return res.json({ query: q, total: 0, data: [], message: "No jobs found. Try a broader query." });
