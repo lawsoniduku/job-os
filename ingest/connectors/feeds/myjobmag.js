@@ -42,30 +42,8 @@ const SITES = [
       "https://www.myjobmag.com/jobsxml.xml",
     ],
   },
-  {
-    base: "https://www.myjobmagghana.com",
-    country: "Ghana", region: "Africa",
-    feeds: [
-      "https://www.myjobmagghana.com/aggregate_feed.xml",
-      "https://www.myjobmagghana.com/jobsxml.xml",
-    ],
-  },
-  {
-    base: "https://www.myjobmag.co.ke",
-    country: "Kenya", region: "Africa",
-    feeds: [
-      "https://www.myjobmag.co.ke/aggregate_feed.xml",
-      "https://www.myjobmag.co.ke/jobsxml.xml",
-    ],
-  },
-  {
-    base: "https://www.myjobmag.co.za",
-    country: "South Africa", region: "Africa",
-    feeds: [
-      "https://www.myjobmag.co.za/aggregate_feed.xml",
-      "https://www.myjobmag.co.za/jobsxml.xml",
-    ],
-  },
+  // Ghana, Kenya, and South Africa sister sites removed at founder's request
+  // (2026-06-29) — keeping the source list focused on Nigeria for now.
 ];
 
 // --- tiny RSS helpers (no deps) ------------------------------------------------

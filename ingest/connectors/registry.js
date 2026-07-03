@@ -23,7 +23,7 @@ export const GREENHOUSE_COMPANIES = [
     apiBase: "https://boards-api.eu.greenhouse.io" },
   // global volume (worldwide-remote friendly)
   { slug: "gitlab",     name: "GitLab" },       // ✅ 136
-  { slug: "remote",     name: "Remote.com" },   // ✅ 2
+  { slug: "remotecom",  name: "Remote.com" },   // ✅ 279 — FIXED: was "remote" (wrong board, only 2 jobs)
   { slug: "stripe",     name: "Stripe" },       // ✅ 508
   { slug: "airbnb",     name: "Airbnb" },        // ✅ 224
   { slug: "dropbox",    name: "Dropbox" },       // ✅ 56
@@ -39,6 +39,7 @@ export const GREENHOUSE_COMPANIES = [
 
 export const LEVER_COMPANIES = [
   { slug: "spotify", name: "Spotify" }, // ✅ 147
+  { slug: "remofirst", name: "RemoFirst" }, // ✅ verified live 2026-06-30, remote-first EOR company
   // netflix/plaid were live but returned 0 jobs — skipped (re-check later)
 ];
 

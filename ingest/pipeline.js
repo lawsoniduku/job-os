@@ -16,11 +16,12 @@ import { fetchAshby } from "./connectors/ats/ashby.js";
 import { fetchWorkable } from "./connectors/ats/workable.js";
 import { fetchSmartRecruiters } from "./connectors/ats/smartrecruiters.js";
 import { fetchRemotive } from "./connectors/feeds/remotive.js";
-import { fetchRemoteOK } from "./connectors/feeds/remoteok.js";
 import { fetchHimalayas } from "./connectors/feeds/himalayas.js";
 import { fetchJobicy } from "./connectors/feeds/jobicy.js";
 import { fetchArbeitnow } from "./connectors/feeds/arbeitnow.js";
 import { fetchMyJobMag } from "./connectors/feeds/myjobmag.js";
+import { fetchWeWorkRemotely } from "./connectors/feeds/weworkremotely.js";
+import { fetchJobspresso } from "./connectors/feeds/jobspresso.js";
 import { fetchTeamtailor } from "./connectors/feeds/teamtailor.js";
 import { fetchBreezy } from "./connectors/feeds/breezy.js";
 import {
@@ -46,11 +47,12 @@ async function run() {
     fetchWorkable(WORKABLE_COMPANIES || []),
     fetchSmartRecruiters(SMARTRECRUITERS_COMPANIES || []),
     fetchRemotive({ limit: 300 }),
-    fetchRemoteOK(),
     fetchHimalayas({ limit: 300 }),
     fetchJobicy({ count: 100 }),
     fetchArbeitnow({ pages: 2 }),
     fetchMyJobMag(),
+    fetchWeWorkRemotely(),
+    fetchJobspresso(),
     fetchTeamtailor(),
     fetchBreezy(),
   ]);
@@ -70,7 +72,12 @@ async function run() {
   // 4. TAG (role_cluster, seniority, remote_type, eligibility_region)
   jobs = jobs.map(tagJob);
   const africaCount = jobs.filter((j) => ["Africa", "Nigeria"].includes(j.eligibility_region)).length;
-  console.log(`🏷  Tagged. Africa-eligible: ${africaCount}`);
+  const globalCount = jobs.filter((j) => j.eligibility_region === "Global").length;
+  const remoteCount = jobs.filter((j) => j.eligibility_region === "Remote").length;
+  // "Reachable" = everything a Nigerian candidate could actually apply to:
+  // explicitly-African roles + globally-open remote + generic remote.
+  const reachable = africaCount + globalCount + remoteCount;
+  console.log(`🏷  Tagged. Africa/Nigeria: ${africaCount} | Global: ${globalCount} | Remote: ${remoteCount} | → Reachable: ${reachable}`);
 
   // 5. UPSERT — resilient: small delay between batches + one retry on failure,
   // so a single transient "fetch failed" doesn't lose the whole run (important
