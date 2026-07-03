@@ -479,7 +479,11 @@ const BARE_NOUN_HINTS = {
   marketing: "Digital Marketing",
   finance: "Finance",
   operations: "Operations", ops: "Operations",
-  support: "Customer Support",
+  // NOTE: bare "support" was removed as a hint — it's far too broad. "IT Support",
+  // "Business Support", "Field Support", "Inventory Support", "Application Support"
+  // are NOT customer service. The Customer Support cluster's specific aliases
+  // ("customer support", "technical support", "help desk", "support agent", etc.)
+  // already catch genuine customer-service roles without these false positives.
   recruiter: "Talent Acquisition", recruiting: "Talent Acquisition", recruitment: "Talent Acquisition",
   developer: "Software Engineering",
   analyst: "Data Analytics", analytics: "Data Analytics", data: "Data Analytics",
