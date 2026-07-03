@@ -151,7 +151,12 @@ app.get("/ai/search", async (req, res) => {
 
     res.json({
       query: q,
-      intent: { cluster: intent.cluster, locationCountry: intent.locationCountry, remoteOnly: intent.remoteOnly, seniority: intent.seniority },
+      intent: {
+        cluster: intent.cluster, locationCountry: intent.locationCountry,
+        remoteOnly: intent.remoteOnly, seniority: intent.seniority,
+        // Role-taxonomy variants the engine searched (drives the UI taxonomy card).
+        variants: (intent.matchedAliases || []).slice(0, 12),
+      },
       total: totalAvailable, offset, limit, has_more: hasMore,
       excluded_count: excludedCount, summary, data: results,
     });
