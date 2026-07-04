@@ -466,6 +466,43 @@ export default function Copilot({ shared, active }) {
   );
 }
 
+/* ── Taxonomy card (collapsible) ────────────────────────────────────────── */
+
+function TaxonomyCard({ cluster, variants }) {
+  // Collapsed by default on small screens — the full list ate the whole
+  // viewport on mobile. Show the first 4, expand on tap.
+  const [open, setOpen] = useState(false);
+  const PREVIEW = 4;
+  const shown = open ? variants : variants.slice(0, PREVIEW);
+  const hidden = variants.length - PREVIEW;
+
+  return (
+    <div className="taxonomy-card">
+      <div className="taxonomy-head">
+        <span className="tx-label">Role taxonomy</span>
+        <span className="tx-title">{cluster}</span>
+        <span className="tx-count">{variants.length} variants</span>
+      </div>
+      <div className="taxonomy-body">
+        {shown.map((v, i) => (
+          <span key={v} className={`tx-chip ${i === 0 ? "primary" : ""}`}>
+            <span className="chip-dot" />{v}
+          </span>
+        ))}
+        {!open && hidden > 0 && (
+          <button className="tx-more" onClick={() => setOpen(true)}>
+            +{hidden} more
+          </button>
+        )}
+      </div>
+      <div className="taxonomy-foot">
+        A title-only search misses most of these — the engine matches the <b>role</b>, not the wording.
+        {open && <button className="tx-collapse" onClick={() => setOpen(false)}>Collapse</button>}
+      </div>
+    </div>
+  );
+}
+
 /* ── Results block ──────────────────────────────────────────────────────── */
 
 function ResultsBlock({ m, isLatest, onLoadMore, onTailor, busy }) {
@@ -477,23 +514,7 @@ function ResultsBlock({ m, isLatest, onLoadMore, onTailor, busy }) {
           <div className="ai-text">
             <b>{m.cluster}</b> gets posted under {m.variants.length} different names — I searched all of them:
           </div>
-          <div className="taxonomy-card">
-            <div className="taxonomy-head">
-              <span className="tx-label">Role taxonomy</span>
-              <span className="tx-title">{m.cluster}</span>
-              <span className="tx-count">{m.variants.length} variants</span>
-            </div>
-            <div className="taxonomy-body">
-              {m.variants.map((v, i) => (
-                <span key={v} className={`tx-chip ${i === 0 ? "primary" : ""}`} style={{ animationDelay: `${i * 45}ms` }}>
-                  <span className="chip-dot" />{v}
-                </span>
-              ))}
-            </div>
-            <div className="taxonomy-foot">
-              A title-only search misses most of these — the engine matches the <b>role</b>, not the wording.
-            </div>
-          </div>
+          <TaxonomyCard cluster={m.cluster} variants={m.variants} />
         </>
       )}
 
