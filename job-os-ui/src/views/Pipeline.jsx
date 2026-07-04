@@ -1,23 +1,35 @@
 /**
- * views/Pipeline.jsx — every application, shortlist to closed.
- * Backed by the `applications` table (migration 004). Cards advance
- * stage-by-stage and keep their job snapshot even if the posting dies.
+ * views/Pipeline.jsx — every application, saved to closed.
+ *
+ * The DB accepts the full lifecycle (migration 006); the UI maps those
+ * statuses into 5 clear columns:
+ *   Saved       <- saved | shortlist | interested | cv_tailored
+ *   Applied     <- applied
+ *   In process  <- assessment | interview | in_process
+ *   Offer       <- offer
+ *   Closed      <- rejected | archived | closed
  */
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { aiInterviewCoach, fmtSalary, daysSince } from "../lib/api";
+import { track } from "../lib/track";
 
 const COLS = [
-  { key: "shortlist", label: "Shortlist" },
-  { key: "applied", label: "Applied" },
-  { key: "in_process", label: "In process" },
-  { key: "offer", label: "Offer" },
-  { key: "closed", label: "Closed" },
+  { key: "saved",      label: "Saved",      statuses: ["saved", "shortlist", "interested", "cv_tailored"] },
+  { key: "applied",    label: "Applied",    statuses: ["applied"] },
+  { key: "in_process", label: "In process", statuses: ["assessment", "interview", "in_process"] },
+  { key: "offer",      label: "Offer",      statuses: ["offer"] },
+  { key: "closed",     label: "Closed",     statuses: ["rejected", "archived", "closed"] },
 ];
-const NEXT = { shortlist: "applied", applied: "in_process", in_process: "offer" };
+// Advancing moves a card to the canonical status of the next column.
+const NEXT = { saved: "applied", applied: "in_process", in_process: "offer" };
+
+function colOf(status) {
+  return COLS.find((c) => c.statuses.includes(status))?.key || "saved";
+}
 
 export default function Pipeline({ shared, active }) {
-  const { user, showToast, setView } = shared;
+  const { user, requireAuth, showToast, setView } = shared;
   const [apps, setApps] = useState([]);
   const [loading, setLoading] = useState(false);
   const [prepApp, setPrepApp] = useState(null);
@@ -36,13 +48,14 @@ export default function Pipeline({ shared, active }) {
   useEffect(() => { if (active) load(); }, [active, load]);
 
   async function advance(app) {
-    const next = NEXT[app.status];
+    const next = NEXT[colOf(app.status)];
     if (!next) return;
     const patch = { status: next };
     if (next === "applied" && !app.applied_at) patch.applied_at = new Date().toISOString();
     const { error } = await supabase.from("applications").update(patch).eq("id", app.id);
     if (error) return showToast(`Couldn't move it: ${error.message}`);
-    showToast(next === "offer" ? "Moved to Offer 🎉" : `Moved to ${COLS.find((c) => c.key === next).label}`);
+    track(user, "pipeline_advance", { from: colOf(app.status), to: next });
+    showToast(next === "offer" ? "Moved to Offer 🎉" : `Moved to ${COLS.find((c) => c.key === colOf(next)).label}`);
     load();
   }
 
@@ -61,7 +74,8 @@ export default function Pipeline({ shared, active }) {
       <div className="scrollarea"><div className="page">
         <div className="page-eyebrow">Applications</div>
         <h1>Pipeline</h1>
-        <p className="sub">Sign in to track every application from shortlist to offer — each card keeps the job snapshot, dates, and the CV version you sent.</p>
+        <p className="sub">Track every application from saved to offer — each card keeps the job snapshot, dates, and the CV version you sent, even after the posting expires.</p>
+        <button className="btn primary" onClick={requireAuth}>Sign in or create account</button>
       </div></div>
     );
   }
@@ -78,7 +92,7 @@ export default function Pipeline({ shared, active }) {
       {apps.length === 0 && !loading && (
         <div className="studio-card">
           <h3>Nothing in flight yet</h3>
-          <div className="s-sub">Shortlist a job from Copilot and it lands here.</div>
+          <div className="s-sub">Open any job in Copilot with Tailor & apply — "Save for later" or "Mark as applied" lands it here.</div>
           <button className="btn primary" onClick={() => setView("copilot")}>Find eligible jobs</button>
         </div>
       )}
@@ -86,7 +100,7 @@ export default function Pipeline({ shared, active }) {
       {apps.length > 0 && (
         <div className="board">
           {COLS.map((col) => {
-            const cards = apps.filter((a) => a.status === col.key);
+            const cards = apps.filter((a) => colOf(a.status) === col.key);
             return (
               <div className="col" key={col.key}>
                 <div className="col-head">{col.label}<span className="ccount">{cards.length}</span></div>
@@ -115,28 +129,31 @@ export default function Pipeline({ shared, active }) {
 }
 
 function AppCard({ app, onAdvance, onClose, onRemove, onPrep }) {
+  const col = colOf(app.status);
   const days = daysSince(app.applied_at || app.created_at);
   const sal = fmtSalary(app.salary_min, app.salary_max);
-  const canPrep = app.status === "in_process" && app.job_id;
+  // Prep is available on ANY card that still links to a live job record —
+  // users prepare before applying too, not only once "in process".
+  const canPrep = !!app.job_id;
 
   return (
     <div className="p-card">
       <div className="pc-title">{app.job_title}</div>
       <div className="pc-co">{app.company || "—"}</div>
       <div className="pc-meta">
-        {app.status === "applied" && days !== null ? `Applied · day ${Math.max(days, 0) + 1}` :
-         app.status === "shortlist" ? `Shortlisted ${days === 0 ? "today" : `${days}d ago`}` :
+        {col === "applied" && days !== null ? `Applied · day ${Math.max(days, 0) + 1}` :
+         col === "saved" ? `Saved ${days === 0 ? "today" : `${days}d ago`}` :
          `Updated ${daysSince(app.updated_at) === 0 ? "today" : `${daysSince(app.updated_at)}d ago`}`}
         {sal ? ` · ${sal}` : ""}
       </div>
       {app.cv_label && <div className="pc-cv">{app.cv_label}</div>}
       <div className="pc-actions">
-        {NEXT[app.status] && <button onClick={() => onAdvance(app)}>Advance →</button>}
+        {NEXT[col] && <button onClick={() => onAdvance(app)}>Advance →</button>}
         {canPrep && <button onClick={() => onPrep(app)}>Prep interview</button>}
         {app.apply_url && (
           <button onClick={() => window.open(app.apply_url, "_blank", "noopener")}>Open ↗</button>
         )}
-        {app.status !== "closed" ? (
+        {col !== "closed" ? (
           <button className="danger" onClick={() => onClose(app)}>Close</button>
         ) : (
           <button className="danger" onClick={() => onRemove(app)}>Remove</button>

@@ -2,8 +2,9 @@
  * lib/useSession.js
  * =================
  * Tracks the current Supabase auth session + the user's profile row.
- * If Supabase isn't configured (no env vars), everything stays null and
- * the app behaves exactly as it did before accounts existed.
+ * Now loads the full talent-graph profile (migration 006): target_roles,
+ * preferences (seniority etc.), headline — these power the Briefing feed
+ * and the You page.
  */
 import { useState, useEffect, useCallback } from "react";
 import { supabase, authEnabled } from "./supabaseClient";
@@ -17,7 +18,7 @@ export function useSession() {
     if (!supabase || !userId) { setProfile(null); return; }
     const { data, error } = await supabase
       .from("profiles")
-      .select("id, email, full_name, country")
+      .select("id, email, full_name, country, headline, years_experience, skills, target_roles, target_salary_min, preferences")
       .eq("id", userId)
       .maybeSingle();
     if (!error && data) setProfile(data);

@@ -1,58 +1,99 @@
 /**
- * lib/api.js — one place for every backend call.
+ * lib/api.js — backend calls with WEAK-NETWORK + COLD-START RESILIENCE.
+ *
+ * Two realities this file absorbs so users never have to:
+ *   1. Render free tier sleeps after ~15 min idle; the first request can
+ *      take 30-50s or drop entirely. We fire a warm-up ping the moment
+ *      the app loads, and retry failed calls with backoff.
+ *   2. Our users are on variable mobile networks. Every call has a
+ *      timeout (no infinite hangs) and up to 2 retries on network errors.
+ *      HTTP errors are never retried — those are real answers.
  */
 export const API = import.meta.env.VITE_API_URL || "http://localhost:3000";
 
-async function handle(res) {
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
-  return data;
+/* ── Resilient fetch core ─────────────────────────────────── */
+async function call(path, { method = "GET", body, timeoutMs = 30000, attempts = 3 } = {}) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(`${API}${path}`, {
+        method,
+        headers: body ? { "Content-Type": "application/json" } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new HttpError(data.error || `Request failed (${res.status})`, res.status);
+      return data;
+    } catch (err) {
+      clearTimeout(timer);
+      if (err instanceof HttpError) throw err;      // real answer — don't retry
+      lastErr = err;
+      if (i < attempts - 1) {
+        // backoff: 1.5s then 4s — enough for a wobbly connection to recover
+        await new Promise((r) => setTimeout(r, i === 0 ? 1500 : 4000));
+      }
+    }
+  }
+  throw new Error(
+    "Can't reach the server — check your connection. If it just woke up, try once more."
+  );
+}
+class HttpError extends Error {
+  constructor(msg, status) { super(msg); this.status = status; }
 }
 
+/* ── Warm-up: wake Render the moment the app opens ────────── */
+// Fire-and-forget; also re-ping when the tab regains focus after idling.
+export function warmUp() {
+  fetch(`${API}/health`).catch(() => {});
+}
+if (typeof window !== "undefined") {
+  warmUp();
+  let last = Date.now();
+  window.addEventListener("focus", () => {
+    if (Date.now() - last > 5 * 60 * 1000) warmUp();   // idle > 5 min -> re-warm
+    last = Date.now();
+  });
+}
+
+/* ── Endpoints ─────────────────────────────────────────────── */
 export function aiSearch({ q, country, limit = 10, offset = 0 }) {
   const p = new URLSearchParams({ q, limit, offset });
   if (country) p.set("country", country);
-  return fetch(`${API}/ai/search?${p}`).then(handle);
+  // generous timeout: cold start + search can legitimately take a while
+  return call(`/ai/search?${p}`, { timeoutMs: 60000 });
+}
+
+export function aiRefine({ refinement, activeIntent }) {
+  return call(`/ai/refine`, { method: "POST", body: { refinement, activeIntent }, timeoutMs: 45000 });
+}
+
+export function aiClarify({ q }) {
+  return call(`/ai/clarify`, { method: "POST", body: { q }, timeoutMs: 20000 });
 }
 
 export function aiChat({ message, history = [], context = {} }) {
-  return fetch(`${API}/ai/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, history, context }),
-  }).then(handle);
+  return call(`/ai/chat`, { method: "POST", body: { message, history, context }, timeoutMs: 60000 });
 }
 
 export function aiCvRewrite({ cvText, jobId }) {
-  return fetch(`${API}/ai/cv-rewrite`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ cvText, jobId }),
-  }).then(handle);
+  // the big structured call — one attempt can take up to ~90s on Groq
+  return call(`/ai/cv-rewrite`, { method: "POST", body: { cvText, jobId }, timeoutMs: 120000, attempts: 2 });
 }
 
 export function aiCvMatch({ cvText, jobId }) {
-  return fetch(`${API}/ai/cv-match`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ cvText, jobId }),
-  }).then(handle);
+  return call(`/ai/cv-match`, { method: "POST", body: { cvText, jobId }, timeoutMs: 90000, attempts: 2 });
 }
 
 export function aiInterviewCoach({ jobId, cvText, mode = "questions" }) {
-  return fetch(`${API}/ai/interview-coach`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ jobId, cvText, mode }),
-  }).then(handle);
+  return call(`/ai/interview-coach`, { method: "POST", body: { jobId, cvText, mode }, timeoutMs: 90000, attempts: 2 });
 }
 
-/**
- * Map the engine's eligibility confidence to a UI verdict.
- *   certain / likely -> eligible (green)
- *   possible         -> conditional (amber)
- * ('excluded' rows never reach the client — the server filters them.)
- */
+/* ── Shared helpers (unchanged) ────────────────────────────── */
 export function verdictOf(job) {
   const c = job?.eligibility?.confidence;
   if (c === "possible") return { key: "conditional", label: "Conditional" };
@@ -68,6 +109,5 @@ export function fmtSalary(min, max) {
 
 export function daysSince(iso) {
   if (!iso) return null;
-  const d = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
-  return d;
+  return Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
 }

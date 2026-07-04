@@ -9,7 +9,7 @@ import { supabase } from "../lib/supabaseClient";
 import { extractTextFromFile } from "../lib/extractText";
 
 export default function Studio({ shared, active }) {
-  const { user, showToast, setView } = shared;
+  const { user, requireAuth, showToast, setView } = shared;
   const [cvText, setCvText] = useState("");
   const [fileName, setFileName] = useState("");
   const [saving, setSaving] = useState(false);
@@ -69,6 +69,7 @@ export default function Studio({ shared, active }) {
         <div className="page-eyebrow">Workspace</div>
         <h1>Studio</h1>
         <p className="sub">Sign in to save your master CV. Every tailored version starts from it — and every version knows which applications used it.</p>
+        <button className="btn primary" onClick={requireAuth}>Sign in or create account</button>
       </div></div>
     );
   }

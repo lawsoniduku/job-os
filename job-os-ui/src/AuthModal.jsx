@@ -1,12 +1,12 @@
 /**
- * AuthModal.jsx
- * =============
- * Sign up / log in + a one-time "where are you?" country picker that feeds
- * straight into the search engine's COUNTRY_TERMS keys (api/roleIntelligence.js),
- * so a logged-in user's default search is automatically scoped to their country.
+ * AuthModal.jsx — sign in / sign up, now with Google SSO.
  *
- * Keys here MUST match COUNTRY_TERMS keys in api/roleIntelligence.js.
- * Kept as a curated subset (full list is 50+; this is the common/launch set).
+ * Google requires one-time setup in Supabase:
+ *   Dashboard -> Authentication -> Providers -> Google -> enable,
+ *   paste Client ID + Secret from Google Cloud Console.
+ * Until enabled, the Google button shows a clear error instead of failing silently.
+ *
+ * COUNTRY_OPTIONS keys MUST match COUNTRY_TERMS keys in api/roleIntelligence.js.
  */
 import { useState } from "react";
 import { supabase } from "./lib/supabaseClient";
@@ -34,60 +34,61 @@ export const COUNTRY_OPTIONS = [
   { value: "mexico", label: "Mexico" },
 ];
 
-export const COUNTRY_LABEL = Object.fromEntries(COUNTRY_OPTIONS.filter(c => c.value).map(c => [c.value, c.label]));
+export const COUNTRY_LABEL = Object.fromEntries(
+  COUNTRY_OPTIONS.filter((c) => c.value).map((c) => [c.value, c.label])
+);
 
-export default function AuthModal({ onClose, onAuthed, mode: initialMode = "signin", user, currentCountry, onProfileSaved }) {
-  const [mode, setMode] = useState(initialMode); // "signin" | "signup" | "profile"
+export default function AuthModal({ onClose, onAuthed }) {
+  const [mode, setMode] = useState("signin"); // "signin" | "signup"
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [country, setCountry] = useState(currentCountry || "");
+  const [country, setCountry] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
 
-  // "profile" mode: just update the country for an already-logged-in user.
-  async function handleProfileSave(e) {
-    e.preventDefault();
-    if (!supabase || !user) return;
-    setLoading(true); setError("");
-    const { error: upErr } = await supabase.from("profiles").update({ country }).eq("id", user.id);
-    setLoading(false);
-    if (upErr) { setError(upErr.message); return; }
-    onProfileSaved?.();
-    onClose?.();
+  async function handleGoogle() {
+    if (!supabase) return;
+    setError("");
+    const { error: gErr } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: { redirectTo: window.location.origin },
+    });
+    if (gErr) {
+      setError(
+        /not enabled|provider/i.test(gErr.message || "")
+          ? "Google sign-in isn't enabled yet — use email for now."
+          : gErr.message
+      );
+    }
+    // On success the browser redirects to Google; nothing more to do here.
   }
 
   async function handleSubmit(e) {
     e.preventDefault();
     if (!supabase) return;
     setLoading(true); setError(""); setInfo("");
-
     try {
       if (mode === "signup") {
-        // Pass country as user metadata. The DB trigger (handle_new_user)
-        // reads it and writes the profile row as SECURITY DEFINER — so it
-        // works even when email confirmation is on and there's no session yet.
-        // (A direct profiles.update() here would silently fail RLS pre-confirmation.)
+        // Country goes in as metadata; the handle_new_user trigger writes the
+        // profile row as SECURITY DEFINER (works even pre-email-confirmation).
         const { data, error: signErr } = await supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            data: { country: country || "" },
-            emailRedirectTo: window.location.origin,
-          },
+          email, password,
+          options: { data: { country: country || "" }, emailRedirectTo: window.location.origin },
         });
         if (signErr) throw signErr;
-
         if (!data.session) {
           setInfo("Check your email to confirm your account, then sign in.");
           setLoading(false);
           return;
         }
         onAuthed?.();
+        onClose?.();
       } else {
         const { error: inErr } = await supabase.auth.signInWithPassword({ email, password });
         if (inErr) throw inErr;
         onAuthed?.();
+        onClose?.();
       }
     } catch (err) {
       setError(err.message || "Something went wrong. Please try again.");
@@ -96,73 +97,63 @@ export default function AuthModal({ onClose, onAuthed, mode: initialMode = "sign
   }
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-white dark:bg-zinc-950 border border-gray-200 dark:border-zinc-800 rounded-2xl p-6 w-full max-w-sm" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-sm font-semibold">
-            {mode === "profile" ? "Your location" : mode === "signup" ? "Create your account" : "Sign in"}
-          </h2>
-          <button onClick={onClose} className="text-gray-600 dark:text-zinc-500 hover:text-gray-800 dark:hover:text-zinc-300 text-sm">✕</button>
+    <div className="modal-scrim" onClick={onClose}>
+      <div className="modal auth-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h3>{mode === "signup" ? "Create your account" : "Welcome back"}</h3>
+          <button className="x" onClick={onClose} aria-label="Close">✕</button>
         </div>
 
-        {mode === "profile" ? (
-          <form onSubmit={handleProfileSave} className="space-y-3">
+        <div className="modal-body">
+          <button type="button" className="sso-btn" onClick={handleGoogle}>
+            <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.27-4.74 3.27-8.1z"/>
+              <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84A11 11 0 0 0 12 23z"/>
+              <path fill="#FBBC05" d="M5.84 14.1a6.6 6.6 0 0 1 0-4.2V7.06H2.18a11 11 0 0 0 0 9.88l3.66-2.84z"/>
+              <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1A11 11 0 0 0 2.18 7.06l3.66 2.84C6.71 7.3 9.14 5.38 12 5.38z"/>
+            </svg>
+            Continue with Google
+          </button>
+
+          <div className="auth-divider"><span>or use email</span></div>
+
+          <form onSubmit={handleSubmit} className="auth-form">
             <div>
-              <label className="text-xs text-gray-600 dark:text-zinc-500 block mb-1">Where are you searching from?</label>
-              <select value={country} onChange={e => setCountry(e.target.value)}
-                className="w-full bg-gray-100 dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-gray-300 dark:border-zinc-600">
-                {COUNTRY_OPTIONS.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
-              </select>
-              <p className="text-[11px] text-gray-600 dark:text-zinc-600 mt-1">Searches will automatically be filtered to roles open to this location.</p>
+              <label className="field-label" htmlFor="auth-email">Email</label>
+              <input id="auth-email" className="field" type="email" required value={email}
+                onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
             </div>
-            {error && <p className="text-xs text-red-400">{error}</p>}
-            <button type="submit" disabled={loading}
-              className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded-xl py-2.5 text-sm font-medium transition">
-              {loading ? "Saving…" : "Save"}
+            <div>
+              <label className="field-label" htmlFor="auth-pass">Password</label>
+              <input id="auth-pass" className="field" type="password" required minLength={6} value={password}
+                onChange={(e) => setPassword(e.target.value)} placeholder="At least 6 characters" />
+            </div>
+
+            {mode === "signup" && (
+              <div>
+                <label className="field-label" htmlFor="auth-country">Where are you searching from?</label>
+                <select id="auth-country" className="field" value={country} onChange={(e) => setCountry(e.target.value)}>
+                  {COUNTRY_OPTIONS.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+                </select>
+                <p className="auth-note">Searches are automatically filtered to roles open to you. Change anytime in You.</p>
+              </div>
+            )}
+
+            {error && <p className="auth-error">{error}</p>}
+            {info && <p className="auth-info">{info}</p>}
+
+            <button type="submit" className="btn primary" style={{ width: "100%", padding: "10px 0" }} disabled={loading}>
+              {loading ? "Please wait…" : mode === "signup" ? "Create account" : "Sign in"}
             </button>
           </form>
-        ) : (
-        <>
-        <form onSubmit={handleSubmit} className="space-y-3">
-          <div>
-            <label className="text-xs text-gray-600 dark:text-zinc-500 block mb-1">Email</label>
-            <input type="email" required value={email} onChange={e => setEmail(e.target.value)}
-              className="w-full bg-gray-100 dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-gray-300 dark:border-zinc-600"
-              placeholder="you@example.com" />
-          </div>
-          <div>
-            <label className="text-xs text-gray-600 dark:text-zinc-500 block mb-1">Password</label>
-            <input type="password" required minLength={6} value={password} onChange={e => setPassword(e.target.value)}
-              className="w-full bg-gray-100 dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-gray-300 dark:border-zinc-600"
-              placeholder="At least 6 characters" />
-          </div>
 
-          {mode === "signup" && (
-            <div>
-              <label className="text-xs text-gray-600 dark:text-zinc-500 block mb-1">Where are you searching from?</label>
-              <select value={country} onChange={e => setCountry(e.target.value)}
-                className="w-full bg-gray-100 dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-gray-300 dark:border-zinc-600">
-                {COUNTRY_OPTIONS.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
-              </select>
-              <p className="text-[11px] text-gray-600 dark:text-zinc-600 mt-1">We'll automatically filter searches to roles open to you. You can change this later.</p>
-            </div>
-          )}
-
-          {error && <p className="text-xs text-red-400">{error}</p>}
-          {info && <p className="text-xs text-emerald-400">{info}</p>}
-
-          <button type="submit" disabled={loading}
-            className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded-xl py-2.5 text-sm font-medium transition">
-            {loading ? "Please wait…" : mode === "signup" ? "Create account" : "Sign in"}
+          <button
+            className="auth-switch"
+            onClick={() => { setMode(mode === "signup" ? "signin" : "signup"); setError(""); setInfo(""); }}
+          >
+            {mode === "signup" ? "Already have an account? Sign in" : "New here? Create an account"}
           </button>
-        </form>
-
-        <button onClick={() => { setMode(mode === "signup" ? "signin" : "signup"); setError(""); setInfo(""); }}
-          className="w-full text-center text-xs text-gray-600 dark:text-zinc-500 hover:text-gray-800 dark:hover:text-zinc-300 mt-3">
-          {mode === "signup" ? "Already have an account? Sign in" : "New here? Create an account"}
-        </button>
-        </>
-        )}
+        </div>
       </div>
     </div>
   );

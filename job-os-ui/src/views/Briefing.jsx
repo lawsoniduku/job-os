@@ -1,30 +1,43 @@
 /**
- * views/Briefing.jsx — the daily editorial page.
- *   New for you  — fresh eligible matches from your most recent search
- *   Movement     — real signals derived from your Pipeline (follow-ups due,
- *                  shortlisted roles with no CV yet)
- * Everything here is real data — no invented numbers.
+ * views/Briefing.jsx — the daily page.
+ *
+ * Feed priority:
+ *   1. Profile preferred roles (target_roles + seniority) — the You page
+ *      is now the primary engine of this feed
+ *   2. Fallback: the user's most recent saved search
+ * Movement is derived from real Pipeline state. No invented data anywhere.
  */
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { aiSearch, verdictOf, fmtSalary, daysSince } from "../lib/api";
 
 export default function Briefing({ shared, active }) {
-  const { user, profile, setView, showToast } = shared;
-  const [matches, setMatches] = useState(null); // null = loading, [] = none
-  const [lastQuery, setLastQuery] = useState(null);
+  const { user, profile, requireAuth, setView } = shared;
+  const [matches, setMatches] = useState(null); // null = loading
+  const [feedSource, setFeedSource] = useState(null); // "profile" | "search" | null
+  const [feedLabel, setFeedLabel] = useState(null);
   const [movement, setMovement] = useState([]);
   const [total, setTotal] = useState(0);
 
   const load = useCallback(async () => {
     if (!user) { setMatches([]); return; }
 
-    // 1. Most recent saved search -> today's matches.
-    const { data: searches } = await supabase
-      .from("saved_searches").select("query")
-      .order("created_at", { ascending: false }).limit(1);
-    const q = searches?.[0]?.query || null;
-    setLastQuery(q);
+    // 1. Build the feed query — profile first, saved search fallback.
+    let q = null;
+    if (profile?.target_roles?.length) {
+      const seniority = profile?.preferences?.seniority;
+      q = `remote ${seniority && seniority !== "mid" ? seniority + " " : ""}${profile.target_roles[0]} jobs`;
+      setFeedSource("profile");
+      setFeedLabel(profile.target_roles.join(", "));
+    } else {
+      const { data: searches } = await supabase
+        .from("saved_searches").select("query")
+        .order("created_at", { ascending: false }).limit(1);
+      q = searches?.[0]?.query || null;
+      setFeedSource(q ? "search" : null);
+      setFeedLabel(q);
+    }
+
     if (q) {
       try {
         const res = await aiSearch({ q, country: profile?.country || undefined, limit: 5 });
@@ -49,14 +62,14 @@ export default function Briefing({ shared, active }) {
           sub: "A short, polite nudge email is usually well-received after a week",
         });
       }
-      if (a.status === "shortlist" && d >= 2 && !a.cv_label) {
+      if (["saved", "shortlist", "interested"].includes(a.status) && d >= 2) {
         moves.push({
           icon: "📄",
-          text: <><b>{a.job_title}</b> at {a.company} has been on your shortlist for {d} days</>,
-          sub: "Tailor a CV and apply before it closes — postings in this range move fast",
+          text: <><b>{a.job_title}</b> at {a.company} has been saved for {d} days</>,
+          sub: "Tailor a CV and apply — postings in this range move fast",
         });
       }
-      if (a.status === "in_process") {
+      if (["assessment", "interview", "in_process"].includes(a.status)) {
         moves.push({
           icon: "🎙",
           text: <><b>{a.company || a.job_title}</b> is in process — interview prep is unlocked in Pipeline</>,
@@ -77,7 +90,8 @@ export default function Briefing({ shared, active }) {
       <div className="scrollarea"><div className="page">
         <div className="page-eyebrow">{today}</div>
         <h1>Your daily briefing</h1>
-        <p className="sub">Sign in and run one search — every morning after that, this page opens with fresh eligible matches and everything that moved in your pipeline.</p>
+        <p className="sub">Sign in, set your preferred roles in You, and every morning this page opens with fresh eligible matches plus everything that moved in your pipeline.</p>
+        <button className="btn primary" onClick={requireAuth}>Sign in or create account</button>
       </div></div>
     );
   }
@@ -88,8 +102,9 @@ export default function Briefing({ shared, active }) {
       <h1>Good {daypart()}, {name}</h1>
       <p className="sub">
         {matches === null ? "Checking for new matches…" :
-         lastQuery ? `Latest eligible matches for “${lastQuery}”` :
-         "Run your first search in Copilot and your briefing starts tomorrow."}
+         feedSource === "profile" ? `Latest eligible matches for your preferred roles: ${feedLabel}` :
+         feedSource === "search" ? `Latest eligible matches for “${feedLabel}”` :
+         "Set your preferred roles in You (or run one search) and your briefing comes alive."}
       </p>
 
       <div className="block">
@@ -101,8 +116,8 @@ export default function Briefing({ shared, active }) {
         {matches?.length === 0 && (
           <div className="studio-card">
             <h3>No matches to show yet</h3>
-            <div className="s-sub">Search once in Copilot — your latest search powers this feed.</div>
-            <button className="btn primary" onClick={() => setView("copilot")}>Open Copilot</button>
+            <div className="s-sub">Pick your preferred roles in the You tab — that's what this feed runs on.</div>
+            <button className="btn primary" onClick={() => setView("you")}>Set preferred roles</button>
           </div>
         )}
         {matches?.map((job) => {
@@ -129,7 +144,7 @@ export default function Briefing({ shared, active }) {
       <div className="block">
         <div className="block-head"><h2>Movement</h2></div>
         {movement.length === 0 ? (
-          <div className="s-sub">Nothing needs your attention right now. Shortlist or apply to a role and follow-ups will surface here automatically.</div>
+          <div className="s-sub">Nothing needs your attention right now. Save or apply to a role and follow-ups surface here automatically.</div>
         ) : movement.map((mv, i) => (
           <div className="move-item" key={i}>
             <div className="move-ic">{mv.icon}</div>
@@ -149,8 +164,8 @@ export default function Briefing({ shared, active }) {
           <div className="insight-card">
             <div className="i-eyebrow">One insight</div>
             <p>
-              Right now there are <b>{total}</b> live roles you're verified eligible for on this search alone.
-              The candidates who apply within the first 48 hours of a posting get the majority of replies — check this page daily.
+              Right now there are <b>{total}</b> live roles you're verified eligible for on this feed alone.
+              Candidates who apply within 48 hours of a posting get the majority of replies — check this page daily.
             </p>
           </div>
         </div>

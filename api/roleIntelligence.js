@@ -10,6 +10,7 @@ export const ROLE_TAXONOMY = [
   {
     cluster: "People Analytics",
     department: "HR",
+    related: ["HR Generalist / HRBP", "Data Analytics", "Performance Management"],
     aliases: [
       "people analyst","people analytics","hr analyst","hr data analyst",
       "workforce analyst","workforce analytics","workforce insights",
@@ -17,7 +18,13 @@ export const ROLE_TAXONOMY = [
       "people data analyst","people insights analyst","talent analytics",
       "people operations analyst","hr reporting analyst","hr business intelligence",
       "compensation analyst","total rewards analyst","hr metrics analyst",
-      "org design analyst","people science","hr technology analyst"
+      "org design analyst","people science","hr technology analyst",
+      // creative internal titles companies actually use for this role
+      "people research analyst","human capital analyst","talent science",
+      "hr analytics specialist","organizational insights analyst",
+      "employee experience analyst","performance analytics analyst",
+      "talent insights analyst","workforce intelligence analyst",
+      "talent analytics analyst","organizational development analyst"
     ],
     keywords: ["hris","workday","bamboohr","successfactors","people data",
       "hr dashboard","workforce planning","headcount","attrition","org chart","hr kpi"]
@@ -39,6 +46,7 @@ export const ROLE_TAXONOMY = [
   {
     cluster: "HR Generalist / HRBP",
     department: "HR",
+    related: ["People Analytics", "Talent Acquisition", "Performance Management"],
     aliases: [
       "hr generalist","hr business partner","hrbp","hr manager",
       "hr coordinator","hr advisor","hr consultant","hr associate",
@@ -48,10 +56,26 @@ export const ROLE_TAXONOMY = [
       "employee relations","employee experience","people experience",
       "hr lead","head of people","vp people","chief people officer",
       "learning and development","l&d specialist","training specialist",
-      "organisational development","od specialist"
+      "organisational development","od specialist",
+      // strategic-partner + generalist variants
+      "people business partner","hr strategic partner","people generalist",
+      "hr specialist","people operations generalist","people relations partner",
+      "employee relations business partner"
     ],
     keywords: ["onboarding","offboarding","performance management","engagement",
       "hr policies","employment law","payroll","benefits","culture","dei"]
+  },
+  {
+    cluster: "Performance Management",
+    department: "HR",
+    related: ["People Analytics", "HR Generalist / HRBP"],
+    aliases: [
+      "performance management","performance analyst","people performance analyst",
+      "talent performance analyst","performance management specialist",
+      "performance and reward analyst","performance systems analyst"
+    ],
+    keywords: ["performance review","okrs","kpis","360 feedback","calibration",
+      "performance cycle","goal setting","talent review","succession planning"]
   },
   {
     cluster: "Data Analytics",
@@ -98,6 +122,8 @@ export const ROLE_TAXONOMY = [
     department: "Engineering",
     aliases: [
       "software engineer","software developer","backend engineer",
+      "backend developer","frontend developer","front end developer",
+      "full stack developer","fullstack developer","ui engineer",
       "frontend engineer","full stack engineer","fullstack engineer",
       "web developer","mobile developer","ios developer","android developer",
       "react developer","node developer","python developer","java developer",
@@ -152,7 +178,7 @@ export const ROLE_TAXONOMY = [
       "support agent","support representative","customer care",
       "customer care agent","cx specialist","cx agent",
       "technical support","tier 1 support","tier 2 support",
-      "help desk","service desk",
+      "help desk","helpdesk","service desk",
       "customer support manager","customer service manager",
       "complaints handler","dispute resolution specialist",
       "live chat agent","email support agent","phone support agent",
@@ -170,7 +196,7 @@ export const ROLE_TAXONOMY = [
       "personal assistant","pa","administrative assistant",
       "admin assistant","office administrator","office manager",
       "operations assistant","executive support","c-suite assistant",
-      "remote assistant","online assistant","scheduling coordinator","calendar manager"
+      "remote assistant","online assistant","executive assistant remote","administrative assistant remote","scheduling coordinator","calendar manager"
     ],
     keywords: ["calendar management","scheduling","travel booking",
       "inbox management","expense reports","google workspace","microsoft 365","notion","asana"]
@@ -187,7 +213,7 @@ export const ROLE_TAXONOMY = [
       "copywriter","email marketing specialist","crm specialist",
       "brand manager","brand strategist","community manager",
       "influencer marketing manager","affiliate marketing manager",
-      "demand generation manager","lifecycle marketing manager",
+      "demand generation manager","demand generation","digital marketer","lifecycle marketing manager",
       "marketing analyst","market analyst","digital analyst","growth hacker"
     ],
     keywords: ["google ads","facebook ads","meta ads","linkedin ads",
@@ -226,7 +252,7 @@ export const ROLE_TAXONOMY = [
     cluster: "Design / UX",
     department: "Design",
     aliases: [
-      "ux designer","ui designer","ui/ux designer","product designer",
+      "ux designer","ui designer","ui/ux designer","ux/ui designer","product designer",
       "interaction designer","visual designer","graphic designer",
       "brand designer","web designer","motion designer",
       "ux researcher","user researcher","design researcher",
@@ -240,7 +266,7 @@ export const ROLE_TAXONOMY = [
     cluster: "Sales",
     department: "Sales",
     aliases: [
-      "sales development representative","sdr","business development representative",
+      "sales development representative","sdr","sales executive","business development representative",
       "bdr","account executive","ae","enterprise sales","b2b sales",
       "inside sales","outside sales","field sales","sales manager",
       "sales director","vp sales","chief revenue officer","cro",
@@ -381,7 +407,7 @@ export const ROLE_TAXONOMY = [
     cluster: "Content / Writing",
     department: "Marketing",
     aliases: [
-      "content writer","copywriter","content creator","content strategist",
+      "content writer","copywriter","brand copywriter","content creator","content strategist",
       "editor","copy editor","proofreader","technical writer","blog writer",
       "content manager","content marketer","journalist","reporter","scriptwriter",
       "social media writer","seo writer","content producer","communications officer",
@@ -456,7 +482,7 @@ const SHORT_TOKENS = {
   ta: "Talent Acquisition",
   pm: "Product Management", po: "Product Management", apm: "Product Management",
   ux: "Design / UX", ui: "Design / UX",
-  qa: "Software Engineering", sre: "Software Engineering", devops: "Software Engineering",
+  qa: "Software Engineering", sre: "Software Engineering", devops: "Software Engineering", swe: "Software Engineering",
   ml: "Data Science", ai: "Data Science", nlp: "Data Science",
   ba: "Data Analytics", bi: "Data Analytics",
   etl: "Data Engineering", dba: "Data Engineering",

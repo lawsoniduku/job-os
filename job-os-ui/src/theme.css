@@ -304,3 +304,135 @@ body {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.001s !important; transition-duration: 0.001s !important; }
 }
+
+/* ============================================================
+   Day 2 additions — conversational refinement UI
+   ============================================================ */
+
+/* Refine bar — sits above the composer when a search is active */
+.refine-bar {
+  max-width: 760px; margin: 0 auto 8px; pointer-events: auto;
+  display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+  padding: 0 4px;
+}
+.refine-label {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--text-3); flex-shrink: 0;
+}
+.refine-bar .prompt-chip { font-size: 12px; padding: 5px 12px; }
+.refine-clear {
+  margin-left: auto; font-size: 12px; font-weight: 500;
+  color: var(--text-3); background: none; border: none; cursor: pointer;
+  padding: 5px 8px; flex-shrink: 0; transition: color 0.15s;
+}
+.refine-clear:hover { color: var(--ineligible); }
+
+/* Active filter pills — show which refinements are applied to results */
+.filter-pills { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.filter-pill {
+  font-family: var(--mono); font-size: 11px; font-weight: 500;
+  color: var(--accent); background: var(--accent-dim);
+  border: 1px solid var(--accent); border-radius: 6px; padding: 3px 9px;
+}
+
+/* Clarify block — the copilot's one follow-up question */
+.clarify-block {
+  border-left: 2px solid var(--accent);
+  padding: 2px 0 2px 14px;
+}
+.clarify-block .ai-text { color: var(--text); font-weight: 500; }
+
+/* ============================================================
+   Pre-ship additions — navigation, auth, profile
+   ============================================================ */
+
+/* Chat top bar — always-visible way home / new search */
+.chat-topbar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 24px; border-bottom: 1px solid var(--border-soft);
+  background: var(--canvas); flex-shrink: 0;
+}
+.ct-title {
+  font-size: 13px; font-weight: 500; color: var(--text-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  min-width: 0; flex: 1;
+}
+
+/* SSO button */
+.sso-btn {
+  width: 100%; display: flex; align-items: center; justify-content: center; gap: 10px;
+  background: var(--raised); border: 1px solid var(--border); border-radius: var(--r-sm);
+  color: var(--text); font-size: 13.5px; font-weight: 500; padding: 10px 0;
+  cursor: pointer; transition: border-color 0.15s;
+}
+.sso-btn:hover { border-color: var(--accent); }
+
+.auth-modal { max-width: 400px; }
+.auth-divider {
+  display: flex; align-items: center; gap: 12px; margin: 16px 0;
+  font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.06em;
+}
+.auth-divider::before, .auth-divider::after {
+  content: ""; flex: 1; height: 1px; background: var(--border-soft);
+}
+.auth-form { display: grid; gap: 13px; }
+.auth-note { font-size: 11.5px; color: var(--text-3); margin: 5px 0 0; }
+.auth-error { font-size: 12.5px; color: var(--ineligible); margin: 0; }
+.auth-info { font-size: 12.5px; color: var(--eligible); margin: 0; }
+.auth-switch {
+  width: 100%; text-align: center; font-size: 12px; color: var(--text-3);
+  background: none; border: none; cursor: pointer; margin-top: 14px; padding: 4px;
+}
+.auth-switch:hover { color: var(--text); }
+
+/* Preferred-role chips (You page) */
+.role-grid { display: flex; flex-wrap: wrap; gap: 7px; }
+.role-chip {
+  border: 1px solid var(--border); background: var(--raised); border-radius: 18px;
+  padding: 6px 13px; font-size: 12.5px; color: var(--text-2); cursor: pointer;
+  transition: all 0.15s ease;
+}
+.role-chip:hover { border-color: var(--accent); color: var(--text); }
+.role-chip.on {
+  border-color: var(--accent); background: var(--accent-dim);
+  color: var(--accent); font-weight: 500;
+}
+.field-hint { font-weight: 400; color: var(--text-3); font-size: 11.5px; }
+
+/* CV upload row inside Tailor modal */
+.cv-upload-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.cv-source { font-size: 12px; color: var(--text-3); font-family: var(--mono); }
+
+@media (max-width: 860px) {
+  .chat-topbar { padding: 10px 16px; }
+}
+
+/* Subtle tertiary button (e.g. Copy text fallback) */
+.btn.subtle { border-color: transparent; color: var(--text-3); }
+.btn.subtle:hover { color: var(--text); border-color: var(--border); }
+
+/* ============================================================
+   CV preview — document-styled, mirrors the PDF output
+   Always light like paper, even in dark mode (it previews a PDF).
+   ============================================================ */
+.cv-preview {
+  background: #ffffff; color: #2d333e;
+  border: 1px solid var(--border); border-radius: var(--r-sm);
+  padding: 26px 28px; font-size: 12.5px; line-height: 1.5;
+  max-height: 420px; overflow-y: auto;
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,0.02);
+}
+.cvp-name { font-size: 18px; font-weight: 700; color: #12161f; letter-spacing: -0.01em; }
+.cvp-contact { font-size: 10.5px; color: #6c727e; margin-top: 2px; }
+.cvp-heading {
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  color: #12161f; margin-top: 16px; padding-bottom: 4px; border-bottom: 1px solid #ced2da;
+  margin-bottom: 7px;
+}
+.cvp-body { margin: 0; }
+.cvp-entry { margin-bottom: 9px; }
+.cvp-entry-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+.cvp-entry-title { font-weight: 600; color: #191e28; font-size: 12.5px; }
+.cvp-entry-dates { font-size: 10.5px; color: #6c727e; white-space: nowrap; flex-shrink: 0; }
+.cvp-bullet { display: flex; gap: 7px; margin-top: 2px; }
+.cvp-bullet span:first-child { flex-shrink: 0; }

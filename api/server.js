@@ -152,9 +152,10 @@ app.get("/ai/search", async (req, res) => {
     res.json({
       query: q,
       intent: {
-        cluster: intent.cluster, locationCountry: intent.locationCountry,
-        remoteOnly: intent.remoteOnly, seniority: intent.seniority,
-        // Role-taxonomy variants the engine searched (drives the UI taxonomy card).
+        cluster: intent.cluster,
+        locationCountry: intent.locationCountry,
+        remoteOnly: intent.remoteOnly,
+        seniority: intent.seniority,
         variants: (intent.matchedAliases || []).slice(0, 12),
       },
       total: totalAvailable, offset, limit, has_more: hasMore,
@@ -241,58 +242,93 @@ app.post("/ai/cv-rewrite", async (req, res) => {
     if (error || !job) return res.status(404).json({ error: "Job not found" });
     if (!(await isLLMHealthy())) return res.status(503).json({ error: "AI model offline. Run: ollama serve" });
 
-    const jd = (job.description || "").slice(0, 500);
-    const cv = cvText.slice(0, 1500);
+    // Full context — the previous version truncated the CV to 1500 chars,
+    // which silently dropped education/skills/most experience. gpt-oss-120b
+    // on Groq handles this comfortably in one structured call.
+    const jd = (job.description || "").slice(0, 6000);
+    const cv = cvText.slice(0, 12000);
 
-    // CALL 1: rewrite professional summary (small, fast)
-    const summary = await generateText(
-      `Rewrite this professional summary to target ${job.title} at ${job.company}.
-Use keywords from the JD. 3 sentences max. Output only the new summary.
-JD skills: ${jd.slice(0, 200)}
-Current summary: ${cv.slice(0, 300)}`,
-      { timeoutMs: 60000, temperature: 0.3 }
+    const structured = await generateJSON(
+      `You are an expert CV writer. Tailor this candidate's COMPLETE CV to a specific job.
+
+THE JOB
+Title: ${job.title}
+Company: ${job.company}
+Description: ${jd}
+
+THE CANDIDATE'S CURRENT CV
+${cv}
+
+REWRITE RULES — follow every one:
+1. PRESERVE ALL FACTS. Every employer, job title, date range, school, degree, certification and skill from the original CV must appear in your output. Never invent employers, dates, degrees, metrics, or numbers that are not in the original.
+2. TAILOR THE WORDING ONLY: rewrite the summary to target this exact job; rephrase experience bullets to mirror the job description's language and emphasize the most relevant work; reorder bullets so the most relevant come first; reorder the skills list so JD-relevant skills come first.
+3. COMPLETE CV: include every section present in the original (summary, experience, education, skills, certifications, projects, etc.). Do not add placeholder text. Do not add sections that have no content in the original.
+4. NO COMMENTARY: no explanations, no notes to the user, no markdown, no "here is", nothing outside the JSON.
+5. If the original has no detectable name or contact details, use "" for those fields.
+
+Return ONLY JSON in exactly this shape:
+{
+  "name": "candidate name",
+  "contact": "email · phone · location · links, single line",
+  "summary": "tailored professional summary, 2-4 sentences",
+  "sections": [
+    {
+      "heading": "EXPERIENCE",
+      "entries": [
+        { "title": "role title", "org": "company", "dates": "Jan 2021 – Present", "bullets": ["...", "..."] }
+      ]
+    },
+    { "heading": "EDUCATION", "entries": [ { "title": "degree", "org": "school", "dates": "...", "bullets": [] } ] },
+    { "heading": "SKILLS", "entries": [ { "title": "", "org": "", "dates": "", "bullets": ["Skill, Skill, Skill"] } ] }
+  ],
+  "keywords_added": ["up to 6 JD keywords you worked into the CV"],
+  "changes_made": ["3-5 short bullets describing what you changed and why"]
+}`,
+      { timeoutMs: 90000, retries: 1 }
     );
 
-    // CALL 2: 5 tailored experience bullets (small, fast)
-    const bullets = await generateText(
-      `Write 5 strong CV bullet points for someone applying for ${job.title}.
-Base them on this experience but tailor to the JD. Start each with an action verb. Quantify where possible.
-JD wants: ${jd.slice(0, 200)}
-Their experience: ${cv.slice(300, 900)}`,
-      { timeoutMs: 60000, temperature: 0.3 }
-    );
-
-    // CALL 3: missing keywords (tiny JSON, very fast)
-    const meta = await generateJSON(
-      `JD: ${jd.slice(0, 300)} CV: ${cv.slice(0, 300)}
-List up to 5 keywords from the JD missing from the CV.
-Return ONLY JSON: {"keywords":["k1","k2","k3"]}`,
-      { timeoutMs: 30000, retries: 0 }
-    ) || {};
-
-    if (!summary && !bullets) {
-      return res.status(502).json({ error: llmFailMessage("Rewrite timed out. Try again or use a faster model.") });
+    if (!structured?.sections?.length) {
+      return res.status(502).json({ error: llmFailMessage("Rewrite failed — the model returned an invalid CV. Try again.") });
     }
+
+    // Defensive normalisation so the client/PDF never sees undefined.
+    const cvOut = {
+      name: String(structured.name || ""),
+      contact: String(structured.contact || ""),
+      summary: String(structured.summary || ""),
+      sections: (structured.sections || []).map((s) => ({
+        heading: String(s.heading || "").toUpperCase(),
+        entries: (s.entries || []).map((e) => ({
+          title: String(e.title || ""),
+          org: String(e.org || ""),
+          dates: String(e.dates || ""),
+          bullets: (e.bullets || []).map((b) => String(b)).filter(Boolean),
+        })),
+      })).filter((s) => s.heading && s.entries.length),
+    };
+
+    // Plain-text rendering (copy fallback + backward compatibility).
+    const plain = [
+      cvOut.name,
+      cvOut.contact,
+      "",
+      cvOut.summary ? `PROFESSIONAL SUMMARY\n${cvOut.summary}` : "",
+      ...cvOut.sections.map((s) =>
+        `\n${s.heading}\n` + s.entries.map((e) => {
+          const head = [e.title, e.org].filter(Boolean).join(" — ");
+          const line = [head, e.dates].filter(Boolean).join("  ·  ");
+          return [line, ...e.bullets.map((b) => `• ${b}`)].filter(Boolean).join("\n");
+        }).join("\n\n")
+      ),
+    ].filter(Boolean).join("\n");
 
     res.json({
       job: { title: job.title, company: job.company },
       result: {
-        rewritten_cv: [
-          summary ? `PROFESSIONAL SUMMARY\n${summary.replace(/```/g, "").trim()}` : "",
-          bullets ? `\nKEY ACHIEVEMENTS & EXPERIENCE\n${bullets.replace(/```/g, "").trim()}` : "",
-          "\n[Tailor remaining sections — Education, Skills, Certifications — to match JD language]",
-        ].filter(Boolean).join("\n"),
-        changes_made: [
-          `Summary rewritten to target ${job.title}`,
-          "Top experience bullets tailored to JD requirements",
-          `${(meta.keywords || []).length} missing keywords identified`,
-        ],
-        keywords_added: meta.keywords || [],
-        tips: [
-          "Add the missing keywords naturally into your skills and experience sections",
-          "Quantify every achievement: not 'improved performance' but 'improved performance by 23%'",
-          "Mirror the exact job title in your summary if you have done that role before",
-        ],
+        cv: cvOut,                                   // structured — drives preview + PDF
+        rewritten_cv: plain,                          // text — copy fallback
+        changes_made: (structured.changes_made || []).map(String),
+        keywords_added: (structured.keywords_added || []).map(String),
       },
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -461,6 +497,207 @@ Instructions:
 
     res.json({ reply: finalReply, searchSuggestion });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ============================================================
+// REFINE — apply a plain-language constraint to a live result set
+// ============================================================
+// The frontend sends the active intent + current job IDs + the
+// refinement phrase. We re-score/filter WITHOUT a new DB round-trip:
+// the refinement is parsed on top of the previous intent so context
+// is preserved ("only $70k+" knows we were already looking at
+// Data Analytics roles in Nigeria).
+//
+// Refinement types handled deterministically (no LLM needed):
+//   salary:     "above $70k", "over 60k", "$80k+"
+//   seniority:  "senior only", "junior", "entry level"
+//   source:     "lever only", "greenhouse", "ashby"
+//   recency:    "this week", "last 3 days", "posted today"
+//   employment: "full time only", "contract"
+//
+// Anything not matched deterministically goes to the LLM to
+// produce a new search query (graceful fallback).
+// ============================================================
+app.post("/ai/refine", async (req, res) => {
+  try {
+    const { refinement, activeIntent, jobIds = [] } = req.body;
+    if (!refinement) return res.status(400).json({ error: "Missing refinement" });
+    if (!activeIntent?.cluster && !activeIntent?.keywords?.length) {
+      return res.status(400).json({ error: "No active search to refine — run a search first." });
+    }
+
+    const r = refinement.toLowerCase().trim();
+
+    // ── Deterministic parsers ──────────────────────────────
+    // 1. Salary floor — "$70k", "above 60k", "over $80,000".
+    //    Numbers under 1000 are treated as thousands (70 -> 70000)
+    //    because salaries in the jobs table are stored as annual figures.
+    const salMatch = r.match(/(?:above|over|>\s*|minimum\s*|at least\s*)\$?\s*([\d,]+)\s*k?/);
+    let salFloor = null;
+    if (salMatch) {
+      const n = parseInt(salMatch[1].replace(/,/g, ""), 10);
+      if (!Number.isNaN(n)) salFloor = n < 1000 ? n * 1000 : n;
+    }
+
+    // 2. Seniority
+    let seniorityFilter = null;
+    if (/\bsenior\b|\bsr\.?\b|\blead\b|\bprincipal\b/.test(r)) seniorityFilter = "senior";
+    else if (/\bjunior\b|\bjr\.?\b|\bentry\b|\bgraduate\b/.test(r)) seniorityFilter = "junior";
+
+    // 3. Source / ATS
+    let sourceFilter = null;
+    if (/\blever\b/.test(r)) sourceFilter = "lever";
+    else if (/\bgreenhouse\b/.test(r)) sourceFilter = "greenhouse";
+    else if (/\bashby\b/.test(r)) sourceFilter = "ashby";
+    else if (/\bworkable\b/.test(r)) sourceFilter = "workable";
+
+    // 4. Recency (days)
+    let maxAgeDays = null;
+    if (/today|24 hours/.test(r)) maxAgeDays = 1;
+    else if (/this week|last 7|past week/.test(r)) maxAgeDays = 7;
+    else if (/last 3 days|past 3/.test(r)) maxAgeDays = 3;
+    else if (/last 14|two weeks|past two/.test(r)) maxAgeDays = 14;
+    else if (/this month|last 30|past month/.test(r)) maxAgeDays = 30;
+
+    // 5. Employment type
+    let employmentFilter = null;
+    if (/full.?time/.test(r)) employmentFilter = "full_time";
+    else if (/\bcontract\b/.test(r)) employmentFilter = "contract";
+    else if (/\bpart.?time\b/.test(r)) employmentFilter = "part_time";
+
+    const isDeterministic = salFloor || seniorityFilter || sourceFilter || maxAgeDays || employmentFilter;
+
+    if (!isDeterministic) {
+      // ── LLM fallback: turn the refinement into a new search query ──
+      // Merge the refinement with what we know about the active search.
+      const mergedQuery = [
+        activeIntent.cluster || activeIntent.keywords?.join(" ") || "",
+        activeIntent.locationCountry || "",
+        refinement,
+      ].filter(Boolean).join(" ");
+
+      return res.json({
+        type: "new_search",
+        query: mergedQuery,
+        message: `Searching for: "${mergedQuery}"`,
+      });
+    }
+
+    // ── Re-fetch + filter ──────────────────────────────────
+    // Rebuild the same DB query the search endpoint uses, on top of the
+    // PREVIOUS intent — this is what makes refinement conversational:
+    // the cluster and country from the original search carry over.
+    const baseQ = activeIntent.cluster || activeIntent.keywords?.join(" ") || "";
+    const intent = parseIntent(baseQ);
+    if (activeIntent.locationCountry) intent.locationCountry = activeIntent.locationCountry;
+    if (activeIntent.remoteOnly) intent.remoteOnly = true;
+    // Let the explicit refinement override seniority.
+    if (seniorityFilter) intent.seniority = seniorityFilter;
+
+    let dbQuery = supabase.from("jobs").select(JOB_COLUMNS);
+    if (intent.cluster) {
+      const aliases = getAliasesForCluster(intent.cluster).slice(0, 10).map(safeFilterValue).filter(Boolean);
+      const titleFilters = aliases.map((a) => `title.ilike.%${a}%`).join(",");
+      dbQuery = dbQuery.or(`role_cluster.eq.${safeFilterValue(intent.cluster)},${titleFilters}`);
+    } else if (intent.keywords?.length) {
+      const kw = safeFilterValue(intent.keywords[0]);
+      if (kw) dbQuery = dbQuery.ilike("title", `%${kw}%`);
+    }
+
+    if (maxAgeDays) {
+      const since = new Date(Date.now() - maxAgeDays * 86400000).toISOString();
+      dbQuery = dbQuery.gte("posted_at", since);
+    }
+    if (sourceFilter) dbQuery = dbQuery.ilike("source", `%${sourceFilter}%`);
+    if (employmentFilter) dbQuery = dbQuery.eq("employment_type", employmentFilter);
+
+    dbQuery = dbQuery.order("posted_at", { ascending: false, nullsFirst: false });
+    const { data: rawJobs, error } = await dbQuery.limit(250);
+    if (error) return res.status(500).json({ error: error.message });
+
+    const scored = (rawJobs || []).map((job) => {
+      const r2 = scoreJobLocally(job, intent);
+      return { ...job, score: r2.score, eligibility: r2.eligibility, offTarget: r2.offTarget };
+    });
+
+    let eligible = scored.filter((j) => j.eligibility.eligible !== false && !j.offTarget);
+
+    // Apply salary floor client-friendly — salary_min or salary_max must reach floor.
+    if (salFloor) {
+      eligible = eligible.filter((j) =>
+        (j.salary_max && j.salary_max >= salFloor) || (j.salary_min && j.salary_min >= salFloor)
+      );
+    }
+
+    eligible.sort((a, b) => b.score - a.score);
+    const results = eligible.slice(0, 20).map((j) => ({ ...j, match_reason: j.eligibility.reason }));
+
+    // Human-readable description of what changed.
+    const parts = [];
+    if (salFloor) parts.push(`salary reaching $${salFloor >= 1000 ? salFloor / 1000 + "k" : salFloor}+`);
+    if (seniorityFilter) parts.push(`${seniorityFilter}-level only`);
+    if (sourceFilter) parts.push(`${sourceFilter} applications`);
+    if (maxAgeDays) parts.push(`posted in the last ${maxAgeDays} day${maxAgeDays > 1 ? "s" : ""}`);
+    if (employmentFilter) parts.push(employmentFilter.replace("_", "-"));
+    const description = parts.length ? `Filtered to ${parts.join(", ")}` : "Refined";
+
+    res.json({
+      type: "refined",
+      description,
+      total: eligible.length,
+      excluded_count: scored.length - eligible.length,
+      data: results,
+      filters: { salFloor, seniorityFilter, sourceFilter, maxAgeDays, employmentFilter },
+    });
+  } catch (err) {
+    console.error("/ai/refine error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+// CLARIFY — should the copilot ask a follow-up before searching?
+// ============================================================
+// Called when intent is ambiguous (no cluster detected, no country).
+// Returns { needsClarification: bool, question: string|null,
+//           suggestedQuery: string|null }
+// Fast: deterministic, no LLM call.
+// ============================================================
+app.post("/ai/clarify", async (req, res) => {
+  try {
+    const { q } = req.body;
+    if (!q) return res.status(400).json({ error: "Missing q" });
+
+    const intent = parseIntent(q);
+    const issues = [];
+
+    // No role cluster AND no meaningful keywords → too vague.
+    if (!intent.cluster && intent.keywords.filter((k) => k.length > 3).length < 2) {
+      issues.push("role");
+    }
+    // No location and query is very short → ask.
+    if (!intent.locationCountry && !intent.remoteOnly && q.trim().split(/\s+/).length < 4) {
+      issues.push("location");
+    }
+
+    if (issues.length === 0) {
+      return res.json({ needsClarification: false, question: null, suggestedQuery: q });
+    }
+
+    // Build one targeted question covering the most important gap.
+    let question = null;
+    if (issues.includes("role") && issues.includes("location")) {
+      question = "What kind of role are you looking for, and where are you based?";
+    } else if (issues.includes("role")) {
+      question = "What kind of role are you looking for? For example: data analyst, product manager, customer success.";
+    } else if (issues.includes("location")) {
+      question = "Are you looking for worldwide-remote roles, or do you need jobs open to a specific country?";
+    }
+
+    res.json({ needsClarification: true, question, suggestedQuery: null, detectedIntent: intent });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ============================================================
