@@ -76,7 +76,7 @@ async function saveThread(userId, threadId, messages, lastQuery, lastIntent) {
 
 /* ── Component ──────────────────────────────────────────────────────────── */
 
-export default function Copilot({ shared, active }) {
+export default function Copilot({ shared, active, initialQuery, onInitialConsumed }) {
   const { user, profile, requireAuth, showToast } = shared;
 
   const [messages, setMessages]         = useState([]);
@@ -132,6 +132,17 @@ export default function Copilot({ shared, active }) {
       }
     }, 500);
   }, [user?.id]);
+
+  // Run a query handed in from the landing-page hero (once, after the
+  // thread has had a chance to load so we don't clobber a restored thread).
+  useEffect(() => {
+    if (!active || !initialQuery || !threadLoaded) return;
+    const q = initialQuery;
+    onInitialConsumed?.();
+    push({ role: "user", text: q });
+    dispatch(q);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, initialQuery, threadLoaded]);
 
   function push(msg, afterPush) {
     setMessages((prev) => {
@@ -240,14 +251,30 @@ export default function Copilot({ shared, active }) {
         return;
       }
 
-      push({ role: "ai", kind: "text", text: `${res.description} — ${res.total} role${res.total !== 1 ? "s" : ""} match.` });
-      updateLastResult((m) => ({
-        ...m,
-        jobs: res.data || [],
-        total: res.total,
-        activeFilters: res.filters || {},
-        hasMore: false,
-      }), true);
+      // Push the refined results as a NEW block below the confirmation, so the
+      // conversation reads top-to-bottom: "you refined" -> "here are the results".
+      // (Mutating the old block above the message left users staring at a
+      //  "22 roles match" line with no visible cards — the classic bug.)
+      setMessages((prev) => {
+        const prevResult = [...prev].reverse().find((mm) => mm.kind === "results");
+        const newBlock = {
+          role: "ai", kind: "results",
+          query: lastQuery.current,
+          cluster: null,          // no taxonomy card on a refinement
+          variants: [],
+          total: res.total,
+          excluded: prevResult ? prevResult.excluded : 0,
+          scanned: prevResult ? prevResult.scanned : res.total,
+          jobs: res.data || [],
+          offset: (res.data || []).length,
+          hasMore: false,
+          activeFilters: res.filters || {},
+          refinedNote: res.description,
+        };
+        const next = [...prev, newBlock];
+        persistThread(next, lastQuery.current, activeIntent.current);
+        return next;
+      });
     } catch (err) {
       push({ role: "ai", kind: "text", text: `Couldn't apply that filter: ${err.message}` });
     } finally {
@@ -322,6 +349,25 @@ export default function Copilot({ shared, active }) {
     track(user, "saved_for_later", { job_id: job.id, company: job.company });
     showToast(`${job.company || job.title} saved — find it in Pipeline`);
     return true;
+  }
+
+  // Trust feedback loop: user flags a job as not actually open to them.
+  // Writes to job_reports (guests allowed). This is the guardrail instrument.
+  async function reportJob(job, reason, detail) {
+    const v = verdictOf(job);
+    const { error } = await supabase.from("job_reports").insert({
+      user_id: user?.id || null,
+      job_id: job.id,
+      job_title: job.title,
+      company: job.company,
+      reason,
+      detail: detail || null,
+      verdict: v.key,
+      user_country: profile?.country || null,
+    });
+    track(user, "job_reported", { job_id: job.id, reason });
+    if (error) showToast("Thanks — couldn't save the report, but noted.");
+    else showToast("Thank you — that helps us fix eligibility for everyone.");
   }
 
   function clearThread() {
@@ -407,6 +453,7 @@ export default function Copilot({ shared, active }) {
                     isLatest={i === lastResultIdx}
                     onLoadMore={loadMore}
                     onTailor={setTailorJob}
+                    onReport={reportJob}
                     busy={busy}
                   />
                 )}
@@ -505,7 +552,7 @@ function TaxonomyCard({ cluster, variants }) {
 
 /* ── Results block ──────────────────────────────────────────────────────── */
 
-function ResultsBlock({ m, isLatest, onLoadMore, onTailor, busy }) {
+function ResultsBlock({ m, isLatest, onLoadMore, onTailor, onReport, busy }) {
   const hasFilters = m.activeFilters && Object.values(m.activeFilters).some(Boolean);
   return (
     <>
@@ -518,11 +565,18 @@ function ResultsBlock({ m, isLatest, onLoadMore, onTailor, busy }) {
         </>
       )}
 
-      <div className="scan-card" role="group" aria-label="Eligibility scan">
-        <div className="scan-item"><div className="num">{m.scanned.toLocaleString()}</div><div className="lbl">listings scanned across all role names</div></div>
-        <div className="scan-item excluded"><div className="num">{m.excluded.toLocaleString()}</div><div className="lbl">excluded — region-locked or restricted</div></div>
-        <div className="scan-item eligible"><div className="num">{m.total.toLocaleString()}</div><div className="lbl">you are actually eligible for</div></div>
-      </div>
+      {m.refinedNote ? (
+        <div className="refined-header">
+          <span className="refined-label">Refined</span>
+          <span className="refined-desc">{m.refinedNote} — {m.total} role{m.total !== 1 ? "s" : ""}</span>
+        </div>
+      ) : (
+        <div className="scan-card" role="group" aria-label="Eligibility scan">
+          <div className="scan-item"><div className="num">{m.scanned.toLocaleString()}</div><div className="lbl">listings scanned across all role names</div></div>
+          <div className="scan-item excluded"><div className="num">{m.excluded.toLocaleString()}</div><div className="lbl">excluded — region-locked or restricted</div></div>
+          <div className="scan-item eligible"><div className="num">{m.total.toLocaleString()}</div><div className="lbl">you are actually eligible for</div></div>
+        </div>
+      )}
 
       {hasFilters && (
         <div className="filter-pills">
@@ -541,7 +595,7 @@ function ResultsBlock({ m, isLatest, onLoadMore, onTailor, busy }) {
       )}
 
       {m.jobs.map((job) => (
-        <JobCard key={job.id} job={job} onTailor={onTailor} />
+        <JobCard key={job.id} job={job} onTailor={onTailor} onReport={onReport} />
       ))}
 
       {isLatest && m.hasMore && (
@@ -557,8 +611,10 @@ function ResultsBlock({ m, isLatest, onLoadMore, onTailor, busy }) {
 
 /* ── Job card ───────────────────────────────────────────────────────────── */
 
-function JobCard({ job, onTailor }) {
+function JobCard({ job, onTailor, onReport }) {
   const [pop, setPop] = useState(false);
+  const [reporting, setReporting] = useState(false);
+  const [reported, setReported] = useState(false);
   const v   = verdictOf(job);
   const sal = fmtSalary(job.salary_min, job.salary_max);
   const confLabel = { certain: "High", likely: "Good", possible: "Unconfirmed" }[job.eligibility?.confidence] || "—";
@@ -569,6 +625,21 @@ function JobCard({ job, onTailor }) {
     document.addEventListener("click", close);
     return () => document.removeEventListener("click", close);
   }, [pop]);
+
+  const REASONS = [
+    ["location", "Not open to my country"],
+    ["visa", "Needs visa/sponsorship"],
+    ["experience", "Wrong experience level"],
+    ["salary", "Salary doesn't match"],
+    ["expired", "Posting is expired/gone"],
+    ["other", "Something else"],
+  ];
+
+  function fileReport(reason) {
+    onReport?.(job, reason);
+    setReporting(false);
+    setReported(true);
+  }
 
   return (
     <div className="job-card">
@@ -620,6 +691,24 @@ function JobCard({ job, onTailor }) {
              style={{ textDecoration: "none", display: "inline-flex", alignItems: "center" }}>
             View posting ↗
           </a>
+        )}
+      </div>
+
+      <div className="jc-report">
+        {reported ? (
+          <span className="jc-report-done">✓ Thanks — flagged for review</span>
+        ) : reporting ? (
+          <div className="jc-report-reasons">
+            <span className="jc-report-q">Why isn't it open to you?</span>
+            {REASONS.map(([key, label]) => (
+              <button key={key} className="jc-report-reason" onClick={() => fileReport(key)}>{label}</button>
+            ))}
+            <button className="jc-report-cancel" onClick={() => setReporting(false)}>Cancel</button>
+          </div>
+        ) : (
+          <button className="jc-report-trigger" onClick={() => setReporting(true)}>
+            This job isn't actually open to me
+          </button>
         )}
       </div>
     </div>

@@ -2,10 +2,11 @@
  * App.jsx — the shell: rail navigation + five surfaces.
  * Copilot · Briefing · Pipeline · Studio · You
  */
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useSession } from "./lib/useSession";
 import { useTheme } from "./lib/useTheme";
 import AuthModal from "./AuthModal";
+import Landing from "./Landing";
 import Copilot from "./views/Copilot";
 import Briefing from "./views/Briefing";
 import Pipeline from "./views/Pipeline";
@@ -24,9 +25,18 @@ export default function App() {
   const [view, setView] = useState("copilot");
   const [showAuth, setShowAuth] = useState(false);
   const [toast, setToast] = useState(null);
+  // Landing page: shown to first-time visitors and signed-out users who
+  // haven't entered the app yet. Signed-in users skip straight to the app.
+  const [entered, setEntered] = useState(false);
+  const [initialQuery, setInitialQuery] = useState(null);
   const session = useSession();
   const { theme, toggleTheme } = useTheme();
-  const { user, profile, signOut, refreshProfile } = session;
+  const { user, profile, signOut, refreshProfile, loading } = session;
+
+  // Signed-in users never see the landing page.
+  useEffect(() => {
+    if (user) setEntered(true);
+  }, [user]);
 
   const showToast = useCallback((msg) => {
     setToast(msg);
@@ -40,8 +50,33 @@ export default function App() {
     return false;
   }, [user]);
 
+  const enterWithSearch = useCallback((q) => {
+    setInitialQuery(q);
+    setView("copilot");
+    setEntered(true);
+  }, []);
+
   const shared = { ...session, requireAuth, showToast, setView };
   const initial = (profile?.full_name || user?.email || "?").trim()[0]?.toUpperCase() || "?";
+
+  // While the session is resolving, render nothing (avoids a landing flash
+  // for already-signed-in users).
+  if (loading) return <div className="app" />;
+
+  // Landing page — first thing a new visitor sees.
+  if (!entered) {
+    return (
+      <>
+        <Landing
+          onStart={(q) => q ? enterWithSearch(q) : setEntered(true)}
+          onSignIn={() => setShowAuth(true)}
+          theme={theme}
+          toggleTheme={toggleTheme}
+        />
+        {showAuth && <AuthModal onClose={() => setShowAuth(false)} onAuthed={() => setEntered(true)} />}
+      </>
+    );
+  }
 
   return (
     <div className="app">
@@ -84,7 +119,7 @@ export default function App() {
       </nav>
 
       <main className="main">
-        <section className={`view ${view === "copilot" ? "active" : ""}`}><Copilot shared={shared} active={view === "copilot"} /></section>
+        <section className={`view ${view === "copilot" ? "active" : ""}`}><Copilot shared={shared} active={view === "copilot"} initialQuery={initialQuery} onInitialConsumed={() => setInitialQuery(null)} /></section>
         <section className={`view ${view === "briefing" ? "active" : ""}`}><Briefing shared={shared} active={view === "briefing"} /></section>
         <section className={`view ${view === "pipeline" ? "active" : ""}`}><Pipeline shared={shared} active={view === "pipeline"} /></section>
         <section className={`view ${view === "studio" ? "active" : ""}`}><Studio shared={shared} active={view === "studio"} /></section>
