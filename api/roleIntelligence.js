@@ -833,6 +833,52 @@ const FOREIGN_COUNTRIES = [
 // ============================================================
 // ELIGIBILITY ENGINE
 // ============================================================
+
+// On-site location hints for major non-African hiring hubs — used ONLY on the
+// short location field, where a bare "US" or "New York" is unambiguous.
+const LOC_FOREIGN_HINTS = [
+  ...FOREIGN_COUNTRIES, "us",
+  "new york", "san francisco", "austin", "seattle", "boston", "chicago",
+  "los angeles", "denver", "atlanta", "miami", "washington dc",
+  "toronto", "vancouver", "montreal", "dublin", "amsterdam", "sydney", "melbourne",
+];
+
+/**
+ * Eligibility when we DON'T know the user's country (guest, no profile).
+ * The product's audience is Africa-first, so the default gate is:
+ * exclude anything restricted or clearly on-site abroad; pass worldwide,
+ * remote, and Africa-located roles; be honest about the rest.
+ */
+function genericEligibility(job, title, desc) {
+  const locField = ` ${(job.location || "").toLowerCase()} `;
+  const body = ` ${title} ${desc.slice(0, 3000)} `;
+
+  // 1. Explicit restrictions anywhere -> out.
+  if (hasAny(locField, HARD_EXCLUSIONS) || hasAny(body, HARD_EXCLUSIONS))
+    return { eligible: false, confidence: "excluded", reason: "Geographically restricted" };
+  if (RESTRICTION_PHRASES.some((p) => hasPhrase(body, p)))
+    return { eligible: false, confidence: "excluded", reason: "Restricted to a specific region in the posting" };
+
+  const remoteSignal = job.remote === true ||
+    hasAny(`${locField}${body}`, ["remote", "work from home", "wfh", "work from anywhere", "fully distributed"]);
+
+  // 2. Location field pins it to a foreign hub.
+  if (hasAny(locField, LOC_FOREIGN_HINTS)) {
+    if (!remoteSignal)
+      return { eligible: false, confidence: "excluded", reason: `On-site in ${job.location} — not open to applicants elsewhere` };
+    return { eligible: true, confidence: "possible", reason: `Remote, but tied to ${job.location} — confirm it's open to your country` };
+  }
+
+  // 3. Clearly open.
+  if (hasAny(locField, ["anywhere", "worldwide", "global"]) || hasAny(locField, AFRICA_TERMS))
+    return { eligible: true, confidence: "likely", reason: "Open worldwide / Africa" };
+  if (remoteSignal)
+    return { eligible: true, confidence: "likely", reason: "Remote role" };
+
+  // 4. Unpinned local/unknown — honest conditional.
+  return { eligible: true, confidence: "possible", reason: "Set your country in You → for a verified check" };
+}
+
 /**
  * checkEligibility(job, country) -> { eligible, confidence, reason }
  * confidence: certain | likely | possible | excluded
@@ -1033,6 +1079,36 @@ export function scoreJobLocally(job, intent) {
     const all = ` ${(job.location || "").toLowerCase()} ${desc} `;
     if (hasAny(all, HARD_EXCLUSIONS)) eligibility = { eligible: false, confidence: "excluded", reason: "Geographically restricted" };
     else if (job.remote || hasPhrase(all, "remote")) eligibility = { eligible: true, confidence: "likely", reason: "Remote role" };
+    else eligibility = genericEligibility(job, title, desc);
+  } else {
+    // NO country, NO remote in the query (e.g. a guest typing "copywriting
+    // jobs for me"). This path previously did ZERO checking — a Stripe·US
+    // on-site job sailed through as Conditional. Never skip eligibility:
+    // the default audience is Africa-first.
+    eligibility = genericEligibility(job, title, desc);
+  }
+
+  // STEP 1b: REMOTE ENFORCEMENT — "remote X open to Nigeria" must not surface
+  // on-site local jobs just because the location mentions the country.
+  // (Real trust failure: Lagos on-site intern ranked 90% on a remote search.)
+  if (eligibility.eligible && intent.remoteOnly) {
+    const remoteField = ` ${(job.location || "").toLowerCase()} ${title} ${desc.slice(0, 2000)} `;
+    const hasRemoteSignal =
+      job.remote === true ||
+      hasAny(remoteField, ["remote", "work from home", "wfh", "work from anywhere", "fully distributed", "distributed team", "telecommute"]);
+    if (!hasRemoteSignal) {
+      if (hasPhrase(remoteField, "hybrid")) {
+        eligibility = {
+          eligible: true, confidence: "possible",
+          reason: `Hybrid${job.location ? ` in ${job.location}` : ""} — confirm the remote arrangement before applying`,
+        };
+      } else {
+        eligibility = {
+          eligible: false, confidence: "excluded",
+          reason: `On-site${job.location ? ` in ${job.location}` : ""} — you asked for remote`,
+        };
+      }
+    }
   }
 
   // STEP 2: role match (0–55) — judged by the job's OWN TITLE at search time,

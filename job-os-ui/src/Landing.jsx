@@ -30,6 +30,7 @@ export default function Landing({ onStart, onSignIn, theme, toggleTheme }) {
       <header className="lp-topbar">
         <div className="lp-brand"><span className="dot" />JobCopilot</div>
         <nav className="lp-nav">
+          <button className="lp-navlink" onClick={() => scrollTo("about")}>About</button>
           <button className="lp-navlink" onClick={() => scrollTo("employers")}>For employers</button>
           <button className="lp-ghost" onClick={toggleTheme} aria-label="Toggle theme">{theme === "dark" ? "☀" : "☾"}</button>
           <button className="lp-signin" onClick={onSignIn}>Sign in</button>
@@ -141,9 +142,45 @@ export default function Landing({ onStart, onSignIn, theme, toggleTheme }) {
         <EmployerWaitlist />
       </section>
 
+      {/* ── About ────────────────────────────────────────────── */}
+      <section className="lp-section" id="about">
+        <div className="lp-section-label">About</div>
+        <h2>Why we exist.</h2>
+        <p className="lp-about-text">
+          Millions of skilled African professionals are locked out of the global job market — not by
+          ability, but by listings that were never open to them. JobCopilot was built in Nigeria to fix
+          that: verify eligibility first, so talent only spends energy on real opportunities.
+        </p>
+        <p className="lp-about-text">
+          Job search is the first step. The mission is bigger — an AI employment operating system
+          connecting African talent and global employers, end to end.
+        </p>
+      </section>
+
+      {/* ── Careers ──────────────────────────────────────────── */}
+      <section className="lp-section" id="careers">
+        <div className="lp-section-label">Careers</div>
+        <h2>Build this with us.</h2>
+        <p className="lp-about-text">
+          We're a small team moving fast on a hard, important problem. No open roles posted right now —
+          but exceptional people don't wait for postings. If that's you, reach out.
+        </p>
+        <a className="lp-btn-secondary lp-careers-btn" href="mailto:hello@jobcopilot.example?subject=I want to build JobCopilot with you">
+          Introduce yourself →
+        </a>
+      </section>
+
       <footer className="lp-footer">
-        <span className="lp-brand"><span className="dot" />JobCopilot</span>
-        <span className="lp-footer-note">The AI employment OS for Africa.</span>
+        <div className="lp-footer-top">
+          <span className="lp-brand"><span className="dot" />JobCopilot</span>
+          <nav className="lp-footer-links">
+            <button onClick={() => scrollTo("about")}>About</button>
+            <button onClick={() => scrollTo("careers")}>Careers</button>
+            <button onClick={() => scrollTo("employers")}>For employers</button>
+            <button onClick={onSignIn}>Sign in</button>
+          </nav>
+        </div>
+        <span className="lp-footer-note">The AI employment OS for Africa. · © {new Date().getFullYear()} JobCopilot</span>
       </footer>
     </div>
   );

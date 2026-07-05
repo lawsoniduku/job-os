@@ -665,7 +665,7 @@ app.post("/ai/refine", async (req, res) => {
 // ============================================================
 app.post("/ai/clarify", async (req, res) => {
   try {
-    const { q } = req.body;
+    const { q, hasCountry } = req.body;
     if (!q) return res.status(400).json({ error: "Missing q" });
 
     const intent = parseIntent(q);
@@ -675,8 +675,11 @@ app.post("/ai/clarify", async (req, res) => {
     if (!intent.cluster && intent.keywords.filter((k) => k.length > 3).length < 2) {
       issues.push("role");
     }
-    // No location and query is very short → ask.
-    if (!intent.locationCountry && !intent.remoteOnly && q.trim().split(/\s+/).length < 4) {
+    // The copilot doesn't know the user's country from ANY source (query or
+    // profile) → it must ask, because eligibility checking is the product.
+    // Exception: explicitly worldwide queries.
+    const explicitlyWorldwide = /\bworldwide\b|\banywhere\b|\bglobal(ly)?\b/i.test(q);
+    if (!intent.locationCountry && !hasCountry && !explicitlyWorldwide) {
       issues.push("location");
     }
 
@@ -691,7 +694,7 @@ app.post("/ai/clarify", async (req, res) => {
     } else if (issues.includes("role")) {
       question = "What kind of role are you looking for? For example: data analyst, product manager, customer success.";
     } else if (issues.includes("location")) {
-      question = "Are you looking for worldwide-remote roles, or do you need jobs open to a specific country?";
+      question = "Which country are you applying from? I check every job's eligibility against it — e.g. Nigeria, Kenya, Ghana.";
     }
 
     res.json({ needsClarification: true, question, suggestedQuery: null, detectedIntent: intent });

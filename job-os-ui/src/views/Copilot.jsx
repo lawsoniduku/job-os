@@ -193,7 +193,7 @@ export default function Copilot({ shared, active, initialQuery, onInitialConsume
   async function dispatch(q) {
     setBusy(true);
     try {
-      const clarify = await aiClarify({ q }).catch(() => ({ needsClarification: false }));
+      const clarify = await aiClarify({ q, hasCountry: !!profile?.country }).catch(() => ({ needsClarification: false }));
       if (clarify.needsClarification) {
         setAwaiting({ baseQuery: q });
         track(user, "clarify_asked", { query: q });
@@ -392,12 +392,17 @@ export default function Copilot({ shared, active, initialQuery, onInitialConsume
 
   return (
     <>
-      {messages.length > 0 && (
-        <div className="chat-topbar">
-          <span className="ct-title">{lastQuery.current || "Conversation"}</span>
-          <button className="btn" onClick={clearThread}>＋ New search</button>
-        </div>
-      )}
+      <div className="chat-topbar">
+        <button className="ct-home" onClick={shared.goHome} title="Back to home">
+          <span className="dot" />JobCopilot
+        </button>
+        {messages.length > 0 && (
+          <>
+            <span className="ct-title">{lastQuery.current || "Conversation"}</span>
+            <button className="btn" onClick={clearThread}>＋ New search</button>
+          </>
+        )}
+      </div>
       <div className="scrollarea" ref={scrollRef}>
         <div className="chat-wrap">
           {empty && threadLoaded && (
@@ -680,7 +685,7 @@ function JobCard({ job, onTailor, onReport }) {
 
       <div className="jc-meta">
         {sal && <span className="sal">{sal}</span>}
-        {job.posted_at && <span>Posted {new Date(job.posted_at).toLocaleDateString()}</span>}
+        {job.posted_at && <span>{fmtPosted(job.posted_at)}</span>}
         {job.source && <span>{job.source}</span>}
       </div>
 
@@ -939,6 +944,15 @@ function dedupe(jobs) {
   return jobs.filter((j) => (seen.has(j.id) ? false : (seen.add(j.id), true)));
 }
 function cap(s) { return s ? s[0].toUpperCase() + s.slice(1) : s; }
+
+function fmtPosted(iso) {
+  const d = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
+  if (d <= 0) return "Posted today";
+  if (d === 1) return "Posted yesterday";
+  if (d < 7) return `Posted ${d}d ago`;
+  if (d < 30) return `Posted ${Math.floor(d / 7)}w ago`;
+  return `Posted ${new Date(iso).toLocaleDateString()}`;
+}
 
 function buildRefineChips(lastResult) {
   const f = lastResult?.activeFilters || {};

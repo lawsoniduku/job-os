@@ -526,7 +526,18 @@ body {
 .landing { min-height: 100vh; min-height: 100dvh; overflow-y: auto; background: var(--canvas); color: var(--text); }
 
 /* Top bar */
-.lp-topbar { max-width: 1140px; margin: 0 auto; padding: 18px 24px; display: flex; align-items: center; justify-content: space-between; }
+.lp-topbar {
+  position: sticky; top: 0; z-index: 40;
+  max-width: none; margin: 0; padding: 14px 24px;
+  display: flex; align-items: center; justify-content: space-between;
+  background: color-mix(in srgb, var(--canvas) 82%, transparent);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--border-soft);
+}
+.lp-topbar > * { max-width: 1140px; }
+@supports not (background: color-mix(in srgb, red 50%, blue)) {
+  .lp-topbar { background: var(--canvas); }
+}
 .lp-brand { display: flex; align-items: center; gap: 9px; font-family: var(--display); font-weight: 700; font-size: 16.5px; }
 .lp-brand .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--eligible); box-shadow: 0 0 12px var(--eligible-dim); }
 .lp-nav { display: flex; align-items: center; gap: 4px; }
@@ -655,4 +666,61 @@ body {
   .lp-pain { font-size: 15px; }
   .lp-search { flex-direction: column; padding: 12px; }
   .lp-search .lp-btn-primary { justify-content: center; }
+}
+
+
+/* About / Careers sections + footer links */
+.lp-about-text { font-size: 16.5px; line-height: 1.6; color: var(--text-2); max-width: 620px; margin: 0 0 16px; }
+.lp-careers-btn { text-decoration: none; margin-top: 6px; }
+.lp-footer { flex-direction: column; align-items: stretch; gap: 14px; }
+.lp-footer-top { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.lp-footer-links { display: flex; gap: 4px; flex-wrap: wrap; }
+.lp-footer-links button { font-size: 14px; font-weight: 500; color: var(--text-2); background: none; border: none; padding: 8px 12px; cursor: pointer; border-radius: 8px; }
+.lp-footer-links button:hover { color: var(--text); }
+@media (max-width: 560px) {
+  .lp-footer-top { flex-direction: column; align-items: flex-start; }
+}
+
+/* ============================================================
+   Mobile calm — reduce card busy-ness on small screens
+   ============================================================ */
+@media (max-width: 860px) {
+  .jc-variant { display: none; }             /* cluster chip: engine detail, not user info */
+  .composer-hint { display: none; }          /* one less line of chrome */
+  .refine-label { display: none; }           /* chips speak for themselves */
+  .jc-meta { font-size: 11.5px; gap: 10px; margin-top: 8px; }
+  .jc-why { font-size: 12.5px; margin-top: 8px; padding-top: 8px; }
+  .jc-report { margin-top: 9px; padding-top: 8px; }
+  .jc-report-trigger { font-size: 11px; opacity: 0.75; }
+  .ct-title { font-size: 12.5px; }
+  .job-card + .job-card { margin-top: 10px; }
+}
+
+/* ============================================================
+   Navigation control — home wordmark + sign out
+   ============================================================ */
+/* Rail wordmark now a button */
+.wordmark { background: none; border: none; cursor: pointer; font: inherit; }
+.wordmark:hover { opacity: 0.8; }
+
+/* Chat top bar home wordmark */
+.ct-home {
+  display: flex; align-items: center; gap: 8px;
+  font-family: var(--display); font-weight: 700; font-size: 15px;
+  color: var(--text); background: none; border: none; cursor: pointer;
+  padding: 0; flex-shrink: 0;
+}
+.ct-home:hover { opacity: 0.8; }
+.ct-home .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--eligible); box-shadow: 0 0 10px var(--eligible-dim); }
+.chat-topbar .ct-title { margin-left: 14px; padding-left: 14px; border-left: 1px solid var(--border-soft); }
+
+/* Account actions on You page */
+.account-actions { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+.btn.danger-outline { border-color: var(--ineligible); color: var(--ineligible); }
+.btn.danger-outline:hover { background: rgba(248,113,113,0.08); }
+
+/* On mobile the chat home wordmark is the primary way back */
+@media (max-width: 860px) {
+  .ct-home { font-size: 14.5px; }
+  .chat-topbar .ct-title { display: none; }  /* keep the bar clean; home + New search only */
 }

@@ -56,7 +56,8 @@ export default function App() {
     setEntered(true);
   }, []);
 
-  const shared = { ...session, requireAuth, showToast, setView };
+  const shared = { ...session, requireAuth, showToast, setView, goHome: () => setEntered(false),
+    signOut: async () => { await signOut(); setEntered(false); setView("copilot"); } };
   const initial = (profile?.full_name || user?.email || "?").trim()[0]?.toUpperCase() || "?";
 
   // While the session is resolving, render nothing (avoids a landing flash
@@ -81,7 +82,9 @@ export default function App() {
   return (
     <div className="app">
       <nav className="rail" aria-label="Primary">
-        <div className="wordmark"><span className="dot" />JobCopilot</div>
+        <button className="wordmark" onClick={() => setEntered(false)} title="Back to home" aria-label="Back to home">
+          <span className="dot" />JobCopilot
+        </button>
         <div className="nav">
           {NAV.map((n) => (
             <button key={n.key} className={view === n.key ? "active" : ""} onClick={() => setView(n.key)} aria-label={n.label}>
@@ -102,7 +105,7 @@ export default function App() {
               </button>
               <div className="rail-mini">
                 <button onClick={toggleTheme}>{theme === "dark" ? "Light" : "Dark"}</button>
-                <button onClick={signOut}>Sign out</button>
+                <button onClick={shared.signOut}>Sign out</button>
               </div>
             </>
           ) : (

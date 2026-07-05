@@ -72,8 +72,8 @@ export function aiRefine({ refinement, activeIntent }) {
   return call(`/ai/refine`, { method: "POST", body: { refinement, activeIntent }, timeoutMs: 45000 });
 }
 
-export function aiClarify({ q }) {
-  return call(`/ai/clarify`, { method: "POST", body: { q }, timeoutMs: 20000 });
+export function aiClarify({ q, hasCountry = false }) {
+  return call(`/ai/clarify`, { method: "POST", body: { q, hasCountry }, timeoutMs: 20000 });
 }
 
 export function aiChat({ message, history = [], context = {} }) {

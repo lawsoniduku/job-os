@@ -33,7 +33,7 @@ const SENIORITY_OPTIONS = [
 ];
 
 export default function You({ shared, active, refreshProfile }) {
-  const { user, profile, requireAuth, showToast } = shared;
+  const { user, profile, requireAuth, showToast, signOut, goHome } = shared;
 
   const [name, setName]           = useState("");
   const [country, setCountry]     = useState("");
@@ -221,7 +221,11 @@ export default function You({ shared, active, refreshProfile }) {
 
       <div className="studio-card">
         <h3>Account</h3>
-        <div className="s-sub" style={{ marginBottom: 0 }}>Signed in as {user.email}</div>
+        <div className="s-sub">Signed in as {user.email}</div>
+        <div className="account-actions">
+          <button className="btn" onClick={goHome}>← Back to home</button>
+          <button className="btn danger-outline" onClick={signOut}>Sign out</button>
+        </div>
       </div>
     </div></div>
   );
