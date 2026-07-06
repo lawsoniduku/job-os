@@ -724,3 +724,23 @@ body {
   .ct-home { font-size: 14.5px; }
   .chat-topbar .ct-title { display: none; }  /* keep the bar clean; home + New search only */
 }
+
+/* ============================================================
+   Apply signal (subtle "worth your effort" line on job cards)
+   ============================================================ */
+.jc-signal { margin-top: 8px; font-size: 12px; font-weight: 500; display: flex; align-items: center; gap: 6px; }
+.jc-signal::before { content: ""; width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.jc-signal.hot  { color: var(--eligible); }
+.jc-signal.hot::before  { background: var(--eligible); box-shadow: 0 0 8px var(--eligible-dim); }
+.jc-signal.warm { color: var(--text-2); }
+.jc-signal.warm::before { background: var(--accent); }
+.jc-signal.cool { color: var(--text-3); }
+.jc-signal.cool::before { background: var(--text-3); }
+
+/* Tailor modal — match notes + cover letter */
+.match-notes { margin: 12px 0; padding: 11px 14px; background: var(--accent-dim); border: 1px solid var(--accent); border-radius: 10px; font-size: 13.5px; line-height: 1.5; color: var(--text); }
+.match-notes b { color: var(--accent); }
+.cover-letter { margin-top: 18px; border-top: 1px solid var(--border-soft); padding-top: 16px; }
+.cl-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.cl-body { white-space: pre-wrap; font-size: 14px; line-height: 1.65; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; }
+.btn.sm { padding: 5px 12px; font-size: 12.5px; }

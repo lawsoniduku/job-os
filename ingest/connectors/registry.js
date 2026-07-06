@@ -1,181 +1,129 @@
 /**
  * ingest/connectors/registry.js
  * =============================
- * TWO kinds of lists:
- *   - ACTIVE arrays (GREENHOUSE_/LEVER_/ASHBY_COMPANIES): boards confirmed LIVE.
- *     The pipeline ingests ONLY these, so your runs stay clean.
- *   - CANDIDATES_TO_VERIFY: more African companies whose slug we're unsure of.
- *     `node ingest/verify.js` probes these too. When one comes back ✅, move it
- *     up into the matching ACTIVE array.
+ * Built from verify.js runs (July 2026 — 60/81 slugs live, 5,781 jobs).
+ * ACTIVE arrays = confirmed live via verify.js. Only these are ingested.
+ * CANDIDATES_TO_VERIFY = next batch to probe.
  *
- * `region` is a hint persisted to eligibility_region for African-HQ employers.
+ * Non-ATS remote companies (custom pages — use manual upload template):
+ *   Doist, Netlify, PiggyVest, Cowrywise, and several African fintechs
+ *   that 404 on every standard ATS.
  */
 
-// ---------- ACTIVE (verified live on your run) ----------
+// ── GREENHOUSE ────────────────────────────────────────────────
 export const GREENHOUSE_COMPANIES = [
-  // African / Nigerian
-  { slug: "paystack", name: "Paystack", region: "Africa" },   // ✅ 9
-  { slug: "jumia",    name: "Jumia",    region: "Africa" },   // ✅ 5
-  { slug: "carbon",   name: "Carbon",   region: "Nigeria" },  // ✅ 9
-  // Moniepoint is on Greenhouse's EU instance — needs the eu apiBase, which is
-  // why an earlier probe on the default domain returned 0. Verify with verify.js.
-  { slug: "moniepoint", name: "Moniepoint", region: "Nigeria",
-    apiBase: "https://boards-api.eu.greenhouse.io" },
-  // global volume (worldwide-remote friendly)
-  { slug: "gitlab",     name: "GitLab" },       // ✅ 136
-  { slug: "remotecom",  name: "Remote.com" },   // ✅ 279 — FIXED: was "remote" (wrong board, only 2 jobs)
-  { slug: "stripe",     name: "Stripe" },       // ✅ 508
-  { slug: "airbnb",     name: "Airbnb" },        // ✅ 224
-  { slug: "dropbox",    name: "Dropbox" },       // ✅ 56
-  { slug: "robinhood",  name: "Robinhood" },     // ✅ 164
-  { slug: "coinbase",   name: "Coinbase" },      // ✅ 89
-  { slug: "databricks", name: "Databricks" },    // ✅ 768
-  { slug: "twilio",     name: "Twilio" },        // ✅ 157
-  { slug: "cloudflare", name: "Cloudflare" },    // ✅ 191
-  { slug: "discord",    name: "Discord" },       // ✅ 61
-  { slug: "figma",      name: "Figma" },         // ✅ 167
-  { slug: "anthropic",  name: "Anthropic" },     // ✅ 377
+  // Nigerian / African ✅
+  { slug: "jumia",             name: "Jumia",       region: "Africa"  },
+  { slug: "carbon",            name: "Carbon",      region: "Nigeria" },
+  { slug: "moniepoint",        name: "Moniepoint",  region: "Nigeria",
+    apiBase: "https://boards-api.eu.greenhouse.io"                    },
+  // Remote-first global ✅
+  { slug: "automatticcareers", name: "Automattic"   },  // 82 countries [RF]
+  { slug: "gitlab",            name: "GitLab"       },  // 65+ countries [RF]
+  { slug: "remotecom",         name: "Remote.com"   },  // EOR [RF]
+  { slug: "canonical",         name: "Canonical"    },  // 75+ countries [RF]
+  { slug: "elastic",           name: "Elastic"      },  // distributed-first [RF]
+  { slug: "mozilla",           name: "Mozilla"      },  // [RF]
+  { slug: "grafanalabs",       name: "Grafana Labs"  },  // remote-first [RF]
+  { slug: "customerio",        name: "Customer.io"  },  // [RF]
+  { slug: "webflow",           name: "Webflow"      },  // [RF]
+  { slug: "mattermost",        name: "Mattermost"   },  // open-source [RF]
+  // High-volume global ✅
+  { slug: "stripe",            name: "Stripe"       },
+  { slug: "airbnb",            name: "Airbnb"       },
+  { slug: "dropbox",           name: "Dropbox"      },
+  { slug: "robinhood",         name: "Robinhood"    },
+  { slug: "coinbase",          name: "Coinbase"     },
+  { slug: "databricks",        name: "Databricks"   },
+  { slug: "twilio",            name: "Twilio"       },
+  { slug: "cloudflare",        name: "Cloudflare"   },
+  { slug: "discord",           name: "Discord"      },
+  { slug: "figma",             name: "Figma"        },
+  { slug: "anthropic",         name: "Anthropic"    },
+  { slug: "postman",           name: "Postman"      },
+  { slug: "cockroachlabs",     name: "Cockroach Labs"},
+  { slug: "vercel",            name: "Vercel"       },  // [RF]
 ];
 
+// ── LEVER ─────────────────────────────────────────────────────
 export const LEVER_COMPANIES = [
-  { slug: "spotify", name: "Spotify" }, // ✅ 147
-  { slug: "remofirst", name: "RemoFirst" }, // ✅ verified live 2026-06-30, remote-first EOR company
-  // netflix/plaid were live but returned 0 jobs — skipped (re-check later)
+  { slug: "spotify",   name: "Spotify"   },
+  { slug: "remofirst", name: "RemoFirst" },  // EOR [RF]
+  { slug: "kinsta",    name: "Kinsta"    },  // fully remote [RF]
+  { slug: "tala",      name: "Tala",      region: "Africa" },  // ✅ 9 jobs
 ];
 
+// ── ASHBY ──────────────────────────────────────────────────────
 export const ASHBY_COMPANIES = [
-  // African / Nigerian
-  { slug: "sabi",  name: "Sabi",  region: "Africa" },   // ✅ 6
-  { slug: "lemfi", name: "LemFi", region: "Nigeria" },  // ✅ 14
-  // global volume
-  { slug: "linear",  name: "Linear" },   // ✅ 25
-  { slug: "ramp",    name: "Ramp" },     // ✅ 111
-  { slug: "openai",  name: "OpenAI" },   // ✅ 728
-  { slug: "notion",  name: "Notion" },   // ✅ 152
-  { slug: "runway",  name: "Runway" },   // ✅ 4
-  { slug: "posthog", name: "PostHog" },  // ✅ 16
-  { slug: "replit",  name: "Replit" },   // ✅ 99
-  // vercel/pesto/deel were live but 0 jobs — skipped
+  // Nigerian / African ✅
+  { slug: "sabi",     name: "Sabi",   region: "Africa"  },
+  { slug: "lemfi",    name: "LemFi",  region: "Nigeria" },
+  { slug: "andela",   name: "Andela", region: "Africa"  },  // ✅ 16 jobs
+  // Remote-first ✅ (verified on Ashby)
+  { slug: "zapier",   name: "Zapier"    },  // ✅ 17 · 800+ staff [RF]
+  { slug: "buffer",   name: "Buffer"    },  // ✅ 1 · remote pioneer [RF]
+  { slug: "camunda",  name: "Camunda"   },  // ✅ 34 · fully remote [RF]
+  { slug: "oyster",   name: "Oyster HR" },  // ✅ 13 · EOR, hires from Africa [RF]
+  // Ashby native ✅
+  { slug: "linear",       name: "Linear"          },  // [RF]
+  { slug: "ramp",         name: "Ramp"             },
+  { slug: "openai",       name: "OpenAI"           },
+  { slug: "notion",       name: "Notion"           },
+  { slug: "runway",       name: "Runway"           },
+  { slug: "posthog",      name: "PostHog"          },  // [RF]
+  { slug: "replit",       name: "Replit"           },  // [RF]
+  { slug: "supabase",     name: "Supabase"         },  // [RF]
+  { slug: "browserbase",  name: "Browserbase"      },  // [RF]
+  { slug: "deel",         name: "Deel"             },  // EOR [RF]
+  { slug: "clipboard",    name: "Clipboard Health" },
+  { slug: "mintlify",     name: "Mintlify"         },  // [RF]
 ];
 
-// Workable + SmartRecruiters boards (slug = the subdomain/company id in the
-// careers URL). Start empty; promote whatever verify.js confirms.
+// ── WORKABLE ──────────────────────────────────────────────────
 export const WORKABLE_COMPANIES = [
-  { slug: "kuda", name: "Kuda", region: "Nigeria" }, // ✅ 15
-  // moniepoint/autochek were live but 0 jobs — skipped (re-check later)
-];
-export const SMARTRECRUITERS_COMPANIES = [
-  { slug: "Visa", name: "Visa" }, // ✅ 10
-  // Andela/Jumia/MTNNigeria/Bolt/Block were live but 0 jobs — skipped (re-check later)
+  { slug: "kuda",       name: "Kuda",       region: "Nigeria" },  // ✅ 15
+  { slug: "paystack",   name: "Paystack",   region: "Nigeria" },  // ✅ live (0 now)
+  { slug: "palmpay",    name: "PalmPay",    region: "Nigeria" },  // ✅ live (0 now)
+  { slug: "flutterwave",name: "Flutterwave",region: "Africa"  },  // ✅ live (0 now)
 ];
 
-// ---------- CANDIDATES TO VERIFY (probed by verify.js, NOT ingested) ----------
-// Best-effort slugs. Run `node ingest/verify.js`; promote the green ones into
-// the ACTIVE arrays above. African/Nigerian companies are the priority for the
-// home market; the global names add raw volume.
+// ── SMARTRECRUITERS ───────────────────────────────────────────
+export const SMARTRECRUITERS_COMPANIES = [
+  { slug: "Andela",      name: "Andela",      region: "Africa"  },
+  { slug: "Visa",        name: "Visa"         },
+  { slug: "MTNNigeria",  name: "MTN Nigeria",  region: "Nigeria" },
+  { slug: "Bolt",        name: "Bolt"         },
+  { slug: "Flutterwave", name: "Flutterwave",  region: "Africa"  },  // ✅ live (0 now)
+  { slug: "Interswitch", name: "Interswitch",  region: "Nigeria" },  // ✅ live (0 now)
+];
+
+// ── CANDIDATES TO VERIFY ──────────────────────────────────────
+// run: node ingest/verify.js — promote any ✅ into the ACTIVE arrays above.
+// Everything here 404'd on last check; kept for slug-variant retries.
+// Most African fintechs below use CUSTOM career pages (no standard ATS) —
+// use the manual upload template for their roles instead.
 export const CANDIDATES_TO_VERIFY = {
   greenhouse: [
-    // African / Nigerian
-    { slug: "flutterwave", name: "Flutterwave", region: "Africa" },
-    { slug: "interswitchgroup", name: "Interswitch", region: "Nigeria" },
-    { slug: "jumia", name: "Jumia", region: "Africa" },
-    { slug: "andela", name: "Andela", region: "Africa" },
-    { slug: "tymebank", name: "TymeBank", region: "Africa" },
-    { slug: "opay", name: "OPay", region: "Nigeria" },
-    { slug: "palmpay", name: "PalmPay", region: "Nigeria" },
-    { slug: "kuda", name: "Kuda", region: "Nigeria" },
-    { slug: "chipper", name: "Chipper Cash", region: "Africa" },
-    { slug: "chippercash", name: "Chipper Cash", region: "Africa" },
-    { slug: "wave", name: "Wave", region: "Africa" },
-    { slug: "yoco", name: "Yoco", region: "Africa" },
-    { slug: "mfsafrica", name: "MFS Africa", region: "Africa" },
-    { slug: "cellulant", name: "Cellulant", region: "Africa" },
-    { slug: "smileidentity", name: "Smile ID", region: "Africa" },
-    { slug: "termii", name: "Termii", region: "Nigeria" },
-    { slug: "carbon", name: "Carbon", region: "Nigeria" },
-    { slug: "renmoney", name: "Renmoney", region: "Nigeria" },
-    { slug: "umba", name: "Umba", region: "Nigeria" },
-    // high-volume global (raw volume)
-    { slug: "stripe", name: "Stripe" },
-    { slug: "airbnb", name: "Airbnb" },
-    { slug: "dropbox", name: "Dropbox" },
-    { slug: "robinhood", name: "Robinhood" },
-    { slug: "coinbase", name: "Coinbase" },
-    { slug: "doordash", name: "DoorDash" },
-    { slug: "databricks", name: "Databricks" },
-    { slug: "twilio", name: "Twilio" },
-    { slug: "cloudflare", name: "Cloudflare" },
-    { slug: "discord", name: "Discord" },
-    { slug: "figma", name: "Figma" },
-    { slug: "anthropic", name: "Anthropic" },
+    { slug: "hashicorp",        name: "HashiCorp"     },  // likely IBM now (acquired)
+    { slug: "toptal",           name: "Toptal"        },
+    { slug: "waveapps",         name: "Wave",          region: "Africa"  },
+    { slug: "smileidentityinc", name: "Smile ID",      region: "Africa"  },
   ],
   lever: [
-    // African / Nigerian
-    { slug: "moniepoint", name: "Moniepoint", region: "Nigeria" },
-    { slug: "paga", name: "Paga", region: "Nigeria" },
-    { slug: "piggyvest", name: "PiggyVest", region: "Nigeria" },
-    { slug: "patricia", name: "Patricia", region: "Nigeria" },
-    { slug: "kobo360", name: "Kobo360", region: "Nigeria" },
-    { slug: "thepalmpay", name: "PalmPay", region: "Nigeria" },
-    { slug: "reliancehmo", name: "Reliance Health", region: "Nigeria" },
-    { slug: "54gene", name: "54gene", region: "Nigeria" },
-    { slug: "helium-health", name: "Helium Health", region: "Nigeria" },
-    { slug: "lori", name: "Lori Systems", region: "Africa" },
-    { slug: "twiga", name: "Twiga Foods", region: "Africa" },
-    { slug: "sokowatch", name: "Sokowatch", region: "Africa" },
-    // global volume
-    { slug: "netflix", name: "Netflix" },
-    { slug: "spotify", name: "Spotify" },
-    { slug: "plaid", name: "Plaid" },
-    { slug: "brex", name: "Brex" },
-    { slug: "ramp", name: "Ramp" },
+    { slug: "netlify",    name: "Netlify"     },  // custom page now?
+    { slug: "piggyvest",  name: "PiggyVest",   region: "Nigeria" },
+    { slug: "cowrywise",  name: "Cowrywise",   region: "Nigeria" },
+    { slug: "lendable",   name: "Lendable",    region: "Africa"  },
   ],
   ashby: [
-    // African / Nigerian
-    { slug: "fincra", name: "Fincra", region: "Nigeria" },
-    { slug: "anchor", name: "Anchor", region: "Nigeria" },
-    { slug: "raenest", name: "Raenest", region: "Nigeria" },
-    { slug: "maplerad", name: "Maplerad", region: "Nigeria" },
-    { slug: "bujeti", name: "Bujeti", region: "Nigeria" },
-    { slug: "grey", name: "Grey", region: "Nigeria" },
-    { slug: "cleva", name: "Cleva", region: "Nigeria" },
-    { slug: "eden", name: "Eden Life", region: "Nigeria" },
-    { slug: "mono", name: "Mono", region: "Nigeria" },
-    { slug: "okra", name: "Okra", region: "Nigeria" },
-    { slug: "nomba", name: "Nomba", region: "Nigeria" },
-    { slug: "prospa", name: "Prospa", region: "Nigeria" },
-    { slug: "brass", name: "Brass", region: "Nigeria" },
-    { slug: "cowrywise", name: "Cowrywise", region: "Nigeria" },
-    { slug: "risevest", name: "Rise", region: "Nigeria" },
-    { slug: "bamboo", name: "Bamboo", region: "Nigeria" },
-    { slug: "lemfi", name: "LemFi", region: "Nigeria" },
-    { slug: "moove", name: "Moove", region: "Africa" },
-    { slug: "pesto", name: "Pesto", region: "Africa" },
-    // global volume
-    { slug: "ramp", name: "Ramp" },
-    { slug: "openai", name: "OpenAI" },
-    { slug: "notion", name: "Notion" },
-    { slug: "runway", name: "Runway" },
-    { slug: "deel", name: "Deel" },
-    { slug: "posthog", name: "PostHog" },
-    { slug: "replit", name: "Replit" },
+    { slug: "doist",  name: "Doist" },  // async-first [RF] — custom page?
+    { slug: "fincra", name: "Fincra",  region: "Nigeria" },
+    { slug: "nomba",  name: "Nomba",   region: "Nigeria" },
+    { slug: "brass",  name: "Brass",   region: "Nigeria" },
+    { slug: "risevest", name: "Rise",  region: "Nigeria" },
+    { slug: "moove-africa", name: "Moove", region: "Africa" },
   ],
   workable: [
-    { slug: "kuda", name: "Kuda", region: "Nigeria" },
-    { slug: "reliancehealth", name: "Reliance Health", region: "Africa" },
-    { slug: "lemfi", name: "LemFi", region: "Nigeria" },
-    { slug: "moniepoint", name: "Moniepoint", region: "Nigeria" },
-    { slug: "sokowatch", name: "Sokowatch", region: "Africa" },
-    { slug: "mookh", name: "Mookh", region: "Africa" },
-    { slug: "autochek", name: "Autochek", region: "Africa" },
-    { slug: "duplo", name: "Duplo", region: "Nigeria" },
-  ],
-  smartrecruiters: [
-    { slug: "Andela", name: "Andela", region: "Africa" },
-    { slug: "Visa", name: "Visa" },
-    { slug: "Jumia", name: "Jumia", region: "Africa" },
-    { slug: "MTNNigeria", name: "MTN Nigeria", region: "Nigeria" },
-    { slug: "Bolt", name: "Bolt" },
-    { slug: "Square", name: "Block" },
+    { slug: "opay", name: "OPay", region: "Nigeria" },
   ],
 };

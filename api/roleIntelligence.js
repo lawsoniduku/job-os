@@ -831,6 +831,75 @@ const FOREIGN_COUNTRIES = [
 ];
 
 // ============================================================
+// TIMEZONE REQUIREMENT DETECTION (soft eligibility signal)
+// ============================================================
+// A JD can be "remote, worldwide" yet still demand overlap with a timezone
+// that effectively excludes Africa (e.g. "must work US Pacific hours"). This
+// is a real friction African applicants hit AFTER applying — so we surface it.
+// It is a SOFT signal: it downgrades confidence and warns, rather than hard-
+// excluding, because some overlap requirements are workable (Africa is UTC+0
+// to UTC+3, so CET/UK/EMEA overlap is fine; US Pacific/Eastern is not).
+
+// Timezones that are HARD for Africa (little/no business-hours overlap).
+// Africa spans UTC+0..+3, so GMT/UTC/CET/UK/EMEA/WAT/CAT/EAT overlap fine and
+// are deliberately NOT listed — only genuinely incompatible zones are.
+const TZ_INCOMPATIBLE = [
+  "pst", "pdt", "pacific time", "pacific standard", "pacific daylight", "us pacific",
+  "mst", "mdt", "mountain time", "us mountain",
+  "cst", "cdt", "central time", "us central",
+  "est", "edt", "eastern time", "eastern standard", "us eastern",
+  "america/los_angeles", "america/new_york", "america/chicago", "america/denver",
+  "aest", "aedt", "australian eastern", "sydney time", "melbourne time",
+  "nzst", "new zealand time",
+];
+
+// Phrasing that signals a timezone REQUIREMENT (checked NEAR the tz mention).
+const TZ_REQUIRE_CUES = [
+  "must be available", "must work", "must overlap", "required to work",
+  "work during", "available during", "core hours", "overlap with", "overlap",
+  "business hours", "working hours", "within", "hours of", "time zone",
+  "timezone", "required", "must be", "must reside", "based in",
+];
+
+// Explicit flexibility anywhere in the posting cancels the warning.
+const TZ_FLEX = [
+  "flexible hours", "flexible timezone", "flexible time zone", "async",
+  "asynchronous", "no set hours", "work anytime", "any timezone", "any time zone",
+  "timezone friendly", "timezone flexible", "flexible schedule",
+];
+
+/**
+ * Timezone friction for Africa-based applicants.
+ *   null   → no incompatible-timezone REQUIREMENT found
+ *   "warn" → the posting requires hours in a timezone that's hard from Africa
+ *
+ * Design (audited):
+ * - Word-boundary regex per timezone token — "est" can NEVER match inside
+ *   "latest"/"best"/"request". (An earlier draft had a substring fallback that
+ *   did exactly that; removed.)
+ * - PROXIMITY REQUIRED: a requirement cue must appear within ±80 chars of the
+ *   timezone mention (same window technique as bodyTiesToForeignCountry).
+ *   "Our HQ is in EST" with "business hours" three paragraphs away does NOT
+ *   trigger; "must overlap with EST business hours" does.
+ * - Explicit flexibility ("async", "flexible timezone") cancels globally.
+ */
+function timezoneFriction(title, desc) {
+  const body = ` ${title} ${desc} `;
+  if (TZ_FLEX.some((f) => body.includes(f))) return null;
+
+  for (const tz of TZ_INCOMPATIBLE) {
+    // All word-boundary occurrences of this timezone token.
+    const re = new RegExp(`(?<![a-z0-9])${tz.replace(/[/\\^$.*+?()[\]{}|]/g, "\\$&")}(?![a-z0-9])`, "g");
+    let m;
+    while ((m = re.exec(body)) !== null) {
+      const windowText = body.slice(Math.max(0, m.index - 80), m.index + tz.length + 80);
+      if (TZ_REQUIRE_CUES.some((cue) => windowText.includes(cue))) return "warn";
+    }
+  }
+  return null;
+}
+
+// ============================================================
 // ELIGIBILITY ENGINE
 // ============================================================
 
@@ -862,6 +931,13 @@ function genericEligibility(job, title, desc) {
   const remoteSignal = job.remote === true ||
     hasAny(`${locField}${body}`, ["remote", "work from home", "wfh", "work from anywhere", "fully distributed"]);
 
+  // Guests default to the Africa-first audience, so incompatible-timezone
+  // REQUIREMENTS are a real friction — warn on otherwise-open roles.
+  const tzWarn = timezoneFriction(title, desc.slice(0, 3000));
+  const openReason = (base) => tzWarn
+    ? `${base} — but needs a timezone that's hard from Africa; check the hours`
+    : base;
+
   // 2. Location field pins it to a foreign hub.
   if (hasAny(locField, LOC_FOREIGN_HINTS)) {
     if (!remoteSignal)
@@ -871,9 +947,9 @@ function genericEligibility(job, title, desc) {
 
   // 3. Clearly open.
   if (hasAny(locField, ["anywhere", "worldwide", "global"]) || hasAny(locField, AFRICA_TERMS))
-    return { eligible: true, confidence: "likely", reason: "Open worldwide / Africa" };
+    return { eligible: true, confidence: tzWarn ? "possible" : "likely", reason: openReason("Open worldwide / Africa") };
   if (remoteSignal)
-    return { eligible: true, confidence: "likely", reason: "Remote role" };
+    return { eligible: true, confidence: tzWarn ? "possible" : "likely", reason: openReason("Remote role") };
 
   // 4. Unpinned local/unknown — honest conditional.
   return { eligible: true, confidence: "possible", reason: "Set your country in You → for a verified check" };
@@ -911,6 +987,20 @@ export function checkEligibility(job, country) {
   };
 
   const E = (confidence, reason, eligible = true) => ({ eligible, confidence, reason });
+
+  // Timezone friction: for Africa/EMEA-adjacent targets, an incompatible-tz
+  // REQUIREMENT downgrades an otherwise-positive verdict and warns. Computed
+  // once here; applied to positive verdicts via softenForTimezone below.
+  const tzWarn = (isAfrican || country === "mena" || country === "africa")
+    ? timezoneFriction(title, desc) : null;
+  const softenForTimezone = (verdict) => {
+    if (!tzWarn || !verdict.eligible) return verdict;
+    // Never upgrade; only downgrade certain/likely → possible with a warning.
+    if (verdict.confidence === "certain" || verdict.confidence === "likely") {
+      return E("possible", `${verdict.reason} — but requires a timezone that's hard from Africa; confirm hours before applying`);
+    }
+    return verdict;
+  };
 
   // 1. Hard exclusions anywhere in text kill the job.
   for (const ex of HARD_EXCLUSIONS) if (hasPhrase(all, ex)) return E("excluded", `Restricted: "${ex}"`, false);
@@ -972,21 +1062,21 @@ export function checkEligibility(job, country) {
   // 2. Explicit target in LOCATION field → certain.
   const locField = ` ${loc} ${region} `;
   if (country === "africa") {
-    if (hasAny(locField, AFRICA_TERMS)) return E("certain", "Location mentions Africa");
+    if (hasAny(locField, AFRICA_TERMS)) return softenForTimezone(E("certain", "Location mentions Africa"));
   } else if (REGION_POSITIVE[country]) {
-    if (hasAny(locField, REGION_POSITIVE[country])) return E("certain", `Location mentions ${country}`);
+    if (hasAny(locField, REGION_POSITIVE[country])) return softenForTimezone(E("certain", `Location mentions ${country}`));
   } else {
     for (const label of COUNTRY_TERMS[country] || []) {
-      if (hasPhrase(locField, label)) return E("certain", `Location mentions ${label}`);
+      if (hasPhrase(locField, label)) return softenForTimezone(E("certain", `Location mentions ${label}`));
     }
   }
 
   // 3. Worldwide/anywhere in LOCATION → certain.
-  if (hasAny(loc, WORLDWIDE_LOCATION)) return E("certain", "Open worldwide / anywhere");
+  if (hasAny(loc, WORLDWIDE_LOCATION)) return softenForTimezone(E("certain", "Open worldwide / anywhere"));
 
   // 4. EMEA in location → likely for Africa and MENA targets.
   if ((isAfrican || country === "mena") && hasAny(loc, EMEA_POSITIVE))
-    return E("likely", "EMEA region");
+    return softenForTimezone(E("likely", "EMEA region"));
 
   // 5. POSITIVE-EVIDENCE GATE — universal for all country targets.
   //    Nothing matched above → no positive signal this role is open to target.
@@ -1002,7 +1092,7 @@ export function checkEligibility(job, country) {
   // it's "certain" — but only if the body doesn't ALSO tie it to a country.
   if (hasAny(desc, WORLDWIDE_DESC_STRONG)) {
     if (hasAny(desc, FOREIGN_COUNTRIES)) return E("likely", "Remote, worldwide language but a country is mentioned");
-    return E("certain", "JD: open to anyone, anywhere");
+    return softenForTimezone(E("certain", "JD: open to anyone, anywhere"));
   }
   if (hasAny(desc, FOREIGN_COUNTRIES)) return E("excluded", "Remote, but body ties it to a specific country", false);
   return E("possible", "Remote — region unconfirmed");

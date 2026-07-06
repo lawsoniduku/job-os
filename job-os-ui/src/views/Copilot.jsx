@@ -689,6 +689,11 @@ function JobCard({ job, onTailor, onReport }) {
         {job.source && <span>{job.source}</span>}
       </div>
 
+      {(() => {
+        const sig = applySignal(job);
+        return sig ? <div className={`jc-signal ${sig.tone}`}>{sig.text}</div> : null;
+      })()}
+
       <div className="jc-actions">
         <button className="btn primary" onClick={() => onTailor(job)}>Tailor & apply</button>
         {job.apply_url && (
@@ -772,7 +777,24 @@ function TailorModal({ job, shared, onSaveForLater, onClose }) {
     setLoading(true); setError("");
     try {
       const res = await aiCvRewrite({ cvText, jobId: job.id });
-      setResult(res.result);
+      const r = res.result || {};
+      // Map the endpoint shape into what CvPreview / downloadCvPdf expect.
+      const t = r.tailored_cv || {};
+      const cv = {
+        name: t.name || null,
+        contact: t.contact || null,
+        summary: t.summary || "",
+        sections: t.sections || [],
+      };
+      setResult({
+        cv,
+        cover_letter: r.cover_letter || "",
+        match_notes: r.match_notes || "",
+        changes_made: r.changes_made || [],
+        keywords_added: r.keywords_added || [],
+        // plain-text fallback for copy
+        rewritten_cv: cvToText(cv),
+      });
       track(user, "tailor_generated", { job_id: job.id });
     } catch (err) {
       setError(err.message);
@@ -830,7 +852,19 @@ function TailorModal({ job, shared, onSaveForLater, onClose }) {
           ) : (
             <>
               <div className="s-sub">Tailored against the actual JD — every employer, date and qualification from your CV preserved. This preview is exactly what the PDF will look like.</div>
+              {result.match_notes && (
+                <div className="match-notes"><b>Honest read:</b> {result.match_notes}</div>
+              )}
               {result.cv ? <CvPreview cv={result.cv} /> : <pre>{result.rewritten_cv}</pre>}
+              {result.cover_letter && (
+                <div className="cover-letter">
+                  <div className="cl-head">
+                    <label className="field-label" style={{ margin: 0 }}>Cover letter</label>
+                    <button className="btn subtle sm" onClick={() => navigator.clipboard?.writeText(result.cover_letter).then(() => showToast("Cover letter copied"))}>Copy</button>
+                  </div>
+                  <div className="cl-body">{result.cover_letter}</div>
+                </div>
+              )}
               {result.changes_made?.length > 0 && (
                 <div style={{ marginTop: 14 }}>
                   <label className="field-label">What I changed</label>
@@ -952,6 +986,58 @@ function fmtPosted(iso) {
   if (d < 7) return `Posted ${d}d ago`;
   if (d < 30) return `Posted ${Math.floor(d / 7)}w ago`;
   return `Posted ${new Date(iso).toLocaleDateString()}`;
+}
+
+// ATS sources = the job lives on the employer's own applicant-tracking system,
+// so applying goes straight to them (not a second-hand board repost).
+const DIRECT_ATS = ["greenhouse", "lever", "ashby", "workable", "smartrecruiters", "teamtailor", "breezy"];
+
+// Flatten a structured CV to plain text for the "Copy text" fallback.
+function cvToText(cv) {
+  const out = [];
+  if (cv.name) out.push(cv.name);
+  if (cv.contact) out.push(cv.contact);
+  if (cv.summary) out.push("\nPROFESSIONAL SUMMARY\n" + cv.summary);
+  for (const sec of cv.sections || []) {
+    out.push("\n" + (sec.heading || "").toUpperCase());
+    for (const e of sec.entries || []) {
+      const head = [e.title, e.org, e.dates].filter(Boolean).join(" · ");
+      if (head) out.push(head);
+      for (const b of e.bullets || []) out.push("• " + b);
+    }
+  }
+  return out.join("\n");
+}
+
+/**
+ * An HONEST "is this worth your effort?" read, computed only from data we
+ * actually have: how fresh the posting is, and whether it's a direct-employer
+ * post. No fake applicant counts — inventing numbers would poison the trust
+ * the whole product is built on. Returns one short line, or null if we can't
+ * say anything useful.
+ *
+ * Research basis: roles get 200-400 applications in the first 48h while
+ * recruiters are still reading; freshness is the single most actionable signal.
+ */
+function applySignal(job) {
+  const src = (job.ats_source || job.source || "").toLowerCase();
+  const direct = DIRECT_ATS.some((a) => src.includes(a));
+  let ageDays = null;
+  if (job.posted_at) ageDays = Math.floor((Date.now() - new Date(job.posted_at).getTime()) / 86400000);
+
+  // Freshness drives the headline read.
+  if (ageDays != null && ageDays <= 2) {
+    return { tone: "hot", text: direct ? "Fresh + direct to employer — strong time to apply" : "Just posted — recruiters are still reading" };
+  }
+  if (ageDays != null && ageDays <= 7) {
+    return { tone: "warm", text: direct ? "Recent + applies direct to employer" : "Posted this week — still worth a tailored application" };
+  }
+  if (ageDays != null && ageDays >= 30) {
+    return { tone: "cool", text: "Older posting — apply only if it's a strong match" };
+  }
+  // Middle-aged: only surface the direct-employer advantage if present.
+  if (direct) return { tone: "warm", text: "Applies direct to the employer's system" };
+  return null;
 }
 
 function buildRefineChips(lastResult) {

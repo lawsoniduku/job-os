@@ -45,7 +45,7 @@ app.use(express.json({ limit: "4mb" }));
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
 const JOB_COLUMNS =
-  "id, title, company, location, description, apply_url, remote, source, " +
+  "id, title, company, location, description, apply_url, remote, source, ats_source, " +
   "role_cluster, department, seniority, posted_at, created_at, salary_min, " +
   "salary_max, employment_type, remote_type, eligibility_region";
 
@@ -238,97 +238,67 @@ app.post("/ai/cv-rewrite", async (req, res) => {
     if (!jobId) return res.status(400).json({ error: "Missing jobId" });
 
     const { data: job, error } = await supabase.from("jobs")
-      .select("title,company,description").eq("id", jobId).single();
+      .select("title,company,description,location").eq("id", jobId).single();
     if (error || !job) return res.status(404).json({ error: "Job not found" });
-    if (!(await isLLMHealthy())) return res.status(503).json({ error: "AI model offline. Run: ollama serve" });
+    if (!(await isLLMHealthy())) return res.status(503).json({ error: llmFailMessage("AI model offline.") });
 
-    // Full context — the previous version truncated the CV to 1500 chars,
-    // which silently dropped education/skills/most experience. gpt-oss-120b
-    // on Groq handles this comfortably in one structured call.
+    // Full CV + generous JD slice. The old version truncated the CV to 1500
+    // chars across 3 fragmented calls and left "[tailor remaining sections]"
+    // placeholders — the exact generic output recruiters reject on sight.
+    // One strong structured call produces a real, complete, ready-to-send
+    // CV AND a matching cover letter, grounded in the candidate's real CV.
     const jd = (job.description || "").slice(0, 6000);
     const cv = cvText.slice(0, 12000);
 
-    const structured = await generateJSON(
-      `You are an expert CV writer. Tailor this candidate's COMPLETE CV to a specific job.
+    const prompt = `You are an expert CV writer and career coach helping a candidate apply for a specific role. Tailor their real CV to this job and write a matching cover letter. Ground everything in their ACTUAL experience — never invent employers, titles, dates, or achievements. Tailoring means re-emphasising and rewording real experience to match the job, not fabricating.
 
-THE JOB
-Title: ${job.title}
-Company: ${job.company}
-Description: ${jd}
+TARGET ROLE: ${job.title} at ${job.company}${job.location ? ` (${job.location})` : ""}
 
-THE CANDIDATE'S CURRENT CV
+JOB DESCRIPTION:
+${jd}
+
+CANDIDATE'S CURRENT CV:
 ${cv}
 
-REWRITE RULES — follow every one:
-1. PRESERVE ALL FACTS. Every employer, job title, date range, school, degree, certification and skill from the original CV must appear in your output. Never invent employers, dates, degrees, metrics, or numbers that are not in the original.
-2. TAILOR THE WORDING ONLY: rewrite the summary to target this exact job; rephrase experience bullets to mirror the job description's language and emphasize the most relevant work; reorder bullets so the most relevant come first; reorder the skills list so JD-relevant skills come first.
-3. COMPLETE CV: include every section present in the original (summary, experience, education, skills, certifications, projects, etc.). Do not add placeholder text. Do not add sections that have no content in the original.
-4. NO COMMENTARY: no explanations, no notes to the user, no markdown, no "here is", nothing outside the JSON.
-5. If the original has no detectable name or contact details, use "" for those fields.
-
-Return ONLY JSON in exactly this shape:
+Return ONLY valid JSON in this exact shape:
 {
-  "name": "candidate name",
-  "contact": "email · phone · location · links, single line",
-  "summary": "tailored professional summary, 2-4 sentences",
-  "sections": [
-    {
-      "heading": "EXPERIENCE",
-      "entries": [
-        { "title": "role title", "org": "company", "dates": "Jan 2021 – Present", "bullets": ["...", "..."] }
-      ]
-    },
-    { "heading": "EDUCATION", "entries": [ { "title": "degree", "org": "school", "dates": "...", "bullets": [] } ] },
-    { "heading": "SKILLS", "entries": [ { "title": "", "org": "", "dates": "", "bullets": ["Skill, Skill, Skill"] } ] }
-  ],
-  "keywords_added": ["up to 6 JD keywords you worked into the CV"],
-  "changes_made": ["3-5 short bullets describing what you changed and why"]
-}`,
-      { timeoutMs: 90000, retries: 1 }
-    );
+  "tailored_cv": {
+    "summary": "3-4 sentence professional summary rewritten to target this exact role, using the job's language where the candidate genuinely matches it",
+    "sections": [
+      {
+        "heading": "SECTION NAME (e.g. EXPERIENCE, EDUCATION, SKILLS)",
+        "entries": [
+          {
+            "title": "Job title or qualification (keep the candidate's real one)",
+            "org": "Company or institution (real)",
+            "dates": "Dates as in the original CV",
+            "bullets": ["Achievement bullet reworded to emphasise relevance to the target role, quantified where the original allows"]
+          }
+        ]
+      }
+    ]
+  },
+  "cover_letter": "A genuine 3-paragraph cover letter addressed to the hiring team at ${job.company}. Para 1: why this specific role. Para 2: 2-3 concrete, real achievements from their CV that map to the job's needs. Para 3: brief close. Warm, specific, human — not templated. No placeholders like [Your Name].",
+  "keywords_added": ["up to 6 important keywords from the JD woven into the tailored CV"],
+  "changes_made": ["up to 4 short notes on what was tailored and why"],
+  "match_notes": "1-2 honest sentences: where the candidate is strong for this role, and any gap they should address"
+}
 
-    if (!structured?.sections?.length) {
-      return res.status(502).json({ error: llmFailMessage("Rewrite failed — the model returned an invalid CV. Try again.") });
+Every section, employer, date and qualification from the original CV must be preserved. Do not drop experience. Do not fabricate. Output ONLY the JSON.`;
+
+    const result = await generateJSON(prompt, { timeoutMs: 120000, retries: 1, temperature: 0.35 });
+    if (!result || !result.tailored_cv) {
+      return res.status(502).json({ error: llmFailMessage("Tailoring timed out. Try again.") });
     }
 
-    // Defensive normalisation so the client/PDF never sees undefined.
-    const cvOut = {
-      name: String(structured.name || ""),
-      contact: String(structured.contact || ""),
-      summary: String(structured.summary || ""),
-      sections: (structured.sections || []).map((s) => ({
-        heading: String(s.heading || "").toUpperCase(),
-        entries: (s.entries || []).map((e) => ({
-          title: String(e.title || ""),
-          org: String(e.org || ""),
-          dates: String(e.dates || ""),
-          bullets: (e.bullets || []).map((b) => String(b)).filter(Boolean),
-        })),
-      })).filter((s) => s.heading && s.entries.length),
-    };
-
-    // Plain-text rendering (copy fallback + backward compatibility).
-    const plain = [
-      cvOut.name,
-      cvOut.contact,
-      "",
-      cvOut.summary ? `PROFESSIONAL SUMMARY\n${cvOut.summary}` : "",
-      ...cvOut.sections.map((s) =>
-        `\n${s.heading}\n` + s.entries.map((e) => {
-          const head = [e.title, e.org].filter(Boolean).join(" — ");
-          const line = [head, e.dates].filter(Boolean).join("  ·  ");
-          return [line, ...e.bullets.map((b) => `• ${b}`)].filter(Boolean).join("\n");
-        }).join("\n\n")
-      ),
-    ].filter(Boolean).join("\n");
-
     res.json({
-      job: { title: job.title, company: job.company },
+      job: { title: job.title, company: job.company, location: job.location },
       result: {
-        cv: cvOut,                                   // structured — drives preview + PDF
-        rewritten_cv: plain,                          // text — copy fallback
-        changes_made: (structured.changes_made || []).map(String),
-        keywords_added: (structured.keywords_added || []).map(String),
+        tailored_cv: result.tailored_cv,
+        cover_letter: result.cover_letter || "",
+        keywords_added: result.keywords_added || [],
+        changes_made: result.changes_made || [],
+        match_notes: result.match_notes || "",
       },
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
