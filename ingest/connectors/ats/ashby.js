@@ -24,7 +24,18 @@ async function fetchBoard({ slug, name, region }) {
         {
           title: j.title,
           company: name,
-          location: j.locationName || j.location || "",
+          // locationName is the primary location. secondaryLocations lists
+          // additional offices — append them so the eligibility engine has the
+          // full picture (e.g. "Remote / San Francisco / London").
+          location: (() => {
+            const primary = j.locationName || j.location || "";
+            const secondary = Array.isArray(j.secondaryLocations)
+              ? j.secondaryLocations.map((l) => l.location || l.name || "").filter(Boolean)
+              : [];
+            return secondary.length
+              ? [primary, ...secondary].filter(Boolean).join(" / ")
+              : primary;
+          })(),
           description: j.descriptionHtml || j.descriptionPlain || j.description || "",
           apply_url: j.applyUrl || j.jobUrl,
           department: j.departmentName || j.teamName || null,
