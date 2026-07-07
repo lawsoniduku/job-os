@@ -1205,7 +1205,11 @@ export function scoreJobLocally(job, intent) {
   // so a stale stored role_cluster can't inflate an off-target role
   // (e.g. "Cloud Support Engineer" stored as Customer Support).
   let roleScore = 0;
-  const titleAliasHit = intent.matchedAliases?.some((a) => hasPhrase(title, a));
+  // Normalize title for alias matching: strip parenthetical expansions like
+  // "(BI)" or "(SRE)" that break substring matches against stored aliases.
+  // "Business Intelligence (BI) Analyst" → "Business Intelligence Analyst"
+  const titleNorm = title.replace(/\s*\([^)]{1,8}\)\s*/g, " ").replace(/\s+/g, " ");
+  const titleAliasHit = intent.matchedAliases?.some((a) => hasPhrase(titleNorm, a));
   const descAliasHit = intent.matchedAliases?.some((a) => hasPhrase(desc, a));
   const titleCluster = detectCluster(job.title || "").cluster; // what the TITLE really is
 
@@ -1259,16 +1263,22 @@ export function scoreJobLocally(job, intent) {
     return { score: Math.max(0, capped), eligibility, offTarget, breakdown: { roleScore: capped, locScore: 0 } };
   }
 
-  // STEP 3: eligibility confidence component — DELIBERATELY NARROW (30–35, a
-  // 5-pt swing) so it can break ties between equally-good roles but can NEVER
-  // overtake a better role match. Role fit dominates ranking (product decision):
-  // an exact-title match (role 55) must outrank a sibling-alias match (role 48)
-  // regardless of location confidence. Since the role gap (7) exceeds the max
-  // location swing (5), role always wins.
-  // WIDENED locScore: confirmed country/worldwide (certain=38) now meaningfully
-  // outranks "region unconfirmed" (possible=20). An 18-pt swing ensures a
-  // confirmed-Nigeria job beats a vague remote job for the same role.
-  const locScore = { certain: 38, likely: 30, possible: 20 }[eligibility.confidence] ?? 20;
+  // STEP 3: eligibility confidence component.
+  // Sub-tiers within "certain":
+  //   explicit country mention (e.g. "Location mentions nigeria") → 42
+  //     The job specifically named the user's country — strongest signal.
+  //   worldwide / open anywhere → 38
+  //     Open to all, but no explicit country confirmation.
+  //   likely   → 30  (regional signal e.g. EMEA)
+  //   possible → 20  ("region unconfirmed" — eligibility not proven)
+  //
+  // This ensures a BI Analyst explicitly listing Nigeria ranks above a
+  // generic "Data Analyst · Worldwide" for the same search, even if the
+  // worldwide job has a marginally better role-title match.
+  const explicitCountry = eligibility.confidence === "certain" &&
+    /location mentions|open to.*nigeria|open to.*kenya|open to.*ghana|open to.*africa/i.test(eligibility.reason);
+  const locScore = explicitCountry ? 48
+    : { certain: 38, likely: 30, possible: 20 }[eligibility.confidence] ?? 20;
 
   // STEP 4: tiny tiebreaker signals — kept SMALL (max ~3 total) so they only
   // separate near-identical results and can never overcome a role-fit gap.
