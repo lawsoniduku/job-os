@@ -355,16 +355,11 @@ export default function Copilot({ shared, active, initialQuery, onInitialConsume
   // Writes to job_reports (guests allowed). This is the guardrail instrument.
   async function reportJob(job, reason, detail) {
     const v = verdictOf(job);
-    // job.id can be a bigint; ensure it's a clean integer or null (guest jobs
-    // or manual entries may have non-numeric/oversized ids).
-    let jobId = null;
-    if (job.id != null) {
-      const n = Number(job.id);
-      jobId = Number.isSafeInteger(n) ? n : null;
-    }
+    // job.id is a UUID string — send it directly. The old code tried to
+    // coerce it through Number() which corrupts UUIDs entirely.
     const payload = {
       user_id: user?.id || null,
-      job_id: jobId,
+      job_id: job.id || null,
       job_title: (job.title || "").slice(0, 300),
       company: (job.company || "").slice(0, 200),
       reason,
@@ -373,7 +368,7 @@ export default function Copilot({ shared, active, initialQuery, onInitialConsume
       user_country: profile?.country || null,
     };
     const { error } = await supabase.from("job_reports").insert(payload);
-    track(user, "job_reported", { job_id: jobId, reason });
+    track(user, "job_reported", { job_id: job.id, reason });
     if (error) {
       console.error("job_reports insert failed:", error.message, error.details, error.hint, payload);
       showToast("Thanks — noted. (Report didn't save — we'll still look into it.)");
