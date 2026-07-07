@@ -355,19 +355,31 @@ export default function Copilot({ shared, active, initialQuery, onInitialConsume
   // Writes to job_reports (guests allowed). This is the guardrail instrument.
   async function reportJob(job, reason, detail) {
     const v = verdictOf(job);
-    const { error } = await supabase.from("job_reports").insert({
+    // job.id can be a bigint; ensure it's a clean integer or null (guest jobs
+    // or manual entries may have non-numeric/oversized ids).
+    let jobId = null;
+    if (job.id != null) {
+      const n = Number(job.id);
+      jobId = Number.isSafeInteger(n) ? n : null;
+    }
+    const payload = {
       user_id: user?.id || null,
-      job_id: job.id,
-      job_title: job.title,
-      company: job.company,
+      job_id: jobId,
+      job_title: (job.title || "").slice(0, 300),
+      company: (job.company || "").slice(0, 200),
       reason,
       detail: detail || null,
-      verdict: v.key,
+      verdict: (v?.key || "unknown").slice(0, 40),
       user_country: profile?.country || null,
-    });
-    track(user, "job_reported", { job_id: job.id, reason });
-    if (error) showToast("Thanks — couldn't save the report, but noted.");
-    else showToast("Thank you — that helps us fix eligibility for everyone.");
+    };
+    const { error } = await supabase.from("job_reports").insert(payload);
+    track(user, "job_reported", { job_id: jobId, reason });
+    if (error) {
+      console.error("job_reports insert failed:", error.message, error.details, error.hint, payload);
+      showToast("Thanks — noted. (Report didn't save — we'll still look into it.)");
+    } else {
+      showToast("Thank you — that helps us fix eligibility for everyone.");
+    }
   }
 
   function clearThread() {

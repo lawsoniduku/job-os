@@ -88,6 +88,19 @@ app.get("/ai/search", async (req, res) => {
 
     console.log(`🔍 "${q}" -> cluster=${intent.cluster} country=${intent.locationCountry} remote=${intent.remoteOnly}`);
 
+    // FRESHNESS GATE — hard cutoff before anything else.
+    // We promise "jobs you can actually get." A role posted 6 weeks ago is
+    // almost certainly filled. Gate by BOTH:
+    //   posted_at:    job was originally posted within 28 days (or has no date)
+    //   last_seen_at: pipeline still sees this job (not vanished from the source)
+    // Using gt (greater-than) for the date comparison against a cutoff.
+    // Jobs with null posted_at are kept (don't penalise jobs with no date field).
+    const cutoff = new Date(Date.now() - 28 * 24 * 60 * 60 * 1000).toISOString();
+    const seenCutoff = new Date(Date.now() - 35 * 24 * 60 * 60 * 1000).toISOString();
+    dbQuery = dbQuery
+      .or(`posted_at.is.null,posted_at.gte.${cutoff}`)
+      .gte("last_seen_at", seenCutoff);
+
     // --- retrieval: prefer cluster, fall back to safe keyword ilike ---
     let dbQuery = supabase.from("jobs").select(JOB_COLUMNS);
     if (intent.cluster) {

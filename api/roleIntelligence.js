@@ -10,7 +10,6 @@ export const ROLE_TAXONOMY = [
   {
     cluster: "People Analytics",
     department: "HR",
-    related: ["HR Generalist / HRBP", "Data Analytics", "Performance Management"],
     aliases: [
       "people analyst","people analytics","hr analyst","hr data analyst",
       "workforce analyst","workforce analytics","workforce insights",
@@ -18,13 +17,7 @@ export const ROLE_TAXONOMY = [
       "people data analyst","people insights analyst","talent analytics",
       "people operations analyst","hr reporting analyst","hr business intelligence",
       "compensation analyst","total rewards analyst","hr metrics analyst",
-      "org design analyst","people science","hr technology analyst",
-      // creative internal titles companies actually use for this role
-      "people research analyst","human capital analyst","talent science",
-      "hr analytics specialist","organizational insights analyst",
-      "employee experience analyst","performance analytics analyst",
-      "talent insights analyst","workforce intelligence analyst",
-      "talent analytics analyst","organizational development analyst"
+      "org design analyst","people science","hr technology analyst"
     ],
     keywords: ["hris","workday","bamboohr","successfactors","people data",
       "hr dashboard","workforce planning","headcount","attrition","org chart","hr kpi"]
@@ -46,7 +39,6 @@ export const ROLE_TAXONOMY = [
   {
     cluster: "HR Generalist / HRBP",
     department: "HR",
-    related: ["People Analytics", "Talent Acquisition", "Performance Management"],
     aliases: [
       "hr generalist","hr business partner","hrbp","hr manager",
       "hr coordinator","hr advisor","hr consultant","hr associate",
@@ -56,26 +48,10 @@ export const ROLE_TAXONOMY = [
       "employee relations","employee experience","people experience",
       "hr lead","head of people","vp people","chief people officer",
       "learning and development","l&d specialist","training specialist",
-      "organisational development","od specialist",
-      // strategic-partner + generalist variants
-      "people business partner","hr strategic partner","people generalist",
-      "hr specialist","people operations generalist","people relations partner",
-      "employee relations business partner"
+      "organisational development","od specialist"
     ],
     keywords: ["onboarding","offboarding","performance management","engagement",
       "hr policies","employment law","payroll","benefits","culture","dei"]
-  },
-  {
-    cluster: "Performance Management",
-    department: "HR",
-    related: ["People Analytics", "HR Generalist / HRBP"],
-    aliases: [
-      "performance management","performance analyst","people performance analyst",
-      "talent performance analyst","performance management specialist",
-      "performance and reward analyst","performance systems analyst"
-    ],
-    keywords: ["performance review","okrs","kpis","360 feedback","calibration",
-      "performance cycle","goal setting","talent review","succession planning"]
   },
   {
     cluster: "Data Analytics",
@@ -122,8 +98,6 @@ export const ROLE_TAXONOMY = [
     department: "Engineering",
     aliases: [
       "software engineer","software developer","backend engineer",
-      "backend developer","frontend developer","front end developer",
-      "full stack developer","fullstack developer","ui engineer",
       "frontend engineer","full stack engineer","fullstack engineer",
       "web developer","mobile developer","ios developer","android developer",
       "react developer","node developer","python developer","java developer",
@@ -178,7 +152,7 @@ export const ROLE_TAXONOMY = [
       "support agent","support representative","customer care",
       "customer care agent","cx specialist","cx agent",
       "technical support","tier 1 support","tier 2 support",
-      "help desk","helpdesk","service desk",
+      "help desk","service desk",
       "customer support manager","customer service manager",
       "complaints handler","dispute resolution specialist",
       "live chat agent","email support agent","phone support agent",
@@ -196,7 +170,7 @@ export const ROLE_TAXONOMY = [
       "personal assistant","pa","administrative assistant",
       "admin assistant","office administrator","office manager",
       "operations assistant","executive support","c-suite assistant",
-      "remote assistant","online assistant","executive assistant remote","administrative assistant remote","scheduling coordinator","calendar manager"
+      "remote assistant","online assistant","scheduling coordinator","calendar manager"
     ],
     keywords: ["calendar management","scheduling","travel booking",
       "inbox management","expense reports","google workspace","microsoft 365","notion","asana"]
@@ -213,7 +187,7 @@ export const ROLE_TAXONOMY = [
       "copywriter","email marketing specialist","crm specialist",
       "brand manager","brand strategist","community manager",
       "influencer marketing manager","affiliate marketing manager",
-      "demand generation manager","demand generation","digital marketer","lifecycle marketing manager",
+      "demand generation manager","lifecycle marketing manager",
       "marketing analyst","market analyst","digital analyst","growth hacker"
     ],
     keywords: ["google ads","facebook ads","meta ads","linkedin ads",
@@ -252,7 +226,7 @@ export const ROLE_TAXONOMY = [
     cluster: "Design / UX",
     department: "Design",
     aliases: [
-      "ux designer","ui designer","ui/ux designer","ux/ui designer","product designer",
+      "ux designer","ui designer","ui/ux designer","product designer",
       "interaction designer","visual designer","graphic designer",
       "brand designer","web designer","motion designer",
       "ux researcher","user researcher","design researcher",
@@ -266,7 +240,7 @@ export const ROLE_TAXONOMY = [
     cluster: "Sales",
     department: "Sales",
     aliases: [
-      "sales development representative","sdr","sales executive","business development representative",
+      "sales development representative","sdr","business development representative",
       "bdr","account executive","ae","enterprise sales","b2b sales",
       "inside sales","outside sales","field sales","sales manager",
       "sales director","vp sales","chief revenue officer","cro",
@@ -407,7 +381,7 @@ export const ROLE_TAXONOMY = [
     cluster: "Content / Writing",
     department: "Marketing",
     aliases: [
-      "content writer","copywriter","brand copywriter","content creator","content strategist",
+      "content writer","copywriter","content creator","content strategist",
       "editor","copy editor","proofreader","technical writer","blog writer",
       "content manager","content marketer","journalist","reporter","scriptwriter",
       "social media writer","seo writer","content producer","communications officer",
@@ -482,7 +456,7 @@ const SHORT_TOKENS = {
   ta: "Talent Acquisition",
   pm: "Product Management", po: "Product Management", apm: "Product Management",
   ux: "Design / UX", ui: "Design / UX",
-  qa: "Software Engineering", sre: "Software Engineering", devops: "Software Engineering", swe: "Software Engineering",
+  qa: "Software Engineering", sre: "Software Engineering", devops: "Software Engineering",
   ml: "Data Science", ai: "Data Science", nlp: "Data Science",
   ba: "Data Analytics", bi: "Data Analytics",
   etl: "Data Engineering", dba: "Data Engineering",
@@ -831,130 +805,8 @@ const FOREIGN_COUNTRIES = [
 ];
 
 // ============================================================
-// TIMEZONE REQUIREMENT DETECTION (soft eligibility signal)
-// ============================================================
-// A JD can be "remote, worldwide" yet still demand overlap with a timezone
-// that effectively excludes Africa (e.g. "must work US Pacific hours"). This
-// is a real friction African applicants hit AFTER applying — so we surface it.
-// It is a SOFT signal: it downgrades confidence and warns, rather than hard-
-// excluding, because some overlap requirements are workable (Africa is UTC+0
-// to UTC+3, so CET/UK/EMEA overlap is fine; US Pacific/Eastern is not).
-
-// Timezones that are HARD for Africa (little/no business-hours overlap).
-// Africa spans UTC+0..+3, so GMT/UTC/CET/UK/EMEA/WAT/CAT/EAT overlap fine and
-// are deliberately NOT listed — only genuinely incompatible zones are.
-const TZ_INCOMPATIBLE = [
-  "pst", "pdt", "pacific time", "pacific standard", "pacific daylight", "us pacific",
-  "mst", "mdt", "mountain time", "us mountain",
-  "cst", "cdt", "central time", "us central",
-  "est", "edt", "eastern time", "eastern standard", "us eastern",
-  "america/los_angeles", "america/new_york", "america/chicago", "america/denver",
-  "aest", "aedt", "australian eastern", "sydney time", "melbourne time",
-  "nzst", "new zealand time",
-];
-
-// Phrasing that signals a timezone REQUIREMENT (checked NEAR the tz mention).
-const TZ_REQUIRE_CUES = [
-  "must be available", "must work", "must overlap", "required to work",
-  "work during", "available during", "core hours", "overlap with", "overlap",
-  "business hours", "working hours", "within", "hours of", "time zone",
-  "timezone", "required", "must be", "must reside", "based in",
-];
-
-// Explicit flexibility anywhere in the posting cancels the warning.
-const TZ_FLEX = [
-  "flexible hours", "flexible timezone", "flexible time zone", "async",
-  "asynchronous", "no set hours", "work anytime", "any timezone", "any time zone",
-  "timezone friendly", "timezone flexible", "flexible schedule",
-];
-
-/**
- * Timezone friction for Africa-based applicants.
- *   null   → no incompatible-timezone REQUIREMENT found
- *   "warn" → the posting requires hours in a timezone that's hard from Africa
- *
- * Design (audited):
- * - Word-boundary regex per timezone token — "est" can NEVER match inside
- *   "latest"/"best"/"request". (An earlier draft had a substring fallback that
- *   did exactly that; removed.)
- * - PROXIMITY REQUIRED: a requirement cue must appear within ±80 chars of the
- *   timezone mention (same window technique as bodyTiesToForeignCountry).
- *   "Our HQ is in EST" with "business hours" three paragraphs away does NOT
- *   trigger; "must overlap with EST business hours" does.
- * - Explicit flexibility ("async", "flexible timezone") cancels globally.
- */
-function timezoneFriction(title, desc) {
-  const body = ` ${title} ${desc} `;
-  if (TZ_FLEX.some((f) => body.includes(f))) return null;
-
-  for (const tz of TZ_INCOMPATIBLE) {
-    // All word-boundary occurrences of this timezone token.
-    const re = new RegExp(`(?<![a-z0-9])${tz.replace(/[/\\^$.*+?()[\]{}|]/g, "\\$&")}(?![a-z0-9])`, "g");
-    let m;
-    while ((m = re.exec(body)) !== null) {
-      const windowText = body.slice(Math.max(0, m.index - 80), m.index + tz.length + 80);
-      if (TZ_REQUIRE_CUES.some((cue) => windowText.includes(cue))) return "warn";
-    }
-  }
-  return null;
-}
-
-// ============================================================
 // ELIGIBILITY ENGINE
 // ============================================================
-
-// On-site location hints for major non-African hiring hubs — used ONLY on the
-// short location field, where a bare "US" or "New York" is unambiguous.
-const LOC_FOREIGN_HINTS = [
-  ...FOREIGN_COUNTRIES, "us",
-  "new york", "san francisco", "austin", "seattle", "boston", "chicago",
-  "los angeles", "denver", "atlanta", "miami", "washington dc",
-  "toronto", "vancouver", "montreal", "dublin", "amsterdam", "sydney", "melbourne",
-];
-
-/**
- * Eligibility when we DON'T know the user's country (guest, no profile).
- * The product's audience is Africa-first, so the default gate is:
- * exclude anything restricted or clearly on-site abroad; pass worldwide,
- * remote, and Africa-located roles; be honest about the rest.
- */
-function genericEligibility(job, title, desc) {
-  const locField = ` ${(job.location || "").toLowerCase()} `;
-  const body = ` ${title} ${desc.slice(0, 3000)} `;
-
-  // 1. Explicit restrictions anywhere -> out.
-  if (hasAny(locField, HARD_EXCLUSIONS) || hasAny(body, HARD_EXCLUSIONS))
-    return { eligible: false, confidence: "excluded", reason: "Geographically restricted" };
-  if (RESTRICTION_PHRASES.some((p) => hasPhrase(body, p)))
-    return { eligible: false, confidence: "excluded", reason: "Restricted to a specific region in the posting" };
-
-  const remoteSignal = job.remote === true ||
-    hasAny(`${locField}${body}`, ["remote", "work from home", "wfh", "work from anywhere", "fully distributed"]);
-
-  // Guests default to the Africa-first audience, so incompatible-timezone
-  // REQUIREMENTS are a real friction — warn on otherwise-open roles.
-  const tzWarn = timezoneFriction(title, desc.slice(0, 3000));
-  const openReason = (base) => tzWarn
-    ? `${base} — but needs a timezone that's hard from Africa; check the hours`
-    : base;
-
-  // 2. Location field pins it to a foreign hub.
-  if (hasAny(locField, LOC_FOREIGN_HINTS)) {
-    if (!remoteSignal)
-      return { eligible: false, confidence: "excluded", reason: `On-site in ${job.location} — not open to applicants elsewhere` };
-    return { eligible: true, confidence: "possible", reason: `Remote, but tied to ${job.location} — confirm it's open to your country` };
-  }
-
-  // 3. Clearly open.
-  if (hasAny(locField, ["anywhere", "worldwide", "global"]) || hasAny(locField, AFRICA_TERMS))
-    return { eligible: true, confidence: tzWarn ? "possible" : "likely", reason: openReason("Open worldwide / Africa") };
-  if (remoteSignal)
-    return { eligible: true, confidence: tzWarn ? "possible" : "likely", reason: openReason("Remote role") };
-
-  // 4. Unpinned local/unknown — honest conditional.
-  return { eligible: true, confidence: "possible", reason: "Set your country in You → for a verified check" };
-}
-
 /**
  * checkEligibility(job, country) -> { eligible, confidence, reason }
  * confidence: certain | likely | possible | excluded
@@ -987,20 +839,6 @@ export function checkEligibility(job, country) {
   };
 
   const E = (confidence, reason, eligible = true) => ({ eligible, confidence, reason });
-
-  // Timezone friction: for Africa/EMEA-adjacent targets, an incompatible-tz
-  // REQUIREMENT downgrades an otherwise-positive verdict and warns. Computed
-  // once here; applied to positive verdicts via softenForTimezone below.
-  const tzWarn = (isAfrican || country === "mena" || country === "africa")
-    ? timezoneFriction(title, desc) : null;
-  const softenForTimezone = (verdict) => {
-    if (!tzWarn || !verdict.eligible) return verdict;
-    // Never upgrade; only downgrade certain/likely → possible with a warning.
-    if (verdict.confidence === "certain" || verdict.confidence === "likely") {
-      return E("possible", `${verdict.reason} — but requires a timezone that's hard from Africa; confirm hours before applying`);
-    }
-    return verdict;
-  };
 
   // 1. Hard exclusions anywhere in text kill the job.
   for (const ex of HARD_EXCLUSIONS) if (hasPhrase(all, ex)) return E("excluded", `Restricted: "${ex}"`, false);
@@ -1062,21 +900,21 @@ export function checkEligibility(job, country) {
   // 2. Explicit target in LOCATION field → certain.
   const locField = ` ${loc} ${region} `;
   if (country === "africa") {
-    if (hasAny(locField, AFRICA_TERMS)) return softenForTimezone(E("certain", "Location mentions Africa"));
+    if (hasAny(locField, AFRICA_TERMS)) return E("certain", "Location mentions Africa");
   } else if (REGION_POSITIVE[country]) {
-    if (hasAny(locField, REGION_POSITIVE[country])) return softenForTimezone(E("certain", `Location mentions ${country}`));
+    if (hasAny(locField, REGION_POSITIVE[country])) return E("certain", `Location mentions ${country}`);
   } else {
     for (const label of COUNTRY_TERMS[country] || []) {
-      if (hasPhrase(locField, label)) return softenForTimezone(E("certain", `Location mentions ${label}`));
+      if (hasPhrase(locField, label)) return E("certain", `Location mentions ${label}`);
     }
   }
 
   // 3. Worldwide/anywhere in LOCATION → certain.
-  if (hasAny(loc, WORLDWIDE_LOCATION)) return softenForTimezone(E("certain", "Open worldwide / anywhere"));
+  if (hasAny(loc, WORLDWIDE_LOCATION)) return E("certain", "Open worldwide / anywhere");
 
   // 4. EMEA in location → likely for Africa and MENA targets.
   if ((isAfrican || country === "mena") && hasAny(loc, EMEA_POSITIVE))
-    return softenForTimezone(E("likely", "EMEA region"));
+    return E("likely", "EMEA region");
 
   // 5. POSITIVE-EVIDENCE GATE — universal for all country targets.
   //    Nothing matched above → no positive signal this role is open to target.
@@ -1092,7 +930,7 @@ export function checkEligibility(job, country) {
   // it's "certain" — but only if the body doesn't ALSO tie it to a country.
   if (hasAny(desc, WORLDWIDE_DESC_STRONG)) {
     if (hasAny(desc, FOREIGN_COUNTRIES)) return E("likely", "Remote, worldwide language but a country is mentioned");
-    return softenForTimezone(E("certain", "JD: open to anyone, anywhere"));
+    return E("certain", "JD: open to anyone, anywhere");
   }
   if (hasAny(desc, FOREIGN_COUNTRIES)) return E("excluded", "Remote, but body ties it to a specific country", false);
   return E("possible", "Remote — region unconfirmed");
@@ -1169,36 +1007,6 @@ export function scoreJobLocally(job, intent) {
     const all = ` ${(job.location || "").toLowerCase()} ${desc} `;
     if (hasAny(all, HARD_EXCLUSIONS)) eligibility = { eligible: false, confidence: "excluded", reason: "Geographically restricted" };
     else if (job.remote || hasPhrase(all, "remote")) eligibility = { eligible: true, confidence: "likely", reason: "Remote role" };
-    else eligibility = genericEligibility(job, title, desc);
-  } else {
-    // NO country, NO remote in the query (e.g. a guest typing "copywriting
-    // jobs for me"). This path previously did ZERO checking — a Stripe·US
-    // on-site job sailed through as Conditional. Never skip eligibility:
-    // the default audience is Africa-first.
-    eligibility = genericEligibility(job, title, desc);
-  }
-
-  // STEP 1b: REMOTE ENFORCEMENT — "remote X open to Nigeria" must not surface
-  // on-site local jobs just because the location mentions the country.
-  // (Real trust failure: Lagos on-site intern ranked 90% on a remote search.)
-  if (eligibility.eligible && intent.remoteOnly) {
-    const remoteField = ` ${(job.location || "").toLowerCase()} ${title} ${desc.slice(0, 2000)} `;
-    const hasRemoteSignal =
-      job.remote === true ||
-      hasAny(remoteField, ["remote", "work from home", "wfh", "work from anywhere", "fully distributed", "distributed team", "telecommute"]);
-    if (!hasRemoteSignal) {
-      if (hasPhrase(remoteField, "hybrid")) {
-        eligibility = {
-          eligible: true, confidence: "possible",
-          reason: `Hybrid${job.location ? ` in ${job.location}` : ""} — confirm the remote arrangement before applying`,
-        };
-      } else {
-        eligibility = {
-          eligible: false, confidence: "excluded",
-          reason: `On-site${job.location ? ` in ${job.location}` : ""} — you asked for remote`,
-        };
-      }
-    }
   }
 
   // STEP 2: role match (0–55) — judged by the job's OWN TITLE at search time,
@@ -1262,21 +1070,41 @@ export function scoreJobLocally(job, intent) {
   // STEP 3: eligibility confidence component — DELIBERATELY NARROW (30–35, a
   // 5-pt swing) so it can break ties between equally-good roles but can NEVER
   // overtake a better role match. Role fit dominates ranking (product decision):
-  // an exact-title match (role 55) must outrank a sibling-alias match (role 48)
-  // regardless of location confidence. Since the role gap (7) exceeds the max
-  // location swing (5), role always wins.
-  const locScore = { certain: 35, likely: 32, possible: 30 }[eligibility.confidence] ?? 30;
+  // STEP 3: eligibility confidence component. WIDENED (was 30–35, a 5-pt swing
+  // that could never overcome title phrasing). For a product whose promise is
+  // "jobs you can actually get", a CONFIRMED country/worldwide match must be
+  // able to outrank a role whose eligibility is merely unconfirmed. A confirmed
+  // match ("Location mentions nigeria", "Open worldwide") now scores well above
+  // an unconfirmed "Remote — region unconfirmed". The swing (18 pts) can flip a
+  // same-role comparison toward the eligible job, but role fit (0–55) still
+  // dominates across genuinely different roles.
+  //   certain  = confirmed country match / explicit worldwide  -> 38
+  //   likely   = strong regional signal (EMEA, remote+Africa)   -> 30
+  //   possible = "region unconfirmed" — eligibility NOT proven  -> 20
+  const locScore = { certain: 38, likely: 30, possible: 20 }[eligibility.confidence] ?? 20;
 
-  // STEP 4: tiny tiebreaker signals — kept SMALL (max ~3 total) so they only
-  // separate near-identical results and can never overcome a role-fit gap.
+  // STEP 4: freshness + signal bonus. Freshness widened (was max +2) because
+  // recency is a real trust signal — a role posted this week is far more likely
+  // to still be open than one from 6 weeks ago. Still bounded so it separates
+  // near-equal results rather than dominating role/eligibility.
+  //   <= 3 days  -> +6   (just posted — recruiters still reading)
+  //   <= 7 days  -> +4   (this week)
+  //   <= 21 days -> +2   (still fresh)
+  //   <= 45 days -> 0
+  //   > 45 days  -> -3   (going stale)
+  //   > 90 days  -> -6   (likely filled/closed)
   let bonus = 0;
   const d = job.posted_at || job.created_at;
   if (d) {
     const days = (Date.now() - new Date(d)) / 86400000;
-    if (days < 7) bonus += 2; else if (days < 30) bonus += 1; else if (days > 90) bonus -= 1;
+    if (days <= 3) bonus += 6;
+    else if (days <= 7) bonus += 4;
+    else if (days <= 21) bonus += 2;
+    else if (days > 90) bonus -= 6;
+    else if (days > 45) bonus -= 3;
   }
   if (job.salary_min || job.salary_max) bonus += 1;       // transparent salary
-  bonus = Math.max(-1, Math.min(bonus, 3));
+  bonus = Math.max(-6, Math.min(bonus, 7));
 
   const total = Math.max(0, Math.min(roleScore + locScore + bonus, 100));
   return { score: Math.round(total), eligibility, offTarget, breakdown: { roleScore, locScore, bonus } };
