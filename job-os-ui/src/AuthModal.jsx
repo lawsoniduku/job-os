@@ -97,10 +97,10 @@ export default function AuthModal({ onClose, onAuthed }) {
   }
 
   return (
-    <div className="modal-scrim" onClick={onClose}>
-      <div className="modal auth-modal" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-scrim" role="presentation" onClick={onClose} onKeyDown={(e) => e.key === "Escape" && onClose()}>
+      <div className="modal auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-modal-title" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
-          <h3>{mode === "signup" ? "Create your account" : "Welcome back"}</h3>
+          <h3 id="auth-modal-title">{mode === "signup" ? "Create your account" : "Welcome back"}</h3>
           <button className="x" onClick={onClose} aria-label="Close">✕</button>
         </div>
 

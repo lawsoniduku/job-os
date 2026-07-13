@@ -79,12 +79,17 @@ export default function You({ shared, active, refreshProfile }) {
   async function save() {
     if (!requireAuth()) return;
     setSaving(true);
-    const { error } = await supabase.from("profiles").update({
+    // upsert (not update): if the profiles row is missing — e.g. an account
+    // that was deleted and recreated, or any orphaned auth user — this
+    // creates it instead of silently failing on a no-op update.
+    const { error } = await supabase.from("profiles").upsert({
+      id: user.id,
+      email: user.email,
       full_name: name || null,
       country: country || null,
       target_roles: roles,
       preferences: { ...(profile?.preferences || {}), seniority: seniority || null },
-    }).eq("id", user.id);
+    }, { onConflict: "id" });
     setSaving(false);
     if (error) showToast(`Couldn't save: ${error.message}`);
     else {
@@ -210,7 +215,7 @@ export default function You({ shared, active, refreshProfile }) {
         <h3>Your CV</h3>
         <div className="s-sub">
           {cvInfo
-            ? <>On file: <b>{cvInfo.filename || "pasted text"}</b>{cvInfo.updated_at ? ` · updated ${new Date(cvInfo.updated_at).toLocaleDateString()}` : ""} — Tailor & apply starts from this automatically.</>
+            ? <>On file: <b>{cvInfo.filename || "pasted text"}</b>{cvInfo.updated_at ? ` · updated ${new Date(cvInfo.updated_at).toLocaleDateString("en-GB", { day:"numeric", month:"short", year:"numeric" })}` : ""} — Tailor & apply starts from this automatically.</>
             : "Upload once — every Tailor & apply starts from it. Fine-grained editing lives in Studio."}
         </div>
         <button className="btn primary" onClick={() => fileRef.current?.click()} disabled={uploading}>
