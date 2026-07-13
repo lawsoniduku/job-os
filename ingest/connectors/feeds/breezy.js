@@ -56,7 +56,11 @@ function normalizeBreezyJob(p, site) {
       apply_url: apply,
       posted_at: date,
       created_at: date,
-      isRemote: /remote/i.test(`${title} ${typeof desc === "string" ? desc : ""}`),
+      isRemote: (titleDescStr => {
+            const clearOnsite = /\bon[\s-]?site\b|in[\s-]?office\b|must relocate/i.test(titleDescStr);
+            const clearRemote = /\bwork.?from.?home\b|\bwfh\b|\bfully remote\b|\b100%.?remote\b|\bremote.?first\b|\bremote.?role\b|\bremote position\b|\bwork remotely\b|\bremote work\b|\bwork from anywhere\b|\btelecommute\b/i.test(titleDescStr);
+            return !clearOnsite && clearRemote;
+          })(`${title} ${typeof desc === "string" ? desc : ""}`),
     },
     { source: "breezy", ats: "breezy", company: site.name, region: site.region }
   );

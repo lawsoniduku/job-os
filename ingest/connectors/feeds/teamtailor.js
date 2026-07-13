@@ -69,7 +69,11 @@ async function fetchOneSite(site) {
           apply_url: it.link,
           posted_at: it.pubDate || null,
           created_at: it.pubDate || null,
-          isRemote: /remote/i.test(`${it.title} ${it.description}`),
+          isRemote: (titleDescStr => {
+            const clearOnsite = /\bon[\s-]?site\b|in[\s-]?office\b|must relocate/i.test(titleDescStr);
+            const clearRemote = /\bwork.?from.?home\b|\bwfh\b|\bfully remote\b|\b100%.?remote\b|\bremote.?first\b|\bremote.?role\b|\bremote position\b|\bwork remotely\b|\bremote work\b|\bwork from anywhere\b|\btelecommute\b/i.test(titleDescStr);
+            return !clearOnsite && clearRemote;
+          })(`${it.title} ${it.description}`),
         },
         { source: "teamtailor", ats: "teamtailor", company: site.name, region: site.region }
       )

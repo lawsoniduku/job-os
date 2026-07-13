@@ -70,7 +70,7 @@ export const ROLE_TAXONOMY = [
     department: "HR",
     related: ["People Analytics", "HR Generalist / HRBP"],
     aliases: [
-      "performance management","performance analyst","people performance analyst",
+      "performance management","performance manager","performance analyst","people performance analyst",
       "talent performance analyst","performance management specialist",
       "performance and reward analyst","performance systems analyst"
     ],
@@ -432,7 +432,7 @@ export const ROLE_TAXONOMY = [
     cluster: "Skilled Trades / Field",
     department: "Operations",
     aliases: [
-      "electrician","plumber","welder","mechanic","technician","driver",
+      "electrician","plumber","welder","mechanic","technician","driver","calibration engineer",
       "security guard","security officer","cleaner","janitor","cook","chef",
       "waiter","waitress","tailor","carpenter","painter","generator technician",
       "field technician","maintenance technician","installation technician","ac technician",

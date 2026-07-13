@@ -118,6 +118,18 @@ async function fetchOneSite(site) {
         // otherwise tag with the site's country so the eligibility gate
         // treats it as open to candidates there.
         const location = it.location ? `${it.location}, ${site.country}` : site.country;
+
+        // Detect remote ONLY when the context clearly means "work remotely",
+        // not when "remote" means remote communities / remote sensing / remote
+        // monitoring — common in Nigerian NGO and field-ops job descriptions.
+        // We check for ONSITE signals first (they override), then require one
+        // of the specific work-arrangement phrases that unambiguously mean
+        // "this is a work-from-home role".
+        const titleDesc = `${it.title} ${it.description}`.toLowerCase();
+        const clearOnsite = /\bon[\s-]?site\b|in[\s-]?office\b|must relocate|must be (based|located) in/i.test(titleDesc);
+        const clearRemote = /\bwork.?from.?home\b|\bwfh\b|\bfully remote\b|\b100%.?remote\b|\bremote.?first\b|\bremote.?role\b|\bremote position\b|\bwork remotely\b|\bremote work\b|\bwork from anywhere\b|\btelecommute\b/i.test(titleDesc);
+        const isRemote = !clearOnsite && clearRemote;
+
         return normalizeJob(
           {
             title: split.title,
@@ -127,7 +139,7 @@ async function fetchOneSite(site) {
             apply_url: it.link,
             posted_at: it.pubDate || null,
             created_at: it.pubDate || null,
-            isRemote: /remote/i.test(`${it.title} ${it.description}`),
+            isRemote,
           },
           { source: "myjobmag", ats: "myjobmag", region: site.region }
         );
