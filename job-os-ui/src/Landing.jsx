@@ -165,8 +165,8 @@ export default function Landing({ onStart, onSignIn, theme, toggleTheme }) {
           We're a small team moving fast on a hard, important problem. No open roles posted right now —
           but exceptional people don't wait for postings. If that's you, reach out.
         </p>
-        <a className="lp-btn-secondary lp-careers-btn" {/* TODO: replace with real email */}
-                href="mailto:lawsoniduku@gmail.com?subject=I want to build JobCopilot with you">
+        <a className="lp-btn-secondary lp-careers-btn"
+                href="mailto:hello@jobcopilot.co?subject=I want to build JobCopilot with you">
           Introduce yourself →
         </a>
       </section>

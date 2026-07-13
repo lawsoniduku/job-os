@@ -525,12 +525,12 @@ body {
 /* ============================================================
    LANDING PAGE v3 — high contrast, minimal copy, visual-first
    ============================================================ */
-.landing { min-height: 100vh; min-height: 100dvh; overflow-y: auto; background: var(--canvas); color: var(--text); }
+.landing { min-height: 100vh; min-height: 100dvh; background: var(--canvas); color: var(--text); }
 
 /* Top bar */
 .lp-topbar {
-  position: sticky; top: 0; z-index: 40;
-  max-width: none; margin: 0; padding: 14px 24px;
+  position: fixed; top: 0; left: 0; right: 0; z-index: 40;
+  padding: 14px 24px;
   display: flex; align-items: center; justify-content: space-between;
   background: color-mix(in srgb, var(--canvas) 82%, transparent);
   backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
@@ -551,7 +551,7 @@ body {
 .lp-signin:hover { border-color: var(--accent); }
 
 /* Hero */
-.lp-hero { max-width: 1140px; margin: 0 auto; padding: 44px 24px 52px; display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 48px; align-items: center; }
+.lp-hero { max-width: 1140px; margin: 0 auto; padding-top: 110px; padding: 110px 24px 52px; display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 48px; align-items: center; }
 .lp-hero h1 { font-family: var(--display); font-size: 52px; line-height: 1.06; font-weight: 700; letter-spacing: -0.03em; margin: 0 0 18px; }
 .lp-accent { color: var(--eligible); }
 .lp-sub { font-size: 18px; line-height: 1.55; color: var(--text-2); max-width: 480px; margin: 0 0 28px; }
@@ -650,7 +650,7 @@ body {
 
 /* Mobile — single column, big text, big targets */
 @media (max-width: 900px) {
-  .lp-hero { grid-template-columns: 1fr; gap: 32px; padding: 28px 20px 40px; }
+  .lp-hero { grid-template-columns: 1fr; gap: 32px; padding: 90px 20px 40px; }
   .lp-hero-demo { order: 2; }
   .lp-hero h1 { font-size: 38px; }
   .lp-unlock { grid-template-columns: 1fr; }

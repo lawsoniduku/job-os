@@ -584,9 +584,9 @@ function ResultsBlock({ m, isLatest, onLoadMore, onTailor, onReport, busy }) {
         </div>
       ) : (
         <div className="scan-card" role="group" aria-label="Eligibility scan">
-          <div className="scan-item"><div className="num">{m.scanned.toLocaleString()}</div><div className="lbl">listings scanned across all role names</div></div>
-          <div className="scan-item excluded"><div className="num">{m.excluded.toLocaleString()}</div><div className="lbl">excluded — region-locked or restricted</div></div>
-          <div className="scan-item eligible"><div className="num">{m.total.toLocaleString()}</div><div className="lbl">you are actually eligible for</div></div>
+          <div className="scan-item" aria-label={`${m.scanned.toLocaleString()} listings scanned`}><div className="num" aria-hidden="true">{m.scanned.toLocaleString()}</div><div className="lbl">listings scanned across all role names</div></div>
+          <div className="scan-item excluded" aria-label={`${m.excluded.toLocaleString()} excluded — region-locked or restricted`}><div className="num" aria-hidden="true">{m.excluded.toLocaleString()}</div><div className="lbl">excluded — region-locked or restricted</div></div>
+          <div className="scan-item eligible" aria-label={`${m.total.toLocaleString()} roles you are actually eligible for`}><div className="num" aria-hidden="true">{m.total.toLocaleString()}</div><div className="lbl">you are actually eligible for</div></div>
         </div>
       )}
 
@@ -830,8 +830,8 @@ function TailorModal({ job, shared, onSaveForLater, onClose }) {
   }
 
   return (
-    <div className="modal-scrim" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-scrim" role="presentation" onClick={onClose} onKeyDown={(e) => e.key === "Escape" && onClose()}>
+      <div className="modal" role="dialog" aria-modal="true" aria-label={`Tailor CV — ${job.title}`} onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <h3>Tailor CV — {job.title} at {job.company}</h3>
           <button className="x" onClick={onClose} aria-label="Close">✕</button>
@@ -867,7 +867,7 @@ function TailorModal({ job, shared, onSaveForLater, onClose }) {
                 <div className="cover-letter">
                   <div className="cl-head">
                     <label className="field-label" style={{ margin: 0 }}>Cover letter</label>
-                    <button className="btn subtle sm" onClick={() => navigator.clipboard?.writeText(result.cover_letter).then(() => showToast("Cover letter copied"))}>Copy</button>
+                    <button className="btn subtle sm" onClick={() => navigator.clipboard?.writeText(result.cover_letter).then(() => showToast("Cover letter copied")).catch(() => showToast("Copy failed — select the text manually"))}>Copy</button>
                   </div>
                   <div className="cl-body">{result.cover_letter}</div>
                 </div>
@@ -928,7 +928,7 @@ function TailorModal({ job, shared, onSaveForLater, onClose }) {
               <button className="btn" onClick={markApplied}>Mark as applied</button>
               <button
                 className="btn subtle"
-                onClick={() => navigator.clipboard?.writeText(result.rewritten_cv).then(() => showToast("Copied"))}
+                onClick={() => navigator.clipboard?.writeText(result.rewritten_cv).then(() => showToast("Copied")).catch(() => showToast("Copy failed — select the text manually"))}
               >
                 Copy text
               </button>
