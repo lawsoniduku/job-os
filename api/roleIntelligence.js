@@ -74,7 +74,7 @@ export const ROLE_TAXONOMY = [
       "talent performance analyst","performance management specialist",
       "performance and reward analyst","performance systems analyst"
     ],
-    keywords: ["performance review","okrs","kpis","360 feedback","calibration",
+    keywords: ["performance review","okrs","360 feedback","calibration",
       "performance cycle","goal setting","talent review","succession planning"]
   },
   {
