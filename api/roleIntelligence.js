@@ -12,7 +12,7 @@ export const ROLE_TAXONOMY = [
     department: "HR",
     related: ["HR Generalist / HRBP", "Data Analytics", "Performance Management"],
     aliases: [
-      "people analyst","people analytics","hr analyst","hr data analyst",
+      "people analytics","people analyst","hr analyst","hr data analyst",
       "workforce analyst","workforce analytics","workforce insights",
       "hris analyst","hris specialist","hr systems analyst",
       "people data analyst","people insights analyst","talent analytics",
@@ -33,7 +33,7 @@ export const ROLE_TAXONOMY = [
     cluster: "Talent Acquisition",
     department: "HR",
     aliases: [
-      "recruiter","talent acquisition","talent partner","sourcer",
+      "talent acquisition","recruiter","talent partner","sourcer",
       "technical recruiter","tech recruiter","recruitment specialist",
       "talent specialist","talent lead","talent manager",
       "recruitment consultant","executive recruiter","talent scout",
@@ -48,7 +48,7 @@ export const ROLE_TAXONOMY = [
     department: "HR",
     related: ["People Analytics", "Talent Acquisition", "Performance Management"],
     aliases: [
-      "hr generalist","hr business partner","hrbp","hr manager",
+      "human resources","human resource","hr generalist","hr business partner","hrbp","hr manager",
       "hr coordinator","hr advisor","hr consultant","hr associate",
       "people partner","people manager","people operations",
       "people ops manager","people ops specialist","hr operations",
@@ -81,7 +81,7 @@ export const ROLE_TAXONOMY = [
     cluster: "Data Analytics",
     department: "Data",
     aliases: [
-      "data analyst","business intelligence analyst","bi analyst",
+      "data analytics","business intelligence","data analyst","business intelligence analyst","bi analyst",
       "product analyst","growth analyst","insights analyst",
       "analytics analyst","reporting analyst","data reporting analyst",
       "data operations analyst","analytics specialist","web analyst",
@@ -95,7 +95,7 @@ export const ROLE_TAXONOMY = [
     cluster: "Data Science",
     department: "Data",
     aliases: [
-      "data scientist","machine learning engineer","ml engineer",
+      "data science","machine learning","data scientist","machine learning engineer","ml engineer",
       "ai engineer","applied scientist","research scientist",
       "nlp engineer","computer vision engineer","deep learning engineer",
       "data science manager","lead data scientist","senior data scientist",
@@ -109,7 +109,7 @@ export const ROLE_TAXONOMY = [
     cluster: "Data Engineering",
     department: "Data",
     aliases: [
-      "data engineer","analytics engineer","etl developer","etl engineer",
+      "data engineering","data engineer","analytics engineer","etl developer","etl engineer",
       "data platform engineer","data infrastructure engineer",
       "database engineer","database administrator","dba",
       "big data engineer","data architect","senior data engineer"
@@ -121,7 +121,7 @@ export const ROLE_TAXONOMY = [
     cluster: "Software Engineering",
     department: "Engineering",
     aliases: [
-      "software engineer","software developer","backend engineer",
+      "software engineering","software development","software engineer","software developer","backend engineer",
       "backend developer","frontend developer","front end developer",
       "full stack developer","fullstack developer","ui engineer",
       "frontend engineer","full stack engineer","fullstack engineer",
@@ -146,7 +146,7 @@ export const ROLE_TAXONOMY = [
     cluster: "Product Management",
     department: "Product",
     aliases: [
-      "product manager","product owner","associate product manager",
+      "product management","product manager","product owner","associate product manager",
       "senior product manager","lead product manager","principal pm",
       "group product manager","head of product","vp product",
       "chief product officer","cpo","product lead","technical product manager",
@@ -159,13 +159,13 @@ export const ROLE_TAXONOMY = [
     cluster: "Customer Success",
     department: "Operations",
     aliases: [
-      "customer success manager","csm","customer success specialist",
+      "customer success","customer success manager","csm","customer success specialist",
       "account manager","key account manager","strategic account manager",
       "client success manager","client relationship manager",
       "client partner","partner success manager","customer engagement manager",
       "customer experience manager","cx manager","renewal manager",
       "customer success lead","head of customer success","vp customer success",
-      "account executive","enterprise account manager"
+      "enterprise account manager"
     ],
     keywords: ["churn","nps","customer retention","upsell","cross-sell",
       "renewal","qbr","customer health score","crm","salesforce","hubspot"]
@@ -174,7 +174,7 @@ export const ROLE_TAXONOMY = [
     cluster: "Customer Support",
     department: "Operations",
     aliases: [
-      "customer support","customer service","support specialist",
+      "customer support","contact centre","contact center","call centre","call center","customer service","support specialist",
       "support agent","support representative","customer care",
       "customer care agent","cx specialist","cx agent",
       "technical support","tier 1 support","tier 2 support",
@@ -205,7 +205,7 @@ export const ROLE_TAXONOMY = [
     cluster: "Digital Marketing",
     department: "Marketing",
     aliases: [
-      "digital marketing manager","marketing manager","growth marketer",
+      "digital marketing","brand management","digital marketing manager","marketing manager","growth marketer",
       "performance marketer","paid media specialist","paid search specialist",
       "seo specialist","seo manager","sem specialist","ppc specialist",
       "social media manager","social media specialist","social media coordinator",
@@ -226,9 +226,9 @@ export const ROLE_TAXONOMY = [
       "operations manager","operations lead","operations specialist",
       "operations coordinator","business operations manager",
       "operations analyst","business analyst","process analyst",
-      "strategy manager","strategy consultant","strategy analyst","process improvement specialist",
-      "lean specialist","six sigma","transformation manager","chief of staff",
-      "store manager","retail manager","branch operations manager","area manager","floor manager"
+      "strategy consultant","process improvement specialist",
+      "lean specialist","six sigma",
+      "branch operations manager","area manager"
     ],
     keywords: ["process","efficiency","kpi","metrics","jira","confluence",
       "asana","monday.com","notion","okrs","reporting"]
@@ -252,7 +252,7 @@ export const ROLE_TAXONOMY = [
     cluster: "Design / UX",
     department: "Design",
     aliases: [
-      "ux designer","ui designer","ui/ux designer","ux/ui designer","product designer",
+      "user experience","product design","ux designer","ui designer","ui/ux designer","ux/ui designer","product designer",
       "interaction designer","visual designer","graphic designer",
       "brand designer","web designer","motion designer",
       "ux researcher","user researcher","design researcher",
@@ -266,7 +266,7 @@ export const ROLE_TAXONOMY = [
     cluster: "Sales",
     department: "Sales",
     aliases: [
-      "sales development representative","sdr","sales executive","business development representative",
+      "business development","sales development representative","sdr","sales executive","business development representative",
       "bdr","account executive","ae","enterprise sales","b2b sales",
       "inside sales","outside sales","field sales","sales manager",
       "sales director","vp sales","chief revenue officer","cro",
@@ -296,7 +296,7 @@ export const ROLE_TAXONOMY = [
     cluster: "Accounting / Audit",
     department: "Finance",
     aliases: [
-      "accountant","chartered accountant","staff accountant","senior accountant",
+      "accounts receivable","account receivable","accounts payable","account payable","accountant","chartered accountant","staff accountant","senior accountant",
       "account officer","accounts officer","accounts payable","accounts receivable",
       "bookkeeper","auditor","internal auditor","external auditor","audit manager",
       "audit associate","tax accountant","cost accountant","management accountant",
@@ -380,7 +380,7 @@ export const ROLE_TAXONOMY = [
     cluster: "Supply Chain / Logistics",
     department: "Operations",
     aliases: [
-      "supply chain officer","supply chain manager","logistics officer","logistics manager",
+      "supply chain","supply chain officer","supply chain manager","logistics officer","logistics manager",
       "procurement officer","procurement manager","purchasing officer","buyer",
       "warehouse officer","warehouse manager","inventory officer","inventory manager",
       "store keeper","storekeeper","fleet officer","fleet manager","distribution officer",
@@ -420,7 +420,7 @@ export const ROLE_TAXONOMY = [
     cluster: "Project / Program Management",
     department: "Operations",
     aliases: [
-      "project manager","program manager","programme manager","project coordinator",
+      "project management","program management","project manager","program manager","programme manager","project coordinator",
       "project lead","project officer","scrum master","agile coach","delivery manager",
       "project director","pmo","project management officer","portfolio manager (projects)",
       "technical program manager","implementation manager","change manager"
@@ -433,13 +433,150 @@ export const ROLE_TAXONOMY = [
     department: "Operations",
     aliases: [
       "electrician","plumber","welder","mechanic","technician","driver","calibration engineer",
-      "security guard","security officer","cleaner","janitor","cook","chef",
+      "security guard","cleaner","janitor","cook","chef",
       "waiter","waitress","tailor","carpenter","painter","generator technician",
       "field technician","maintenance technician","installation technician","ac technician",
       "machine operator","factory worker","production operator","forklift operator"
     ],
     keywords: ["repair","installation","maintenance","technical","manual",
       "equipment","machinery","hands-on","field work"]
+  },
+
+  // ============================================================
+  // BROAD-MARKET CLUSTERS (added after taxonomy coverage audit)
+  // ============================================================
+  // The original taxonomy was built for the global remote-tech market
+  // (Software Engineering had 56 aliases; General Management had none).
+  // A coverage audit against real Nigerian job titles found only 30% had
+  // ANY taxonomy home — so 70% fell through to body classification, which
+  // is a fallback path, not a primary one. That fallback is where every
+  // false positive came from ("the company operates a performance
+  // management system" hijacking a General Manager posting).
+  //
+  // These 7 clusters close the front-door gap. Title-first can now carry
+  // the confidence it was designed to carry. They also fix bare-noun
+  // misfires for free: a specific multi-word alias scores ~100
+  // (40 + words*12 + length) vs a bare noun's 30, so specificity wins
+  // automatically — the aliases just had to exist.
+  {
+    cluster: "Executive / General Management",
+    department: "Executive",
+    related: ["Operations", "Strategy / Business Development"],
+    aliases: [
+      "chief executive officer","chief operating officer","chief of staff",
+      "managing director","deputy managing director","executive director",
+      "general manager","deputy general manager","assistant general manager",
+      "country manager","country director","city manager","regional manager",
+      "regional business manager","regional director","business unit head",
+      "head of business","business manager","divisional head","group head",
+      "chief commercial officer","chief business officer","chief strategy officer",
+      "vice president operations","md/ceo","gm operations",
+    ],
+    keywords: ["p&l","board","governance","strategic direction","business unit",
+      "executive leadership","organisational strategy","stakeholder management"]
+  },
+  {
+    cluster: "Security",
+    department: "Security",
+    related: ["Skilled Trades / Field", "Operations"],
+    aliases: [
+      "security officer","security supervisor","security manager","head of security",
+      "chief security officer","security coordinator","security analyst",
+      "security specialist","loss prevention officer","loss prevention manager",
+      "physical security manager","corporate security manager","security consultant",
+      "safety and security officer","security operations manager","cso",
+    ],
+    keywords: ["surveillance","access control","incident response","patrol",
+      "risk assessment","cctv","guard force","security protocol"]
+  },
+  {
+    cluster: "Quality Assurance",
+    department: "Quality",
+    related: ["Operations", "Civil / Mechanical / Electrical Engineering"],
+    aliases: [
+      "quality assurance manager","quality assurance officer","quality assurance analyst",
+      "quality assurance specialist","quality assurance supervisor","quality assurance lead",
+      "quality control officer","quality control manager","quality control analyst",
+      "quality control inspector","quality manager","quality officer","quality analyst",
+      "quality inspector","quality auditor","qa officer","qa manager","qa analyst",
+      "qa specialist","qc analyst","qc officer","qc inspector",
+      "service quality assurance manager","quality systems manager",
+    ],
+    keywords: ["iso 9001","haccp","gmp","quality standards","inspection",
+      "non-conformance","audit trail","quality control","defect","compliance testing"]
+  },
+  {
+    cluster: "Monitoring & Evaluation / Programmes",
+    department: "Development / NGO",
+    related: ["Project / Program Management", "Data Analytics"],
+    aliases: [
+      "monitoring and evaluation officer","monitoring and evaluation manager",
+      "monitoring and evaluation specialist","monitoring evaluation and learning",
+      "m&e officer","m&e manager","m&e specialist","m&e coordinator",
+      "meal officer","meal manager","meal coordinator",
+      "programme officer","program officer","programme manager",
+      "programme coordinator","program coordinator","programme assistant",
+      "grants officer","grants manager","field coordinator",
+      "field officer","community mobilisation officer","development officer",
+      "impact assessment officer","research and learning officer",
+    ],
+    keywords: ["logframe","theory of change","indicators","baseline survey",
+      "donor reporting","beneficiaries","ngo","development sector","grant",
+      "impact measurement"]
+  },
+  {
+    cluster: "Retail / Hospitality",
+    department: "Retail / Hospitality",
+    related: ["Operations", "Sales", "Customer Support"],
+    aliases: [
+      "store manager","head of store","assistant store manager","shop manager",
+      "outlet manager","assistant outlet manager",
+      "retail manager","retail supervisor","floor manager","showroom manager","showroom","franchise manager","retail showroom",
+      "hotel manager","assistant hotel manager","front desk manager",
+      "restaurant manager","assistant restaurant manager","food and beverage manager",
+      "service center supervisor","service centre supervisor","service centre manager",
+      "guest relations manager","housekeeping supervisor","duty manager",
+      "retail operations manager","merchandiser","visual merchandiser",
+    ],
+    keywords: ["footfall","pos","stock take","shrinkage","guest experience",
+      "front of house","occupancy","menu","retail outlet","customer footfall"]
+  },
+  {
+    cluster: "HSE / Sustainability",
+    department: "HSE",
+    related: ["Civil / Mechanical / Electrical Engineering", "Operations"],
+    aliases: [
+      "hse officer","hse manager","hse supervisor","hse coordinator","hse advisor",
+      "ehs manager","ehs officer","ehs coordinator",
+      "health safety and environment officer","health safety and environment manager",
+      "health and safety officer","health and safety manager","safety officer",
+      "safety manager","safety coordinator","environmental officer",
+      "environmental manager","environmental specialist",
+      "sustainability manager","sustainability officer","sustainability analyst",
+      "sustainability lead","esg analyst","esg manager","esg officer",
+      "occupational health officer",
+    ],
+    keywords: ["hse","ehs","iso 14001","ohsas","risk assessment","permit to work",
+      "toolbox talk","incident reporting","esg","carbon","emissions","sustainability report"]
+  },
+  {
+    cluster: "Strategy / Business Development",
+    department: "Strategy",
+    related: ["Executive / General Management", "Sales", "Operations"],
+    aliases: [
+      "strategy analyst","strategy manager","strategy associate","strategy lead",
+      "corporate strategy manager","corporate strategy analyst",
+      "business strategy manager","strategic planning manager",
+      "business transformation officer","business transformation manager",
+      "business transformation lead","transformation manager",
+      "corporate development manager","corporate development associate",
+      "commercial analyst",
+      "strategic partnerships manager","head portfolio value creation",
+      "value creation manager","market expansion manager","growth strategy manager",
+    ],
+    keywords: ["market entry","competitive analysis","business case","go-to-market",
+      "strategic initiative","partnership","due diligence","market sizing",
+      "value creation","transformation roadmap"]
   }
 ];
 
@@ -532,47 +669,113 @@ const BARE_NOUN_HINTS = {
 // ============================================================
 // CLUSTER DETECTION — score-based, longest/most-specific wins
 // ============================================================
+// Build the text variants a title should be matched against.
+//
+// WHY: multinational and Nigerian corporate postings routinely INVERT titles —
+// "Manager, Customer Success", "Head, Human Resources", "Lead, Data Engineering"
+// — while the taxonomy stores the natural order ("customer success manager").
+// A pure substring match never fires on the inverted form, so the title falls
+// through to body classification (the fallback path that caused every false
+// positive). Rather than doubling 695 aliases with inverted duplicates, we
+// normalise the QUERY instead: strip trailing qualifiers, then swap around the
+// comma/colon so "Manager, Customer Success" also gets tested as
+// "Customer Success Manager".
+function titleVariants(raw) {
+  const variants = [raw];
+  // Drop parenthetical qualifiers — "(B2B Retention)", "(SQA)", "(Private
+  // Security)" sit between the role words and break adjacency after swapping.
+  const noParens = raw.replace(/\([^)]*\)/g, " ").replace(/\s+/g, " ").trim();
+  if (noParens && noParens !== raw) variants.push(noParens);
+  // Swap around the FIRST comma or colon: "Manager, Customer Success" ->
+  // "Customer Success Manager". Only when both sides are short enough to be a
+  // title (guards against swapping a sentence).
+  const m = noParens.match(/^([^,:]{2,40})[,:]\s*(.{2,60})$/);
+  if (m) {
+    const swapped = `${m[2].trim()} ${m[1].trim()}`.replace(/\s+/g, " ");
+    variants.push(swapped);
+  }
+  return variants;
+}
+
 function detectCluster(query) {
   // Normalize separators: slashes, pipes, commas, parens become spaces so
   // titles like "Backend / API Engineer, Billing" match cleanly. Collapse
   // whitespace and pad so boundary regexes work at the edges.
-  const cleaned = String(query).toLowerCase().replace(/[\/|,()\[\]{}]+/g, " ").replace(/\s+/g, " ");
-  const q = ` ${cleaned} `;
+  const raw = String(query);
+  const norm = (s) => ` ${s.toLowerCase().replace(/[\/|,()\[\]{}]+/g, " ").replace(/\s+/g, " ")} `;
+  // Only build inverted variants for short, title-like input — never for a full
+  // job description (which is long and would make the swap meaningless, plus
+  // triple the regex work on the hot path).
+  const useVariants = raw.length <= 90 && /[,:]/.test(raw);
+  const queries = useVariants ? titleVariants(raw).map(norm) : [norm(raw)];
+  const q = queries[0]; // primary/original form
+  // hasPhrase across ANY variant — the inverted form is the same title.
+  const inAny = (phrase) => queries.some((qq) => hasPhrase(qq, phrase));
   const scores = {};
-  const bump = (c, n) => { if (c) scores[c] = Math.max(scores[c] || 0, n); };
-  const add = (c, n) => { if (c) scores[c] = (scores[c] || 0) + n; };
+  // matchedPhrases: EVERY distinct phrase that matched, from ALL signal types
+  // (aliases, short tokens, bare nouns, AND keywords) together. This matters:
+  // keywords often SUBSTRING their own cluster's aliases (e.g. "process" is a
+  // substring of the alias "process improvement specialist"), so counting
+  // keyword hits separately from alias hits let one physical mention pass as
+  // two independent signals. One dedup pass across everything closes that.
+  const matchedPhrases = {};
+  const bump = (c, n, phrase) => {
+    if (!c) return;
+    scores[c] = Math.max(scores[c] || 0, n);
+    (matchedPhrases[c] = matchedPhrases[c] || []).push(phrase);
+  };
+  const add = (c, n, phrase) => {
+    if (!c) return;
+    scores[c] = (scores[c] || 0) + n;
+    (matchedPhrases[c] = matchedPhrases[c] || []).push(phrase);
+  };
 
   // 1. Multi-word / long aliases — strongest signal, weighted by specificity
   for (const entry of ROLE_TAXONOMY) {
     for (const alias of entry.aliases) {
       if (alias.length < 4) continue; // very short aliases handled below
-      if (hasPhrase(q, alias)) {
+      if (inAny(alias)) {
         const specificity = alias.split(/\s+/).length * 12 + alias.length; // longer = better
-        bump(entry.cluster, 40 + specificity);
+        bump(entry.cluster, 40 + specificity, alias);
       }
     }
   }
   // 2. Curated short tokens (hr, pm, ux, qa...)
   for (const [tok, cluster] of Object.entries(SHORT_TOKENS)) {
-    if (hasPhrase(q, tok)) bump(cluster, 38);
+    if (inAny(tok)) bump(cluster, 38, tok);
   }
   // 3. Bare role nouns (product, design, sales...)
   for (const [noun, cluster] of Object.entries(BARE_NOUN_HINTS)) {
-    if (hasPhrase(q, noun)) bump(cluster, 30);
+    if (inAny(noun)) bump(cluster, 30, noun);
   }
-  // 4. Skill keywords — additive nudges only; skip <3 chars so "r"/"ai" can't dominate
+  // 4. Skill keywords — additive nudges; skip <3 chars so "r"/"ai" can't dominate
   for (const entry of ROLE_TAXONOMY) {
     for (const kw of entry.keywords) {
       if (kw.length < 3) continue;
-      if (hasPhrase(q, kw)) add(entry.cluster, 4);
+      if (inAny(kw)) add(entry.cluster, 4, kw);
     }
+  }
+
+  // De-duplicate nested/overlapping phrases per cluster: if phrase A is a
+  // substring of phrase B (both matched for the same cluster), A is the same
+  // physical mention as B, not independent evidence — drop it. What survives
+  // is the count of genuinely DISTINCT things this text says about the role.
+  const distinctSignals = {};
+  for (const [c, phrases] of Object.entries(matchedPhrases)) {
+    const unique = [...new Set(phrases)];
+    const kept = unique.filter((p, i) =>
+      !unique.some((other, j) => i !== j && (other.length > p.length || (other.length === p.length && j < i)) && other.includes(p))
+    );
+    distinctSignals[c] = kept.length;
   }
 
   let best = null, bestScore = 0;
   for (const [c, s] of Object.entries(scores)) {
     if (s > bestScore) { bestScore = s; best = c; }
   }
-  return best ? { cluster: best, score: bestScore, all: scores } : { cluster: null, score: 0, all: {} };
+  return best
+    ? { cluster: best, score: bestScore, distinctSignals: distinctSignals[best] || 0, all: scores }
+    : { cluster: null, score: 0, distinctSignals: 0, all: {} };
 }
 
 // ============================================================
@@ -1314,15 +1517,32 @@ export function classifyJob(title = "", description = "") {
   const titleDet = detectCluster(title);
   let cluster = titleDet.cluster;
   if (!cluster) {
-    // Title gave us nothing. Before trusting the description, demand a STRONG
-    // match — a passing mention of "support" or "service" in a JD must not drag
-    // a "Regional Policy Lead" or "IT Officer" into Customer Support. We require
-    // the body score to clear a confidence floor that single keyword/skill hits
-    // (worth only ~4 each) and lone generic aliases cannot reach. A real role
-    // alias in the body scores 50+, so 60 keeps genuine matches and drops noise.
+    // Title gave us nothing. Before trusting the description, demand a STRONG,
+    // CORROBORATED match — not just a high score, but 2+ independent signals.
+    //
+    // BUG THIS FIXES: a single incidental mention of a multi-word alias (e.g.
+    // one boilerplate HR sentence — "the company operates a performance
+    // management system for all staff" — in an otherwise-unrelated JD for a
+    // "General Manager", "City Manager", or "Chief Executive Officer") scores
+    // ~86 on its own, clearing any reasonable score floor. Generic/leadership
+    // titles have no specific cluster BY DESIGN — a JD mentioning one HR/ops/
+    // finance term in passing must not hijack them into that cluster. This is
+    // systemic: any cluster with a distinctive alias is vulnerable to the same
+    // "one throwaway sentence" false positive, on any search, for any title
+    // that doesn't itself signal a function.
+    //
+    // Fix: require 2+ genuinely DISTINCT signals (not nested/overlapping text)
+    // before trusting body-only classification. One incidental mention of a
+    // role phrase — "the company operates a performance management system"
+    // in an unrelated General Manager posting — is exactly ONE distinct signal
+    // and correctly falls through to Other. A genuine role description
+    // mentions its function via multiple, non-overlapping pieces of evidence
+    // (the role phrase AND its tools/practices — e.g. "performance management"
+    // AND "OKR cycles" AND "360 feedback" are three separate, real signals).
     const bodyDet = detectCluster(`${title} ${description}`);
     const BODY_CONFIDENCE_FLOOR = 60;
-    if (bodyDet.cluster && bodyDet.score >= BODY_CONFIDENCE_FLOOR) {
+    const BODY_MIN_DISTINCT_SIGNALS = 2;
+    if (bodyDet.cluster && bodyDet.score >= BODY_CONFIDENCE_FLOOR && bodyDet.distinctSignals >= BODY_MIN_DISTINCT_SIGNALS) {
       cluster = bodyDet.cluster;
     }
   }
