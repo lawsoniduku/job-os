@@ -139,7 +139,7 @@ create policy "saved_searches_delete_own" on public.saved_searches
 create table if not exists public.saved_jobs (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
-  job_id bigint not null,  -- change to `uuid` if your jobs.id is uuid
+  job_id uuid not null,  -- change to `uuid` if your jobs.id is uuid
   created_at timestamptz not null default now(),
   unique(user_id, job_id)
 );

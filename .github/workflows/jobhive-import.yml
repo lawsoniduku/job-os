@@ -1,0 +1,75 @@
+name: Jobhive Bulk Import
+
+# Runs the jobhive importer daily to pull fresh eligible jobs from the
+# open-source stapply.ai dataset (49 ATS platforms, including ones our own
+# pipeline can't reach directly — iCIMS, Phenom, Recruitee, etc.)
+#
+# WHY DAILY (not twice-daily like the main pipeline): jobhive's own dataset
+# is regenerated once a day upstream, so running more often gains nothing.
+#
+# WHY ONLY THESE ATS TYPES (not workday/oracle/successfactors/eures): those
+# files are multi-hundred-MB to several-GB. Re-downloading them every single
+# day would burn GitHub Actions minutes and bandwidth for data that barely
+# changes day to day. Pull those manually/occasionally instead:
+#   node --env-file=.env ingest/import_jobhive.js workday
+#
+# SETUP: uses the SAME repo secrets as ingest.yml (SUPABASE_URL, SUPABASE_KEY)
+# — already configured, nothing new to add.
+
+on:
+  schedule:
+    - cron: "0 3 * * *"   # 03:00 UTC daily ≈ 4am Lagos — quiet hour
+  workflow_dispatch: {}    # lets you click "Run workflow" on GitHub to test manually
+
+jobs:
+  jobhive-import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      # Run each ATS as its own step so one slow/flaky source doesn't block
+      # the others, and so logs are easy to read per-source.
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install
+
+      # Small, high-value slices only. Add more here as you verify them —
+      # keep each under ~200MB so the daily run stays fast and cheap.
+      - name: Import iCIMS
+        run: node ingest/import_jobhive.js icims
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        continue-on-error: true   # one source failing shouldn't fail the whole job
+
+      - name: Import Phenom
+        run: node ingest/import_jobhive.js phenom
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        continue-on-error: true
+
+      - name: Import Recruitee
+        run: node ingest/import_jobhive.js recruitee
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        continue-on-error: true
+
+      - name: Import YCombinator
+        run: node ingest/import_jobhive.js ycombinator
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        continue-on-error: true
+
+      - name: Import BambooHR
+        run: node ingest/import_jobhive.js bamboohr
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        continue-on-error: true

@@ -43,6 +43,19 @@ export const GREENHOUSE_COMPANIES = [
   { slug: "postman",           name: "Postman"      },
   { slug: "cockroachlabs",     name: "Cockroach Labs"},
   { slug: "vercel",            name: "Vercel"       },  // [RF]
+  // ── promoted from candidates via verify.js 2026-07-18 ──
+  { slug: "turing",            name: "Turing"       },  // ✅ 28  · remote IT global [RF]
+  { slug: "agoda",             name: "Agoda"        },  // ✅ 273 · relocation support, 70 nationalities
+  // web3 / crypto — verified live
+  { slug: "ripple",            name: "Ripple"       },  // ✅ 140
+  { slug: "gemini",            name: "Gemini"       },  // ✅ 35
+  { slug: "okx",               name: "OKX"          },  // ✅ 315
+  { slug: "bitgo",             name: "BitGo"        },  // ✅ 37
+  { slug: "fireblocks",        name: "Fireblocks"   },  // ✅ 61
+  { slug: "bitpanda",          name: "Bitpanda"     },  // ✅ 51
+  { slug: "bitso",             name: "Bitso"        },  // ✅ 11 · LatAm crypto
+  { slug: "aptoslabs",         name: "Aptos Labs"   },  // ✅ 6
+  { slug: "layerzerolabs",     name: "LayerZero Labs"}, // ✅ 19
 ];
 
 // ── LEVER ─────────────────────────────────────────────────────
@@ -51,6 +64,10 @@ export const LEVER_COMPANIES = [
   { slug: "remofirst", name: "RemoFirst" },  // EOR [RF]
   { slug: "kinsta",    name: "Kinsta"    },  // fully remote [RF]
   { slug: "tala",      name: "Tala",      region: "Africa" },  // ✅ 9 jobs
+  // ── promoted from candidates via verify.js 2026-07-18 ──
+  { slug: "binance",   name: "Binance"   },  // ✅ 279 · 130+ countries [RF]
+  { slug: "anchorage", name: "Anchorage Digital" },  // ✅ 45
+  { slug: "coingecko", name: "CoinGecko" },  // ✅ 4 · [RF]
 ];
 
 // ── ASHBY ──────────────────────────────────────────────────────
@@ -77,6 +94,16 @@ export const ASHBY_COMPANIES = [
   { slug: "deel",         name: "Deel"             },  // EOR [RF]
   { slug: "clipboard",    name: "Clipboard Health" },
   { slug: "mintlify",     name: "Mintlify"         },  // [RF]
+  // ── promoted from candidates via verify.js 2026-07-18 ──
+  { slug: "mercor",       name: "Mercor"           },  // ✅ 70 · AI talent marketplace
+  { slug: "kraken.com",   name: "Kraken"           },  // ✅ 49 · NOTE: slug really does include ".com"
+  { slug: "trm-labs",     name: "TRM Labs"         },  // ✅ 121 · crypto compliance
+  { slug: "uniswap",      name: "Uniswap Labs"     },  // ✅ 10
+  { slug: "ledger",       name: "Ledger"           },  // ✅ 10
+  { slug: "paxos",        name: "Paxos"            },  // ✅ 9
+  { slug: "polygon-labs", name: "Polygon Labs"     },  // ✅ 3
+  { slug: "matter-labs",  name: "Matter Labs"      },  // ✅ 2 · zkSync
+  { slug: "opensea",      name: "OpenSea"          },  // ✅ 1
 ];
 
 // ── WORKABLE ──────────────────────────────────────────────────
@@ -103,27 +130,25 @@ export const SMARTRECRUITERS_COMPANIES = [
 // Most African fintechs below use CUSTOM career pages (no standard ATS) —
 // use the manual upload template for their roles instead.
 export const CANDIDATES_TO_VERIFY = {
-  greenhouse: [
-    { slug: "hashicorp",        name: "HashiCorp"     },  // likely IBM now (acquired)
-    { slug: "toptal",           name: "Toptal"        },
-    { slug: "waveapps",         name: "Wave",          region: "Africa"  },
-    { slug: "smileidentityinc", name: "Smile ID",      region: "Africa"  },
-  ],
-  lever: [
-    { slug: "netlify",    name: "Netlify"     },  // custom page now?
-    { slug: "piggyvest",  name: "PiggyVest",   region: "Nigeria" },
-    { slug: "cowrywise",  name: "Cowrywise",   region: "Nigeria" },
-    { slug: "lendable",   name: "Lendable",    region: "Africa"  },
-  ],
-  ashby: [
-    { slug: "doist",  name: "Doist" },  // async-first [RF] — custom page?
-    { slug: "fincra", name: "Fincra",  region: "Nigeria" },
-    { slug: "nomba",  name: "Nomba",   region: "Nigeria" },
-    { slug: "brass",  name: "Brass",   region: "Nigeria" },
-    { slug: "risevest", name: "Rise",  region: "Nigeria" },
-    { slug: "moove-africa", name: "Moove", region: "Africa" },
-  ],
-  workable: [
-    { slug: "opay", name: "OPay", region: "Nigeria" },
-  ],
+  greenhouse: [],
+  lever: [],
+  ashby: [],
+  workable: [],
 };
+
+/**
+ * PROBED & CONFIRMED DEAD — verify.js run 2026-07-18 (all returned 404).
+ * Do NOT re-add these to ACTIVE without re-probing; the slug is wrong or the
+ * company has moved off that ATS. Listed so we don't waste a future batch
+ * re-testing the same dead ends.
+ *
+ *   greenhouse: hashicorp (IBM acquisition), toptal, waveapps, smileidentityinc
+ *   lever:      netlify, piggyvest, cowrywise, lendable
+ *   ashby:      doist, fincra, nomba, brass, risevest, moove-africa,
+ *               chainlink-labs  <-- slug wrong; Chainlink IS on Ashby, find real slug
+ *   workable:   opay
+ *
+ * LIVE BUT RETURNING 0 JOBS (kept active — they may post again; each costs one
+ * request per run): ashby/deel, workable/{paystack,palmpay,flutterwave},
+ * smartrecruiters/{Andela,MTNNigeria,Bolt,Flutterwave,Interswitch}
+ */
