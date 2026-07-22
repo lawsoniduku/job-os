@@ -37,9 +37,43 @@ export function detectEligibilityRegion(description = "", location = "", regionH
   const loc = location.toLowerCase();
   const t = `${description} ${location}`.toLowerCase();
 
-  // explicit Africa
-  if (any(loc, ["nigeria", "lagos", "abuja"])) return "Nigeria";
-  if (any(t, ["africa", "sub-saharan", "west africa", "east africa", "nairobi", "kenya", "ghana", "accra", "south africa", "kigali", "rwanda"])) return "Africa";
+  // explicit Nigeria — major cities. Checked against LOCATION only (not full
+  // description) to avoid false positives from generic company-marketing copy
+  // ("we serve customers across Nigeria...") — same deliberate precision as
+  // the original 2-city list, just extended to cover far more of the country.
+  if (any(loc, [
+    "nigeria", "lagos", "abuja", "ibadan", "kano", "port harcourt", "benin city",
+    "kaduna", "enugu", "aba", "jos", "ilorin", "onitsha", "warri", "calabar",
+    "uyo", "abeokuta", "akure", "owerri", "zaria", "bauchi", "sokoto",
+    "maiduguri", "makurdi", "lokoja", "gombe", "katsina", "osogbo", "minna",
+  ])) return "Nigeria";
+
+  // explicit Africa — ALL 54 AU member countries + unambiguous major cities.
+  // Checked against full text (t), same as the original 4-country list.
+  // Deliberately EXCLUDES city names that collide with well-known non-African
+  // places (e.g. no bare "Alexandria" — also a US city; no bare "Georgia" —
+  // also a US state) to avoid false positives; country names are used instead
+  // since they're far less ambiguous.
+  if (any(t, [
+    "africa", "sub-saharan", "west africa", "east africa", "north africa", "southern africa",
+    // countries (AU member states)
+    "kenya", "ghana", "south africa", "rwanda", "algeria", "angola", "benin",
+    "botswana", "burkina faso", "burundi", "cabo verde", "cape verde", "cameroon",
+    "central african republic", "chad", "comoros", "democratic republic of the congo",
+    "republic of the congo", "cote d'ivoire", "ivory coast", "djibouti", "egypt",
+    "equatorial guinea", "eritrea", "eswatini", "swaziland", "ethiopia", "gabon",
+    "gambia", "guinea-bissau", "guinea", "lesotho", "liberia", "libya", "madagascar",
+    "malawi", "mali", "mauritania", "mauritius", "morocco", "mozambique", "namibia",
+    "niger", "sao tome", "senegal", "seychelles", "sierra leone", "somalia",
+    "south sudan", "sudan", "tanzania", "togo", "tunisia", "uganda", "zambia", "zimbabwe",
+    // major cities unambiguous enough to be safe on their own
+    "nairobi", "mombasa", "accra", "kumasi", "kigali", "johannesburg", "cape town",
+    "pretoria", "durban", "cairo", "casablanca", "rabat", "tunis", "addis ababa",
+    "dar es salaam", "kampala", "dakar", "lusaka", "harare", "yaounde", "douala",
+    "abidjan", "luanda", "maputo", "gaborone", "windhoek", "algiers", "tripoli",
+    "khartoum", "kinshasa", "lome", "conakry", "bamako", "niamey", "ndjamena",
+    "antananarivo", "bujumbura", "freetown", "monrovia", "banjul",
+  ])) return "Africa";
 
   // worldwide ONLY when it's in the LOCATION (not company marketing copy)
   if (any(loc, ["worldwide", "anywhere in the world", "anywhere", "globally distributed",
