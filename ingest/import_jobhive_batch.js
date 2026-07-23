@@ -56,6 +56,7 @@ const SOURCES = {
 
 const args = process.argv.slice(2);
 const dryRun = args.includes("--dry-run");
+const repairMode = args.includes("--repair-regions");
 const tierArg = args.find(a => a.startsWith("--tier="))?.split("=")[1];
 const fromArg = args.find(a => a.startsWith("--from="))?.split("=")[1];
 
@@ -82,6 +83,7 @@ function runOne(ats) {
   return new Promise((resolve) => {
     const cliArgs = [IMPORTER, ats];
     if (dryRun) cliArgs.push("--dry-run");
+    if (repairMode) cliArgs.push("--repair-regions");
     const child = spawn(process.execPath, cliArgs, { stdio: "inherit", env: process.env });
     child.on("close", (code) => resolve({ ats, code }));
     child.on("error", (err) => resolve({ ats, code: 1, err }));

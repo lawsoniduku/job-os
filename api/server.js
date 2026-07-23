@@ -749,6 +749,43 @@ function buildFallbackTips(job) {
   };
 }
 
+// ── DIGEST SUBSCRIPTION ──────────────────────────────────────────────
+// Lightweight, no-login email capture for the weekly "new eligible roles"
+// digest. Rate-limited with the same generous search limiter — this is a
+// simple insert, not an expensive AI call.
+app.post("/digest/subscribe", searchLimit, async (req, res) => {
+  try {
+    const { email, country, role_cluster } = req.body || {};
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: "A valid email is required" });
+    }
+    const { error } = await supabase
+      .from("digest_subscribers")
+      .upsert(
+        { email: email.trim().toLowerCase(), country: country || null, role_cluster: role_cluster || null },
+        { onConflict: "email" }
+      );
+    if (error) throw new Error(error.message);
+    res.json({ ok: true, message: "Subscribed — first digest arrives next Monday." });
+  } catch (e) {
+    console.error("digest/subscribe error:", e.message);
+    res.status(500).json({ error: "Could not subscribe right now. Try again shortly." });
+  }
+});
+
+app.get("/digest/unsubscribe", async (req, res) => {
+  try {
+    const { token } = req.query;
+    if (!token) return res.status(400).send("Missing unsubscribe token.");
+    const { error } = await supabase.from("digest_subscribers").delete().eq("unsubscribe_token", token);
+    if (error) throw new Error(error.message);
+    res.send("You've been unsubscribed from the weekly digest. Sorry to see you go.");
+  } catch (e) {
+    console.error("digest/unsubscribe error:", e.message);
+    res.status(500).send("Could not unsubscribe right now. Try again shortly.");
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`\n🚀 Job Copilot v3.1 → http://localhost:${PORT}`);

@@ -23,20 +23,38 @@
  *   4. Upserts survivors in batches, same onConflict logic as pipeline.js.
  *
  * USAGE:
- *   node --env-file=.env ingest/import_jobhive.js <ats> [--limit N] [--dry-run]
- *     <ats>       one of: ashby greenhouse lever workable icims workday oracle successfactors ...
- *     --limit N   stop after N rows KEPT (good for a first test)
- *     --dry-run   filter + count only, write nothing
+ *   node --env-file=.env ingest/import_jobhive.js <ats> [--limit N] [--dry-run] [--repair-regions]
+ *     <ats>              one of: ashby greenhouse lever workable icims workday oracle successfactors ...
+ *     --limit N          stop after N rows KEPT (good for a first test)
+ *     --dry-run          filter + count only, write nothing
+ *     --repair-regions   ONE-OFF REPAIR MODE: overwrite existing rows instead of
+ *                        skipping them. Use this to fix historical rows whose
+ *                        eligibility_region was wrongly tagged before the
+ *                        country_iso region-hint fix (2026-07-22) — normal runs
+ *                        use ignoreDuplicates:true and silently skip anything
+ *                        already in the DB, so a plain re-run does NOT correct
+ *                        old rows. This flag is the only way to actually fix them,
+ *                        because country_iso only exists in the source CSV, not
+ *                        in our jobs table — reclassify.js cannot do this either.
  *
  * RECOMMENDED FIRST RUN (smallest, safest slice, dry run):
  *   node --env-file=.env ingest/import_jobhive.js ashby --limit 200 --dry-run
+ *
+ * FIX HISTORICAL ROWS (run once per ATS type you've already imported):
+ *   node --env-file=.env ingest/import_jobhive.js icims --repair-regions
+ *   node --env-file=.env ingest/import_jobhive.js phenom --repair-regions
+ *   node --env-file=.env ingest/import_jobhive.js recruitee --repair-regions
+ *   node --env-file=.env ingest/import_jobhive.js ycombinator --repair-regions
+ *   node --env-file=.env ingest/import_jobhive.js bamboohr --repair-regions
+ *   node --env-file=.env ingest/import_jobhive.js teamtailor --repair-regions
+ *   (...and any other ATS types you've run through the batch runner)
  *
  * Then check DB size in Supabase before running larger slices.
  */
 
 import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
-import { createInterface } from "node:readline";
+import { parse } from "csv-parse";
 import { Readable } from "node:stream";
 import { normalizeJob } from "./core/normalize.js";
 import { tagJob } from "./core/tag.js";
@@ -63,6 +81,12 @@ const ats = args[0];
 const dryRun = args.includes("--dry-run");
 const limitIdx = args.indexOf("--limit");
 const keepLimit = limitIdx > -1 ? parseInt(args[limitIdx + 1], 10) : Infinity;
+// One-off repair mode: overwrite existing rows (matched by apply_url) instead
+// of silently skipping them. Needed because eligibility_region can only be
+// correctly re-derived from country_iso, which lives in the SOURCE CSV, not
+// in our DB — so fixing already-imported rows requires re-reading the source
+// and actually updating, not just re-classifying what's already stored.
+const repairMode = args.includes("--repair-regions");
 
 if (!ats || ats.startsWith("--")) {
   console.error("Usage: node --env-file=.env ingest/import_jobhive.js <ats> [--limit N] [--dry-run]");
@@ -89,35 +113,18 @@ if (BANNED.has(ats)) {
   process.exit(1);
 }
 
-// ── tiny CSV line parser (handles quoted fields with commas/newlines-in-quotes
-//    are NOT supported by line streaming; jobhive CSVs escape newlines, but if a
-//    row breaks we skip it rather than corrupt the batch). ──
-function parseCsvLine(line) {
-  const out = [];
-  let cur = "";
-  let inQ = false;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (inQ) {
-      if (c === '"' && line[i + 1] === '"') { cur += '"'; i++; }
-      else if (c === '"') inQ = false;
-      else cur += c;
-    } else {
-      if (c === '"') inQ = true;
-      else if (c === ",") { out.push(cur); cur = ""; }
-      else cur += c;
-    }
-  }
-  out.push(cur);
-  return out;
-}
-
-// Map a jobhive CSV row (by header) into the shape normalizeJob expects.
-function rowToRaw(headerIdx, cols) {
-  const g = (name) => {
-    const i = headerIdx[name];
-    return i == null ? "" : (cols[i] || "").trim();
-  };
+// Map a jobhive CSV record (an object keyed by lowercased header, from
+// csv-parse with columns:true) into the shape normalizeJob expects.
+//
+// A real CSV parser (not line-splitting) is required here: job descriptions
+// routinely contain literal embedded newlines inside quoted fields. Splitting
+// on "\n" (as a naive readline-based approach does) breaks those rows into
+// garbage fragments, which then land in the wrong columns — this is exactly
+// what caused "invalid input syntax for type numeric" errors on Recruitee's
+// richer multi-paragraph descriptions (e.g. a fragment like "Texas" or a
+// paragraph of description text ending up where salary_min was expected).
+function rowToRaw(record) {
+  const g = (name) => (record[name] || "").trim();
   // REAL jobhive v2.0 schema (from manifest stats.schema_columns):
   //   url, title, company, ats_type, ats_id, location, is_remote, salary_min,
   //   salary_max, salary_currency, salary_period, salary_summary,
@@ -174,7 +181,14 @@ async function upsertBatch(batch, attempt = 1) {
   try {
     const { error } = await supabase
       .from("jobs")
-      .upsert(batch, { onConflict: "apply_url", ignoreDuplicates: true });
+      // repairMode=false (normal imports): ignoreDuplicates=true — never touch
+      //   a row we already have, just add genuinely new ones. Safe, cheap.
+      // repairMode=true (one-off fix): ignoreDuplicates=false — a REAL upsert,
+      //   overwriting existing rows with freshly computed values (including
+      //   the now-correct eligibility_region). This is what actually fixes
+      //   historical rows; simply re-running a normal import does nothing to
+      //   them because ignoreDuplicates:true silently skips existing apply_urls.
+      .upsert(batch, { onConflict: "apply_url", ignoreDuplicates: !repairMode });
     if (error) throw new Error(error.message);
     return true;
   } catch (e) {
@@ -203,9 +217,18 @@ async function run() {
     process.exit(1);
   }
 
-  const rl = createInterface({ input: Readable.fromWeb(res.body), crlfDelay: Infinity });
+  // csv-parse handles quoted multi-line fields correctly (a job description
+  // with real embedded newlines stays as ONE record, not split into garbage
+  // fragments). columns: yields objects keyed by our own lowercased header.
+  const parser = Readable.fromWeb(res.body).pipe(
+    parse({
+      columns: (hdr) => hdr.map((h) => h.trim().toLowerCase()),
+      skip_empty_lines: true,
+      relax_column_count: true,
+      relax_quotes: true,
+    })
+  );
 
-  let headerIdx = null;
   let scanned = 0, keptEligible = 0, notEnglish = 0, wrongRegion = 0, kept = 0, upserted = 0, failed = 0, fastRejected = 0;
   const failedRows = []; // rows that failed mid-stream, retried once more after stream ends
   let batch = [];
@@ -213,22 +236,13 @@ async function run() {
 
   let streamError = null;
   try {
-    for await (const line of rl) {
-      if (!line.trim()) continue;
-      const cols = parseCsvLine(line);
-
-      if (headerIdx === null) {
-        headerIdx = {};
-        cols.forEach((h, i) => { headerIdx[h.trim().toLowerCase()] = i; });
-        continue;
-      }
-
+    for await (const record of parser) {
       scanned++;
       if (scanned % 25000 === 0) {
         process.stdout.write(`  …scanned ${scanned} · kept ${kept} (eligible & English)\n`);
       }
 
-      const raw = rowToRaw(headerIdx, cols);
+      const raw = rowToRaw(record);
       if (!raw.title || !raw.apply_url) continue;
 
       // 0) CHEAP pre-filter on country_iso — kills the bulk (on-site US/EU/Asia)
@@ -239,7 +253,25 @@ async function run() {
       if (!looksEnglishJob(raw)) { notEnglish++; continue; }
 
       // 2) normalize + tag (gives us eligibility_region using YOUR existing rules)
-      let job = normalizeJob(raw, { source: "jobhive", ats });
+      // Derive a CONFIDENT region hint from country_iso — jobhive's structured,
+      // already-validated location signal — instead of letting every row fall
+      // through to free-text keyword matching (which only recognizes a small
+      // hand-curated list of city/country names and silently misses anything
+      // not on that list, e.g. Ibadan, Kano, Enugu, or African countries beyond
+      // Nigeria/Kenya/Ghana/Rwanda/South Africa). A structured ISO code is a
+      // strong positive signal here and should short-circuit the guesswork via
+      // detectEligibilityRegion's existing regionHint mechanism.
+      //
+      // We deliberately do NOT set a hint for foreign+remote rows (e.g. US +
+      // is_remote=true) — that ambiguity (genuinely global vs. US-only-remote)
+      // is exactly what the free-text classifier is designed to resolve by
+      // actually reading the description, and jumping to a conclusion from
+      // country_iso alone there would be guessing in the other direction.
+      let regionHint = null;
+      if (raw._country_iso === "NG") regionHint = "Nigeria";
+      else if (AFRICAN_ISO.has(raw._country_iso)) regionHint = "Africa";
+
+      let job = normalizeJob(raw, { source: "jobhive", ats, region: regionHint });
       if (!job) continue;
       job = tagJob(job);
 
@@ -255,6 +287,15 @@ async function run() {
       // fix as pipeline.js line ~107. Without this, EVERY row fails upsert
       // with "Could not find the '_region_hint' column of 'jobs' in the schema cache".
       const { _region_hint, ...row } = job;
+      // Stamp last_seen_at explicitly — normalizeJob() doesn't set this column
+      // (only pipeline.js's separate post-upsert step does, for its own live
+      // sources). Without this, every jobhive row would have last_seen_at=NULL
+      // forever, making it invisible to "WHERE last_seen_at < ..." prune
+      // queries (NULL comparisons are neither true nor false in SQL) — the
+      // row would never be re-stamped AND never age out. Bulk-imported jobs
+      // are a one-time snapshot, not re-verified daily, so stamp it once at
+      // import time and let it age from there like anything else.
+      row.last_seen_at = new Date().toISOString();
       batch.push(row);
 
       if (batch.length >= BATCH) {

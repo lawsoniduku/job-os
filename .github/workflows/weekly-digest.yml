@@ -1,0 +1,35 @@
+name: Weekly Job Digest
+
+# Sends the weekly "new eligible roles" email digest to subscribers.
+# Runs once a week — a digest is inherently a weekly concept, no reason for
+# more frequent sends.
+#
+# SETUP REQUIRED before this works:
+#   1. Sign up free at resend.com, get an API key
+#   2. GitHub repo -> Settings -> Secrets and variables -> Actions -> New secret:
+#        RESEND_API_KEY = (your Resend key)
+#   Uses the SAME SUPABASE_URL / SUPABASE_KEY secrets already configured.
+
+on:
+  schedule:
+    - cron: "0 8 * * 1"   # Monday 08:00 UTC ≈ 9am Lagos — start-of-week timing
+  workflow_dispatch: {}    # lets you click "Run workflow" to test manually
+
+jobs:
+  send-digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install
+      - name: Send weekly digest
+        run: node ingest/send_digest.js
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          SITE_URL: https://job-os-tau.vercel.app
