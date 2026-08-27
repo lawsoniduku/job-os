@@ -64,6 +64,37 @@ function safeFilterValue(s = "") {
   return s.replace(/[,().*:%\\]/g, " ").replace(/\s+/g, " ").trim();
 }
 
+// ── Alias set for retrieval ──────────────────────────────────────────────
+// Retrieval used to take only the FIRST 10 aliases, while the UI told the
+// user "<N> variants … I searched all of them". 35 of 36 clusters have more
+// than 10 aliases (Software Engineering has 58), so that claim was false and
+// the long tail was only reachable via the stored role_cluster — which is
+// exactly the label we know is often wrong.
+//
+// The fix isn't just "raise the cap". Because these are `ilike %alias%`
+// substring filters, a SHORTER alias already subsumes every longer one that
+// contains it — "software engineer" matches "senior software engineer" too.
+// So we keep only the minimal covering set: sort short-to-long, drop any
+// alias that contains one we've already kept. That widens real coverage
+// while shrinking the number of filters in the URL.
+// 55 fully covers every cluster — the largest minimal set is Software
+// Engineering at 51 — so "I searched all of them" in the UI is now literally
+// true for all 36 clusters (verified; it was false for 35 of them before).
+// At ~35 chars per filter that's under 2KB of query string, well inside
+// PostgREST's limits.
+const MAX_ALIAS_FILTERS = 55;
+// How many rows we deeply score per search. 1000 is not arbitrary: it's
+// PostgREST's max-rows ceiling, so asking for more silently returns 1000
+// anyway. Was 500 — and the cap was binding on EVERY query.
+const EVAL_LIMIT = 1000;
+function minimalAliasSet(aliases = []) {
+  const sorted = [...new Set(aliases.map((a) => a.toLowerCase().trim()).filter(Boolean))]
+    .sort((a, b) => a.length - b.length);
+  const kept = [];
+  for (const a of sorted) if (!kept.some((k) => a.includes(k))) kept.push(a);
+  return kept;
+}
+
 // ── Reported-dead suppression ────────────────────────────────────────────
 // job_reports was write-only: the UI said "✓ Thanks — flagged for review"
 // and nothing ever read the table, so a job a user had already flagged as
@@ -158,9 +189,13 @@ app.get("/ai/search", searchLimit, async (req, res) => {
     console.log(`🔍 "${q}" -> cluster=${intent.cluster} country=${intent.locationCountry} remote=${intent.remoteOnly}`);
 
     // --- retrieval: prefer cluster, fall back to safe keyword ilike ---
-    let dbQuery = supabase.from("jobs").select(JOB_COLUMNS);
+    // count:"exact" gives the TRUE size of the matching pool, independent of
+    // the row limit below — so the UI can report what was really searched
+    // instead of echoing the LIMIT constant back at the user.
+    let dbQuery = supabase.from("jobs").select(JOB_COLUMNS, { count: "exact" });
     if (intent.cluster) {
-      const aliases = getAliasesForCluster(intent.cluster).slice(0, 10).map(safeFilterValue).filter(Boolean);
+      const aliases = minimalAliasSet(getAliasesForCluster(intent.cluster))
+        .map(safeFilterValue).filter(Boolean).slice(0, MAX_ALIAS_FILTERS);
       const titleFilters = aliases.map((a) => `title.ilike.%${a}%`).join(",");
       dbQuery = dbQuery.or(`role_cluster.eq.${safeFilterValue(intent.cluster)},${titleFilters}`);
     } else if (intent.keywords.length > 0) {
@@ -205,7 +240,13 @@ app.get("/ai/search", searchLimit, async (req, res) => {
     // Order by recency BEFORE the limit.
     dbQuery = dbQuery.order("posted_at", { ascending: false, nullsFirst: false });
 
-    const { data: rawJobsAll, error } = await dbQuery.limit(500);
+    // Raised from 500. Every single query used to hit exactly 500 — the cap
+    // was always binding, so for a large cluster we were ranking only the
+    // newest ~6% of the matching pool and a strong match posted 5 weeks ago
+    // (still live) could never appear. Scoring is pure in-process JS; the
+    // real cost is transferring descriptions, so this is a balance rather
+    // than "remove the cap".
+    const { data: rawJobsAll, error, count: poolCount } = await dbQuery.limit(EVAL_LIMIT);
     if (error) return res.status(500).json({ error: error.message });
     if (!rawJobsAll?.length) return res.json({ query: q, total: 0, data: [], message: "No jobs found. Try a broader query." });
 
@@ -267,6 +308,15 @@ app.get("/ai/search", searchLimit, async (req, res) => {
       },
       total: totalAvailable, offset, limit, has_more: hasMore,
       excluded_count: excludedCount, summary, data: results,
+      // scanned = the TRUE size of the matching pool for this query.
+      // The UI used to compute this as total + excluded, which always came
+      // to exactly EVAL_LIMIT — i.e. it displayed a hardcoded constant as
+      // evidence of thoroughness. For a product whose whole brand is honesty
+      // about what was checked, that number has to be real.
+      // evaluated = how many of them we deeply scored (capped at EVAL_LIMIT);
+      // when it's below `scanned`, the pool was larger than one pass.
+      scanned: poolCount ?? scored.length,
+      evaluated: scored.length,
     });
   } catch (err) { console.error(err); res.status(500).json({ error: err.message }); }
 });

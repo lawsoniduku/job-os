@@ -228,7 +228,15 @@ export default function Copilot({ shared, active, initialQuery, onInitialConsume
         variants: res.intent?.variants || [],
         total: res.total,
         excluded: res.excluded_count || 0,
-        scanned: (res.total || 0) + (res.excluded_count || 0),
+        // How many listings we actually eligibility-checked. This used to be
+        // total+excluded, which always summed to the backend's row cap — a
+        // hardcoded constant presented as evidence of thoroughness.
+        // Deliberately `evaluated` and NOT the raw pool size (`res.scanned`):
+        // the pool can be several thousand while we deeply check the most
+        // recent 1000, and quoting the bigger number would just be a
+        // different lie. evaluated = excluded + eligible exactly, so all
+        // three figures on the card reconcile and each one is true.
+        scanned: res.evaluated ?? ((res.total || 0) + (res.excluded_count || 0)),
         jobs: res.data || [],
         offset: (res.data || []).length,
         hasMore: !!res.has_more,
