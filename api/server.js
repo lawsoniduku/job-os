@@ -168,7 +168,7 @@ const LEAN_TTL_MS = 10 * 60_000;
 async function useLeanColumns() {
   if (Date.now() - _lean.at < LEAN_TTL_MS) return _lean.on;
   try {
-    const { count: total } = await supabase.from("jobs").select("*", { count: "estimated", head: true });
+    const { count: total } = await supabase.from("jobs").select("*", { count: "exact", head: true });
     // Count rows whose signals match the CURRENT logic version — not merely
     // non-null. Checking null-ness was a real bug: after a SIGNALS_VERSION
     // bump every row still has a (stale) blob, so the probe would report full
@@ -177,16 +177,25 @@ async function useLeanColumns() {
     // longer being fetched. Version-aware means a bump correctly drops
     // coverage to 0 and search falls back to the safe path until the backfill
     // catches up.
+    // MUST be an exact count. "estimated"/"planned" ask the planner, which
+    // cannot estimate a JSON-path filter at all: with all 48,673 rows
+    // populated it returned 1001 (estimated) and 243 (planned), so coverage
+    // read as ~2% and the lean payload silently never engaged. This runs once
+    // per 10 minutes, so ~2s of exact count is irrelevant — unlike the
+    // per-search count, which is why that one was removed entirely.
     const { count: current, error } = await supabase.from("jobs")
-      .select("*", { count: "estimated", head: true })
+      .select("*", { count: "exact", head: true })
       .eq("elig_signals->>v", String(SIGNALS_VERSION));
     if (error) throw new Error(error.message);
     const covered = total > 0 ? (current || 0) / total : 0;
     const on = covered >= 0.95;
-    if (on !== _lean.on) {
+    // Log the FIRST evaluation as well as any change. Logging only on change
+    // meant a probe that computed `false` (matching the initial value) said
+    // nothing at all — which is exactly how the bug above stayed invisible.
+    if (on !== _lean.on || _lean.at === 0) {
       console.log(on
         ? `✅ lean search payload ON — elig_signals ${(covered * 100).toFixed(1)}% populated (descriptions no longer fetched)`
-        : `ℹ️  lean payload OFF — elig_signals only ${(covered * 100).toFixed(1)}% populated; run ingest/reclassify.js`);
+        : `ℹ️  lean payload OFF — elig_signals only ${(covered * 100).toFixed(1)}% populated; run ingest/backfill_signals.js`);
     }
     _lean = { on, at: Date.now() };
   } catch {
@@ -259,14 +268,14 @@ app.get("/ai/search", searchLimit, async (req, res) => {
     console.log(`🔍 "${q}" -> cluster=${intent.cluster} country=${intent.locationCountry} remote=${intent.remoteOnly}`);
 
     // --- retrieval: prefer cluster, fall back to safe keyword ilike ---
-    // count:"planned" uses the planner's estimate instead of counting every
-    // matching row. An exact count over a 55-way ILIKE OR cost ~1.3s per
-    // search — real money for a figure the UI doesn't even display (it shows
-    // `evaluated`, the rows we actually checked, because that's the honest
-    // number). An estimate is plenty for the `scanned` diagnostic field.
+    // NO count at all. An exact count over a 55-way ILIKE OR cost ~1.3s per
+    // search, and the planner-estimated alternative returned numbers off by
+    // two orders of magnitude — worse than useless for a figure that was only
+    // ever a diagnostic. The UI shows `evaluated` (rows actually checked),
+    // which is both free and the honest number.
     const lean = await useLeanColumns();
     let dbQuery = supabase.from("jobs")
-      .select(lean ? JOB_COLUMNS_LEAN : JOB_COLUMNS_FULL, { count: "planned" });
+      .select(lean ? JOB_COLUMNS_LEAN : JOB_COLUMNS_FULL);
     if (intent.cluster) {
       const aliases = minimalAliasSet(getAliasesForCluster(intent.cluster))
         .map(safeFilterValue).filter(Boolean).slice(0, MAX_ALIAS_FILTERS);
@@ -320,7 +329,7 @@ app.get("/ai/search", searchLimit, async (req, res) => {
     // (still live) could never appear. Scoring is pure in-process JS; the
     // real cost is transferring descriptions, so this is a balance rather
     // than "remove the cap".
-    const { data: rawJobsAll, error, count: poolCount } = await dbQuery.limit(EVAL_LIMIT);
+    const { data: rawJobsAll, error } = await dbQuery.limit(EVAL_LIMIT);
     if (error) return res.status(500).json({ error: error.message });
     if (!rawJobsAll?.length) return res.json({ query: q, total: 0, data: [], message: "No jobs found. Try a broader query." });
 
@@ -382,14 +391,13 @@ app.get("/ai/search", searchLimit, async (req, res) => {
       },
       total: totalAvailable, offset, limit, has_more: hasMore,
       excluded_count: excludedCount, summary, data: results,
-      // scanned = the TRUE size of the matching pool for this query.
-      // The UI used to compute this as total + excluded, which always came
-      // to exactly EVAL_LIMIT — i.e. it displayed a hardcoded constant as
-      // evidence of thoroughness. For a product whose whole brand is honesty
-      // about what was checked, that number has to be real.
-      // evaluated = how many of them we deeply scored (capped at EVAL_LIMIT);
-      // when it's below `scanned`, the pool was larger than one pass.
-      scanned: poolCount ?? scored.length,
+      // evaluated = how many listings we actually eligibility-checked. The UI
+      // used to compute this as total + excluded, which always came to
+      // exactly the row cap — a hardcoded constant presented as evidence of
+      // thoroughness. This is the real figure, and excluded + eligible sums
+      // to it exactly, so every number on the card reconciles.
+      // (There is deliberately no `scanned` pool size: an exact count cost
+      // ~1.3s per search and the planner's estimate was off by 100x.)
       evaluated: scored.length,
     });
   } catch (err) { console.error(err); res.status(500).json({ error: err.message }); }

@@ -1470,12 +1470,14 @@ export function checkEligibility(job, country) {
   const region = (job.eligibility_region || "").toLowerCase();
   const isAfrican = country === "africa" || AFRICAN_COUNTRIES.has(country);
   // Everything that would have required the full description.
+  // NOTE on sig._degraded (neither stored signals nor a description): we do
+  // NOT bail out here. The location/title/region checks below need no
+  // description at all, and they are the decisive ones — a role whose
+  // location field says "Mexico City" is excludable regardless of what its
+  // body says. Returning early threw those away and made unjudgeable rows
+  // MORE permissive than judgeable ones, which is backwards. The degraded
+  // flag is applied only at the final description-dependent fallback.
   const sig = signalsFor(job);
-
-  // Neither stored signals nor a description — we genuinely cannot judge this
-  // one. Say so at the lowest confidence rather than inventing a verdict.
-  if (sig._degraded)
-    return { eligible: true, confidence: "possible", reason: "Eligibility not yet verified for this listing" };
 
   // Broad-region targets → their positive location signals
   const REGION_POSITIVE = {
@@ -1598,7 +1600,12 @@ export function checkEligibility(job, country) {
   if (lockAppliesTo(lock, country))
     return E("excluded", `Remote, but ${jurisdictionReason(lock)}`, false);
 
-  return E("possible", "Remote — region unconfirmed");
+  // Bare remote, nothing decisive found. Distinguish "we read the posting and
+  // it said nothing" from "we had nothing to read" — the second is a gap in
+  // our data, not a property of the job, and shouldn't look like a verdict.
+  return sig._degraded
+    ? E("possible", "Eligibility not yet verified for this listing")
+    : E("possible", "Remote — region unconfirmed");
 }
 
 // ============================================================
