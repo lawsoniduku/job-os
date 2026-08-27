@@ -307,23 +307,18 @@ async function run() {
       if (!looksEnglishJob(raw)) { notEnglish++; continue; }
 
       // 2) normalize + tag (gives us eligibility_region using YOUR existing rules)
-      // Derive a CONFIDENT region hint from country_iso — jobhive's structured,
-      // already-validated location signal — instead of letting every row fall
-      // through to free-text keyword matching (which only recognizes a small
-      // hand-curated list of city/country names and silently misses anything
-      // not on that list, e.g. Ibadan, Kano, Enugu, or African countries beyond
-      // Nigeria/Kenya/Ghana/Rwanda/South Africa). A structured ISO code is a
-      // strong positive signal here and should short-circuit the guesswork via
-      // detectEligibilityRegion's existing regionHint mechanism.
-      //
-      // We deliberately do NOT set a hint for foreign+remote rows (e.g. US +
-      // is_remote=true) — that ambiguity (genuinely global vs. US-only-remote)
-      // is exactly what the free-text classifier is designed to resolve by
-      // actually reading the description, and jumping to a conclusion from
-      // country_iso alone there would be guessing in the other direction.
+      // Only Nigeria gets a hard regionHint here. We used to also collapse
+      // every OTHER African country's ISO into a blanket "Africa" hint, but
+      // that was a real bug: a role restricted to e.g. Algeria-only got
+      // labeled "Africa" and shown to Nigerian candidates as eligible, since
+      // "Africa" is treated as blanket-eligible for any African-country
+      // search. A country isn't thereby open to Nigeria just because it's on
+      // the same continent. For non-Nigeria countries we pass countryIso
+      // through instead (below) and let detectEligibilityRegion's own text +
+      // structured-fallback logic decide — it already knows the difference
+      // between genuine pan-African language and a single named country.
       let regionHint = null;
       if (raw._country_iso === "NG") regionHint = "Nigeria";
-      else if (AFRICAN_ISO.has(raw._country_iso)) regionHint = "Africa";
 
       let job = normalizeJob(raw, { source: "jobhive", ats, region: regionHint, countryIso: raw._country_iso });
       if (!job) continue;

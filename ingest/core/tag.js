@@ -48,14 +48,29 @@ export function detectEligibilityRegion(description = "", location = "", regionH
     "maiduguri", "makurdi", "lokoja", "gombe", "katsina", "osogbo", "minna",
   ])) return "Nigeria";
 
-  // explicit Africa — ALL 54 AU member countries + unambiguous major cities.
-  // Checked against full text (t), same as the original 4-country list.
+  // A SPECIFIC non-Nigeria African country/city — checked BEFORE the generic
+  // pan-African check below, deliberately. "africa" as a bare substring
+  // appears INSIDE "South Africa", so checking the generic bucket first was
+  // itself a bug: "General Manager of South Africa and Kenya" and Tanzania
+  // postings ("HQ Country Tanzania") were still coming out as "Africa"
+  // (pan-African, Nigeria included) even after specific-country names were
+  // added below, because the broad "africa"/"sub-saharan" match fired first
+  // and short-circuited before this block ever ran. Most-specific-first.
+  //
+  // A named single country means the role is restricted to THAT country, not
+  // open pan-African — conflating it with the "Africa" bucket was the
+  // original bug: a job explicitly "remote, Algeria only" was being shown to
+  // Nigerian candidates as eligible, because both "Algeria" and genuine
+  // pan-African postings landed in the same "Africa" tag, and the search
+  // pre-filter treats "Africa" as blanket-eligible for any African-country
+  // search. Route these to "Regional" instead — the same honest,
+  // excluded-from-eligibility bucket already used for a named Europe/LatAm/
+  // Oceania location (see the `any(loc, [...])` block below).
   // Deliberately EXCLUDES city names that collide with well-known non-African
   // places (e.g. no bare "Alexandria" — also a US city; no bare "Georgia" —
   // also a US state) to avoid false positives; country names are used instead
   // since they're far less ambiguous.
   if (any(t, [
-    "africa", "sub-saharan", "west africa", "east africa", "north africa", "southern africa",
     // countries (AU member states)
     "kenya", "ghana", "south africa", "rwanda", "algeria", "angola", "benin",
     "botswana", "burkina faso", "burundi", "cabo verde", "cape verde", "cameroon",
@@ -73,6 +88,13 @@ export function detectEligibilityRegion(description = "", location = "", regionH
     "abidjan", "luanda", "maputo", "gaborone", "windhoek", "algiers", "tripoli",
     "khartoum", "kinshasa", "lome", "conakry", "bamako", "niamey", "ndjamena",
     "antananarivo", "bujumbura", "freetown", "monrovia", "banjul",
+  ])) return "Regional";
+
+  // TRUE pan-African language only — these genuinely mean "open across the
+  // continent" (so Nigeria is included). Checked against full text (t), and
+  // only reached once we know no single specific country matched above.
+  if (any(t, [
+    "africa", "sub-saharan", "west africa", "east africa", "north africa", "southern africa",
   ])) return "Africa";
 
   // worldwide ONLY when it's in the LOCATION (not company marketing copy)

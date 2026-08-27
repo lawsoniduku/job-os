@@ -52,12 +52,37 @@ async function run() {
   const clusterAfter = {};
 
   while (true) {
-    const { data: rows, error } = await supabase
-      .from("jobs")
-      .select("id, title, description, location, role_cluster, eligibility_region, country_iso")
-      .range(from, from + PAGE - 1);
-
-    if (error) { console.log("❌ fetch:", error.message); break; }
+    // Retry the page fetch itself — a dropped connection here used to abort
+    // the ENTIRE run after whatever page it died on (seen in practice: died
+    // on page 2 of 60, so 98% of rows silently never got reclassified). Same
+    // backoff shape as upsertBatch() in import_jobhive.js.
+    let rows = null, fetchErr = null;
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      const { data, error } = await supabase
+        .from("jobs")
+        .select("id, title, description, location, role_cluster, eligibility_region, country_iso")
+        // .order() is required for .range() pagination to be stable — without
+        // it Postgres/PostgREST doesn't guarantee row order is consistent
+        // across separate page fetches, and this script UPDATEs rows between
+        // page fetches (which can itself perturb implicit ordering). Without
+        // a stable order, some rows can silently never appear in ANY page —
+        // confirmed in practice: one row was still un-reclassified after two
+        // full "processed all 59571 rows" runs.
+        .order("id")
+        .range(from, from + PAGE - 1);
+      if (!error) { rows = data; fetchErr = null; break; }
+      fetchErr = error;
+      console.log(`  ⚠️  page fetch failed (attempt ${attempt}/5): ${error.message}`);
+      await sleep(1500 * attempt);
+    }
+    if (fetchErr) {
+      // Skip this page rather than abandoning the whole run — one stubborn
+      // page shouldn't cost us the other ~58. Re-running the script later
+      // (safe to do — see docstring) will retry whatever got skipped.
+      console.log(`❌ fetch: giving up on rows ${from}-${from + PAGE - 1} after 5 tries: ${fetchErr.message} — skipping this page`);
+      from += PAGE;
+      continue;
+    }
     if (!rows || rows.length === 0) break;
 
     for (const row of rows) {
