@@ -127,6 +127,11 @@ export function normalizeJob(raw, meta = {}) {
     salary_min: raw.salary_min || null,
     salary_max: raw.salary_max || null,
     raw_json: meta.keepRaw ? raw.raw || raw : null,
+    // country_iso is a REAL persisted column, not internal metadata. Storing
+    // the structured country code means region labels can be re-derived later
+    // with pure SQL / reclassify.js, without re-downloading source CSVs.
+    // NULL is meaningful: "no anchored country" = genuinely location-agnostic.
+    country_iso: (meta.countryIso || raw.country_iso || "").toUpperCase() || null,
     _region_hint: meta.region || null,
   };
 }

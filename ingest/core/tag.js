@@ -32,7 +32,7 @@ export function detectRemoteType(location = "", description = "") {
 }
 
 // Coarse, boundary-aware region label persisted to eligibility_region.
-export function detectEligibilityRegion(description = "", location = "", regionHint = null) {
+export function detectEligibilityRegion(description = "", location = "", regionHint = null, countryIso = null) {
   if (regionHint) return regionHint; // connector already knew (e.g. African seed)
   const loc = location.toLowerCase();
   const t = `${description} ${location}`.toLowerCase();
@@ -96,6 +96,27 @@ export function detectEligibilityRegion(description = "", location = "", regionH
   if (any(t, ["eu only", "europe only"])) return "EU Only";
 
   if (any(t, ["worldwide", "work from anywhere", "globally distributed", "any country"])) return "Global";
+
+  // STRUCTURED FALLBACK — only reached when the text gave us nothing decisive.
+  // Sources like jobhive provide a validated country_iso column; a job with
+  // location:"Remote" + country_iso:"US" matched none of the location-keyword
+  // checks above and would otherwise land in the ambiguous "Remote" bucket
+  // (rendered as "region unconfirmed"), which is the dominant, least useful
+  // outcome. Deliberately placed AFTER every Global/worldwide check so a
+  // genuinely open role posted by a US company is still correctly Global —
+  // we only name the country when nothing else identified the job.
+  if (countryIso) {
+    const iso = countryIso.toUpperCase();
+    if (iso === "US") return "US";
+    if (iso === "GB") return "UK";
+    if (iso === "CA") return "Canada";
+    if (["CN", "HK", "TW"].includes(iso)) return "China";
+    if (["JP", "KR", "SG", "IN", "PH", "VN", "ID", "MY", "TH", "PK", "BD"].includes(iso)) return "Asia";
+    // Everything else concrete and non-African (Europe, LatAm, Oceania, ME…)
+    // -> "Regional": honestly named, and excluded by the eligibility filter.
+    if (iso.length === 2) return "Regional";
+  }
+
   if (any(t, ["remote"])) return "Remote";
   return "Unknown";
 }
@@ -108,6 +129,6 @@ export function tagJob(job) {
     department,
     seniority: detectSeniority(job.title, job.description),
     remote_type: detectRemoteType(job.location, job.description),
-    eligibility_region: detectEligibilityRegion(job.description, job.location, job._region_hint),
+    eligibility_region: detectEligibilityRegion(job.description, job.location, job._region_hint, job.country_iso),
   };
 }

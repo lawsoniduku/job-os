@@ -108,10 +108,17 @@ app.get("/ai/search", searchLimit, async (req, res) => {
       if (kw) dbQuery = dbQuery.ilike("title", `%${kw}%`); // value is parameterized -> safe
     }
 
-    // FRESHNESS GATE — hard 28-day cutoff on posted_at.
-    // Jobs with null posted_at pass through (no date field = still included).
+    // FRESHNESS GATE — hard 28-day cutoff on last_seen_at, NOT posted_at.
+    // posted_at is a frozen historical fact set once at first import; a listing
+    // that's still open 40 days after it was posted would wrongly vanish forever.
+    // last_seen_at is re-stamped by the ingest pipeline every time a job is
+    // reconfirmed present in its source feed, so it actually tracks "is this
+    // still a live listing" — which is what this gate is supposed to mean.
+    // (Previously posted_at-based: every jobhive row silently disappeared from
+    // search 28 days after its one-time bulk import, because nothing ever
+    // touched posted_at on re-seen rows. See import_jobhive.js's touch pass.)
     const cutoff = new Date(Date.now() - 28 * 24 * 60 * 60 * 1000).toISOString();
-    dbQuery = dbQuery.or(`posted_at.is.null,posted_at.gte.${cutoff}`);
+    dbQuery = dbQuery.or(`last_seen_at.is.null,last_seen_at.gte.${cutoff}`);
 
     // Eligibility region pre-filter for African country searches.
     // Cuts US/UK/EU-only jobs from the pool before the engine sees them.

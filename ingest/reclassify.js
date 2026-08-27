@@ -54,7 +54,7 @@ async function run() {
   while (true) {
     const { data: rows, error } = await supabase
       .from("jobs")
-      .select("id, title, description, location, role_cluster")
+      .select("id, title, description, location, role_cluster, eligibility_region, country_iso")
       .range(from, from + PAGE - 1);
 
     if (error) { console.log("❌ fetch:", error.message); break; }
@@ -64,7 +64,7 @@ async function run() {
       const before = row.role_cluster || "null";
       clusterBefore[before] = (clusterBefore[before] || 0) + 1;
 
-      const tagged = tagJob({ title: row.title, description: row.description, location: row.location });
+      const tagged = tagJob({ title: row.title, description: row.description, location: row.location, country_iso: row.country_iso });
       const after = tagged.role_cluster;
       clusterAfter[after] = (clusterAfter[after] || 0) + 1;
 
@@ -73,7 +73,8 @@ async function run() {
       const cleanedDesc = cleanText(row.description || "", 6000);
       const descChanged = cleanedDesc && cleanedDesc !== row.description;
 
-      const labelChanged = after !== row.role_cluster;
+      const regionChanged = tagged.eligibility_region !== row.eligibility_region;
+      const labelChanged = after !== row.role_cluster || regionChanged;
       if (labelChanged || descChanged) {
         const patch = {
           role_cluster: tagged.role_cluster,

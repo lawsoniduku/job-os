@@ -176,6 +176,36 @@ function fastReject(raw) {
   return true;                                // concrete foreign + on-site -> drop
 }
 
+// Postgres/PostgREST error messages that mean "this DATA is malformed" —
+// retrying the exact same batch will fail identically every time. Better to
+// isolate which single row is bad and skip just that one, keeping the rest
+// of the batch instead of losing it all to one problem row.
+const DATA_ERROR_PATTERNS = [
+  "invalid input syntax", "violates not-null constraint", "violates check constraint",
+  "value too long", "invalid byte sequence", "violates foreign key constraint",
+];
+function isDataError(message = "") {
+  const m = message.toLowerCase();
+  return DATA_ERROR_PATTERNS.some((p) => m.includes(p));
+}
+
+// Insert exactly one row, swallowing (and logging) a data error rather than
+// letting one malformed row block its neighbors. Used only as a fallback
+// when a whole batch fails with a clear data/schema error, not for normal
+// transient network retries.
+async function upsertOneRow(row) {
+  try {
+    const { error } = await supabase
+      .from("jobs")
+      .upsert([row], { onConflict: "apply_url", ignoreDuplicates: !repairMode });
+    if (error) throw new Error(error.message);
+    return true;
+  } catch (e) {
+    console.log(`  ❌ dropped one malformed row ("${(row.title || "?").slice(0, 40)}"): ${e.message.slice(0, 100)}`);
+    return false;
+  }
+}
+
 async function upsertBatch(batch, attempt = 1) {
   if (dryRun || batch.length === 0) return true;
   try {
@@ -192,6 +222,18 @@ async function upsertBatch(batch, attempt = 1) {
     if (error) throw new Error(error.message);
     return true;
   } catch (e) {
+    if (isDataError(e.message) && batch.length > 1) {
+      // Don't burn retries on data that will never become valid. Isolate:
+      // insert one row at a time so only the actually-bad row(s) get
+      // dropped, instead of losing the whole batch to one problem row.
+      console.log(`  ⚠️  Batch has malformed data (${e.message.slice(0, 80)}) — isolating row-by-row...`);
+      let anyOk = false;
+      for (const row of batch) {
+        const ok = await upsertOneRow(row);
+        if (ok) anyOk = true;
+      }
+      return anyOk;
+    }
     // More attempts + longer backoff — the CSV download competing for the
     // same connection's bandwidth is the usual cause of transient failures,
     // not a real Supabase problem.
@@ -220,7 +262,15 @@ async function run() {
   // csv-parse handles quoted multi-line fields correctly (a job description
   // with real embedded newlines stays as ONE record, not split into garbage
   // fragments). columns: yields objects keyed by our own lowercased header.
-  const parser = Readable.fromWeb(res.body).pipe(
+  //
+  // IMPORTANT: plain .pipe() does NOT forward errors from the source stream
+  // to the destination — a mid-download network drop on `sourceStream` would
+  // otherwise crash the whole process as an unhandled 'error' event, instead
+  // of being caught by the try/catch below. We forward it explicitly so a
+  // network blip degrades gracefully (partial progress reported, move on to
+  // the next source) instead of taking down the entire batch run.
+  const sourceStream = Readable.fromWeb(res.body);
+  const parser = sourceStream.pipe(
     parse({
       columns: (hdr) => hdr.map((h) => h.trim().toLowerCase()),
       skip_empty_lines: true,
@@ -228,10 +278,14 @@ async function run() {
       relax_quotes: true,
     })
   );
+  sourceStream.on("error", (err) => parser.destroy(err));
 
   let scanned = 0, keptEligible = 0, notEnglish = 0, wrongRegion = 0, kept = 0, upserted = 0, failed = 0, fastRejected = 0;
   const failedRows = []; // rows that failed mid-stream, retried once more after stream ends
   let batch = [];
+  const keptUrls = []; // every apply_url kept this run, new AND already-existing —
+  // powers the last_seen_at touch pass below, since ignoreDuplicates:true means
+  // the upsert itself never refreshes last_seen_at on rows we've already seen.
   const regionTally = {};
 
   let streamError = null;
@@ -271,7 +325,7 @@ async function run() {
       if (raw._country_iso === "NG") regionHint = "Nigeria";
       else if (AFRICAN_ISO.has(raw._country_iso)) regionHint = "Africa";
 
-      let job = normalizeJob(raw, { source: "jobhive", ats, region: regionHint });
+      let job = normalizeJob(raw, { source: "jobhive", ats, region: regionHint, countryIso: raw._country_iso });
       if (!job) continue;
       job = tagJob(job);
 
@@ -286,17 +340,14 @@ async function run() {
       // for detectEligibilityRegion(), not a real "jobs" table column. Same
       // fix as pipeline.js line ~107. Without this, EVERY row fails upsert
       // with "Could not find the '_region_hint' column of 'jobs' in the schema cache".
-      const { _region_hint, ...row } = job;
-      // Stamp last_seen_at explicitly — normalizeJob() doesn't set this column
-      // (only pipeline.js's separate post-upsert step does, for its own live
-      // sources). Without this, every jobhive row would have last_seen_at=NULL
-      // forever, making it invisible to "WHERE last_seen_at < ..." prune
-      // queries (NULL comparisons are neither true nor false in SQL) — the
-      // row would never be re-stamped AND never age out. Bulk-imported jobs
-      // are a one-time snapshot, not re-verified daily, so stamp it once at
-      // import time and let it age from there like anything else.
+      const { _region_hint, ...row } = job;  // country_iso now persists
+      // Stamp last_seen_at explicitly on first insert — normalizeJob() doesn't
+      // set this column. The touch pass below (after the main loop) re-stamps
+      // it on every subsequent run this row is still seen, insert or not, so
+      // it never silently ages out just because the upsert skipped a conflict.
       row.last_seen_at = new Date().toISOString();
       batch.push(row);
+      keptUrls.push(row.apply_url);
 
       if (batch.length >= BATCH) {
         const ok = await upsertBatch(batch);
@@ -336,6 +387,25 @@ async function run() {
     }
   }
 
+  // TOUCH last_seen_at for EVERY apply_url kept this run (new or already-existing).
+  // Same fix as pipeline.js's step 6 — without this, a job still live in jobhive's
+  // upstream feed every single day never gets its last_seen_at refreshed (the
+  // upsert above uses ignoreDuplicates:true, so it silently no-ops on conflict),
+  // meaning it silently ages out of the search freshness gate ~28 days after
+  // it was FIRST imported, even though it's still actually open.
+  let touched = 0;
+  if (!dryRun) {
+    const nowIso = new Date().toISOString();
+    for (let i = 0; i < keptUrls.length; i += BATCH) {
+      const slice = keptUrls.slice(i, i + BATCH);
+      try {
+        const { error } = await supabase.from("jobs").update({ last_seen_at: nowIso }).in("apply_url", slice);
+        if (!error) touched += slice.length;
+      } catch { /* non-fatal: next run touches it instead */ }
+      await sleep(SLEEP_MS);
+    }
+  }
+
   console.log(`\n📊 DONE (${ats})`);
   console.log(`   scanned:        ${scanned}`);
   console.log(`   fast-rejected (foreign on-site): ${fastRejected}`);
@@ -344,7 +414,7 @@ async function run() {
   console.log(`   KEPT eligible:  ${kept}`);
   console.log(`   region split of kept:`, Object.fromEntries(Object.entries(regionTally).filter(([k]) => KEEP_REGIONS.has(k))));
   if (dryRun) console.log(`   (dry run — nothing written)`);
-  else console.log(`   ✅ upserted: ${upserted} | ❌ failed: ${failed}`);
+  else console.log(`   ✅ upserted: ${upserted} | ❌ failed: ${failed} | 🕒 last_seen refreshed: ${touched}`);
   console.log(`\n   ⚠️  Check Supabase DB size before importing a larger slice.\n`);
   if (streamError) process.exitCode = 1;
 }
