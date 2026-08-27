@@ -923,6 +923,36 @@ const HARD_EXCLUSIONS = [
   "us time zones only", "must work us hours", "est/cst/pst only",
 ];
 
+// Company slugs VERIFIED (not guessed) to gate on US residency — the job
+// description itself says "100% remote, work from anywhere" with zero
+// mention of country/state/SSN, but the application FORM on their ATS asks
+// "Do you LIVE in the USA?", a specific US state, and a US Social Security
+// Number. That gate is structurally invisible to any text classifier: it's
+// in the application flow, not the scraped job description. Confirmed live
+// against globelifeaillisarussel's own posting (jobhive), which is one of
+// several storefronts of the same AO/Globe Life/American Income Life
+// insurance-sales recruiting funnel — same "no experience, work from
+// anywhere" copy, same hidden US-only gate, across 1,659 jobhive rows.
+const US_RESIDENCY_GATED_COMPANIES = [
+  "globelife", "americanincomelife", "aoglobelife", "ao globe life",
+  "american income life", "globe life",
+];
+function isUsResidencyGatedCompany(company = "") {
+  const c = company.toLowerCase();
+  return US_RESIDENCY_GATED_COMPANIES.some((p) => c.includes(p));
+}
+
+// Softer, general signal for companies we HAVEN'T individually verified:
+// a role that requires obtaining/holding a US life or health INSURANCE
+// license is, by the nature of US state insurance regulation, virtually
+// always US-resident-only — even when the surrounding copy says "remote,
+// work from anywhere". Downgrades rather than excludes, since it's a
+// pattern-based inference, not a confirmed gate like the list above.
+const INSURANCE_LICENSING_SIGNAL = [
+  "life and health insurance", "get licensed in life", "life insurance license",
+  "health insurance license", "obtain your insurance license", "insurance licensing",
+];
+
 // WORLDWIDE signals — ONLY trusted when they appear in the LOCATION or
 // eligibility_region field (not the description body, where "doing business
 // worldwide" is marketing copy about the company, not hiring eligibility).
@@ -1125,6 +1155,12 @@ function genericEligibility(job, title, desc) {
   const locField = ` ${(job.location || "").toLowerCase()} `;
   const body = ` ${title} ${desc.slice(0, 3000)} `;
 
+  // 0. Verified US-residency-gated recruiting funnel — see comment at
+  // US_RESIDENCY_GATED_COMPANIES above. The gate lives in the application
+  // form, not this text, so no phrase check below would ever catch it.
+  if (isUsResidencyGatedCompany(job.company))
+    return { eligible: false, confidence: "excluded", reason: "Application requires US residency (verified)" };
+
   // 1. Explicit restrictions anywhere -> out.
   if (hasAny(locField, HARD_EXCLUSIONS) || hasAny(body, HARD_EXCLUSIONS))
     return { eligible: false, confidence: "excluded", reason: "Geographically restricted" };
@@ -1204,6 +1240,12 @@ export function checkEligibility(job, country) {
     }
     return verdict;
   };
+
+  // 0. Verified US-residency-gated recruiting funnel — see comment at
+  // US_RESIDENCY_GATED_COMPANIES above. The gate lives in the application
+  // form, not this text, so no phrase check below would ever catch it.
+  if (isUsResidencyGatedCompany(job.company))
+    return E("excluded", "Application requires US residency (verified)", false);
 
   // 1. Hard exclusions anywhere in text kill the job.
   for (const ex of HARD_EXCLUSIONS) if (hasPhrase(all, ex)) return E("excluded", `Restricted: "${ex}"`, false);
@@ -1295,6 +1337,14 @@ export function checkEligibility(job, country) {
   // it's "certain" — but only if the body doesn't ALSO tie it to a country.
   if (hasAny(desc, WORLDWIDE_DESC_STRONG)) {
     if (hasAny(desc, FOREIGN_COUNTRIES)) return E("likely", "Remote, worldwide language but a country is mentioned");
+    // A role that dangles US insurance licensing ("we'll get you licensed in
+    // life and health insurance") is regulated state-by-state in the US and
+    // effectively never open outside it, even though "work from anywhere"
+    // copy says otherwise — that copy means anywhere IN THE US. This is a
+    // pattern inference (not a verified gate like the company list above),
+    // so it downgrades rather than excludes.
+    if (hasAny(desc, INSURANCE_LICENSING_SIGNAL))
+      return E("possible", "JD says \"open to anyone\", but role requires a US insurance license — confirm eligibility before applying");
     return softenForTimezone(E("certain", "JD: open to anyone, anywhere"));
   }
   if (hasAny(desc, FOREIGN_COUNTRIES)) return E("excluded", "Remote, but body ties it to a specific country", false);
@@ -1370,7 +1420,8 @@ export function scoreJobLocally(job, intent) {
     eligibility = checkEligibility(job, intent.locationCountry);
   } else if (intent.remoteOnly) {
     const all = ` ${(job.location || "").toLowerCase()} ${desc} `;
-    if (hasAny(all, HARD_EXCLUSIONS)) eligibility = { eligible: false, confidence: "excluded", reason: "Geographically restricted" };
+    if (isUsResidencyGatedCompany(job.company)) eligibility = { eligible: false, confidence: "excluded", reason: "Application requires US residency (verified)" };
+    else if (hasAny(all, HARD_EXCLUSIONS)) eligibility = { eligible: false, confidence: "excluded", reason: "Geographically restricted" };
     else if (job.remote || hasPhrase(all, "remote")) eligibility = { eligible: true, confidence: "likely", reason: "Remote role" };
     else eligibility = genericEligibility(job, title, desc);
   } else {

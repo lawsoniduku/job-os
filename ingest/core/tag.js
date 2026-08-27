@@ -48,6 +48,24 @@ export function detectEligibilityRegion(description = "", location = "", regionH
     "maiduguri", "makurdi", "lokoja", "gombe", "katsina", "osogbo", "minna",
   ])) return "Nigeria";
 
+  // A concrete foreign LOCATION field beats a free-text "Africa" mention in
+  // the DESCRIPTION body — checked here, before any body-text African check,
+  // so a structured signal always wins over marketing copy. Real example
+  // this fixes: "Nordics Technical Sales Manager" / "Poland Technical Sales
+  // Manager" etc. (location: a specific European city) were coming out as
+  // eligibility_region=Africa — shown to Nigerian candidates as eligible —
+  // because the company's boilerplate ("we distribute across EMEA and
+  // Africa") happened to contain the word "africa" somewhere in the JD body,
+  // and that body-text check used to run before this location check ever did.
+  if (any(loc, ["united states", "usa", "u.s.", "us-remote", "new york", "san francisco", "austin", "chicago", "remote, us", "remote - us"])) return "US";
+  if (any(loc, ["united kingdom", "london", "uk", "england", "manchester"])) return "UK";
+  if (any(loc, ["china", "shanghai", "guangzhou", "beijing", "shenzhen", "hong kong"])) return "China";
+  if (any(loc, ["korea", "seoul", "japan", "tokyo", "singapore", "india", "bangalore", "mumbai", "philippines", "vietnam", "indonesia"])) return "Asia";
+  if (any(loc, ["canada", "toronto", "vancouver"])) return "Canada";
+  if (any(loc, ["europe", "berlin", "paris", "amsterdam", "madrid", "dublin", "ireland", "north america", "latam", "latin america",
+    "nordics", "benelux", "greece", "romania", "poland", "germany", "france", "spain", "italy", "portugal",
+    "netherlands", "belgium", "austria", "switzerland", "sweden", "norway", "denmark", "finland"])) return "Regional";
+
   // A SPECIFIC non-Nigeria African country/city — checked BEFORE the generic
   // pan-African check below, deliberately. "africa" as a bare substring
   // appears INSIDE "South Africa", so checking the generic bucket first was
@@ -103,14 +121,6 @@ export function detectEligibilityRegion(description = "", location = "", regionH
     "remote, global", "all countries", "any country", "location independent"])) return "Global";
 
   if (any(loc, ["emea"])) return "EMEA";
-
-  // concrete foreign location -> name the region, do NOT call it Global
-  if (any(loc, ["united states", "usa", "u.s.", "us-remote", "new york", "san francisco", "austin", "chicago", "remote, us", "remote - us"])) return "US";
-  if (any(loc, ["united kingdom", "london", "uk", "england", "manchester"])) return "UK";
-  if (any(loc, ["china", "shanghai", "guangzhou", "beijing", "shenzhen", "hong kong"])) return "China";
-  if (any(loc, ["korea", "seoul", "japan", "tokyo", "singapore", "india", "bangalore", "mumbai", "philippines", "vietnam", "indonesia"])) return "Asia";
-  if (any(loc, ["canada", "toronto", "vancouver"])) return "Canada";
-  if (any(loc, ["europe", "berlin", "paris", "amsterdam", "madrid", "dublin", "ireland", "north america", "latam", "latin america"])) return "Regional";
 
   // restriction phrases in body
   if (any(t, ["us only", "united states only", "authorized to work in the united states"])) return "US Only";
