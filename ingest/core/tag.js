@@ -6,7 +6,7 @@
  * every query. Reuses the boundary-aware classifier from the role engine.
  */
 
-import { classifyJob } from "../../api/roleIntelligence.js";
+import { classifyJob, detectJurisdictionLock } from "../../api/roleIntelligence.js";
 
 function boundary(text, phrase) {
   return new RegExp(`(?:^|[^a-z0-9])${phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:[^a-z0-9]|$)`, "i").test(text);
@@ -148,6 +148,18 @@ export function detectEligibilityRegion(description = "", location = "", regionH
     // -> "Regional": honestly named, and excluded by the eligibility filter.
     if (iso.length === 2) return "Regional";
   }
+
+  // A bare "Remote" with no country in the location field still isn't
+  // globally open if the posting offers country-specific STATUTORY benefits
+  // (401(k), FLSA, National Insurance, RRSP, superannuation…) — you can only
+  // receive those on domestic payroll. Tagging the real jurisdiction here
+  // means the search pre-filter drops these before scoring, instead of
+  // surfacing them to Nigerian users as "Remote — region unconfirmed".
+  const lock = detectJurisdictionLock(t);
+  if (lock === "US") return "US";
+  if (lock === "UK") return "UK";
+  if (lock === "Canada") return "Canada";
+  if (lock === "Australia") return "Regional";
 
   if (any(t, ["remote"])) return "Remote";
   return "Unknown";

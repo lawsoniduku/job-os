@@ -930,6 +930,7 @@ const HARD_EXCLUSIONS = [
   // above would have caught it.
   "security clearance", "government clearance", "active clearance",
   "eligible for a security clearance", "obtain a clearance", "obtain a us government clearance",
+  "top secret", "ts/sci", "secret clearance", "public trust clearance",
 ];
 
 // Company slugs VERIFIED (not guessed) to gate on US residency — the job
@@ -949,6 +950,57 @@ const US_RESIDENCY_GATED_COMPANIES = [
 function isUsResidencyGatedCompany(company = "") {
   const c = company.toLowerCase();
   return US_RESIDENCY_GATED_COMPANIES.some((p) => c.includes(p));
+}
+
+// ── JURISDICTION LOCK ────────────────────────────────────────────────────
+// Country-specific STATUTORY instruments — tax, payroll and employment-law
+// constructs that only exist for DOMESTIC hires. These are not soft hints:
+// you cannot enrol a Nigeria-based person in a 401(k) (US Internal Revenue
+// Code s.401), in a UK pension with National Insurance, in an Australian
+// superannuation fund, or classify them exempt/non-exempt under the FLSA.
+// Their presence is positive evidence of where the employer can actually run
+// payroll — which is exactly the question "is this remote job open to me?".
+//
+// Measured: of the roles a Nigerian user was shown as eligible from the
+// "Remote — region unconfirmed" bucket, ~11% carried one of these while the
+// JD never said "US only" anywhere, so nothing else caught them.
+//
+// DELIBERATELY EXCLUDED as too weak to justify hiding a job:
+//   - "PTO"/"paid time off", "medical, dental, vision", "equal opportunity
+//     employer" — skew US but are now used by genuinely global employers.
+//   - US EEO/anti-discrimination boilerplate ("protected veteran status",
+//     "Americans with Disabilities Act"). Tested against real rows: 3 of 22
+//     exclusions rested on this ALONE. It's a legal disclaimer about the
+//     employer, not a statement about the role — and a US-incorporated but
+//     globally-distributed company (the GitLab/Automattic pattern) will carry
+//     it while still hiring worldwide. Excluding on it would hide exactly the
+//     roles this product exists to surface.
+// What's left is role-level payroll/tax/immigration instruments only.
+const JURISDICTION_MARKERS = {
+  US: ["401(k)", "401k", "flsa", "w-2", "w2", "e-verify", "everify",
+       "hsa", "cobra", "social security number", "h-1b", "h1b",
+       "us citizen", "u.s. citizen", "fair labor standards act"],
+  UK: ["national insurance", "hmrc", "paye", "right to work in the uk"],
+  Canada: ["rrsp", "canada pension plan", "canadian payroll"],
+  Australia: ["superannuation", "fair work act"],
+};
+// Which target countries each lock is COMPATIBLE with (don't exclude a US
+// role from a user actually targeting the US).
+const LOCK_NATIVE_COUNTRIES = {
+  US: ["us", "usa", "united states"],
+  UK: ["uk", "united kingdom", "britain", "england"],
+  Canada: ["canada"],
+  Australia: ["australia"],
+};
+export function detectJurisdictionLock(text = "") {
+  for (const [lock, markers] of Object.entries(JURISDICTION_MARKERS)) {
+    if (hasAny(text, markers)) return lock;
+  }
+  return null;
+}
+function lockAppliesTo(lock, country) {
+  if (!lock) return false;
+  return !(LOCK_NATIVE_COUNTRIES[lock] || []).includes(String(country || "").toLowerCase());
 }
 
 // Softer, general signal for companies we HAVEN'T individually verified:
@@ -1178,6 +1230,14 @@ function genericEligibility(job, title, desc) {
   if (RESTRICTION_PHRASES.some((p) => hasPhrase(body, p)))
     return { eligible: false, confidence: "excluded", reason: "Restricted to a specific region in the posting" };
 
+  // 1b. Statutory benefit/tax instruments that only exist for domestic
+  // payroll (401(k), FLSA, National Insurance, RRSP, superannuation…). The
+  // guest path defaults to the Africa-first audience, so any such lock is
+  // disqualifying here. See JURISDICTION_MARKERS.
+  const guestLock = detectJurisdictionLock(body);
+  if (guestLock)
+    return { eligible: false, confidence: "excluded", reason: `${guestLock} payroll only — posting offers ${guestLock}-specific statutory benefits` };
+
   const remoteSignal = job.remote === true ||
     hasAny(`${locField}${body}`, ["remote", "work from home", "wfh", "work from anywhere", "fully distributed"]);
 
@@ -1258,8 +1318,12 @@ export function checkEligibility(job, country) {
   if (isUsResidencyGatedCompany(job.company))
     return E("excluded", "Application requires US residency (verified)", false);
 
-  // 1. Hard exclusions anywhere in text kill the job.
-  for (const ex of HARD_EXCLUSIONS) if (hasPhrase(all, ex)) return E("excluded", `Restricted: "${ex}"`, false);
+  // 1. Hard exclusions anywhere in text kill the job. Scans the TITLE too:
+  // `all` is location+description+region only, so a restriction stated in the
+  // title — "AI Adoption Specialist | Top Secret Required", "Engineer (US
+  // Only)" — slipped through every check below and surfaced as merely
+  // "region unconfirmed".
+  for (const ex of HARD_EXCLUSIONS) if (hasPhrase(`${title} ${all}`, ex)) return E("excluded", `Restricted: "${ex}"`, false);
 
   // 1b. Non-English posting → drop.
   if (hasAny(titleDesc, NON_ENGLISH_MARKERS)) return E("excluded", "Non-English posting", false);
@@ -1359,6 +1423,15 @@ export function checkEligibility(job, country) {
     return softenForTimezone(E("certain", "JD: open to anyone, anywhere"));
   }
   if (hasAny(desc, FOREIGN_COUNTRIES)) return E("excluded", "Remote, but body ties it to a specific country", false);
+
+  // Last check before we'd otherwise shrug and call it "region unconfirmed":
+  // does the posting name a statutory benefit/tax instrument that only exists
+  // for domestic payroll? If so this is not a globally-open remote role, it's
+  // a domestic one that forgot to say so. See JURISDICTION_MARKERS above.
+  const lock = detectJurisdictionLock(desc);
+  if (lockAppliesTo(lock, country))
+    return E("excluded", `Remote, but ${lock} payroll only — the posting offers ${lock}-specific statutory benefits`, false);
+
   return E("possible", "Remote — region unconfirmed");
 }
 
