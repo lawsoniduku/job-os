@@ -1,0 +1,45 @@
+name: Link Check (dead listings)
+
+# Verifies that listings still exist. "Every job you see here, you can
+# actually get" fails hardest on postings that are simply gone — the most
+# common thing users report (5 of the first 10 job_reports were 'expired').
+#
+# WHY IT RUNS HERE rather than locally: this makes a few hundred outbound
+# requests per run. GitHub's runners have far better connectivity than a
+# laptop on a mobile connection, and it should happen on a schedule with no
+# one babysitting it.
+#
+# WHY A CAPPED BATCH: the checker walks least-recently-checked first, so
+# successive nightly runs rotate through the whole live pool instead of
+# hammering every host at once.
+#
+# SETUP: uses the same repo secrets as ingest.yml (SUPABASE_URL, SUPABASE_KEY).
+# Requires migration 010_job_liveness.sql to have been run.
+
+on:
+  schedule:
+    - cron: "30 2 * * *"   # 02:30 UTC daily, before the 03:00 jobhive import
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "How many listings to check this run"
+        required: false
+        default: "800"
+
+jobs:
+  link-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install
+
+      - name: Check listing links
+        run: node ingest/check_links.js --limit ${{ github.event.inputs.limit || 800 }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}

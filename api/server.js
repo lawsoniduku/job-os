@@ -64,6 +64,66 @@ function safeFilterValue(s = "") {
   return s.replace(/[,().*:%\\]/g, " ").replace(/\s+/g, " ").trim();
 }
 
+// ── Reported-dead suppression ────────────────────────────────────────────
+// job_reports was write-only: the UI said "✓ Thanks — flagged for review"
+// and nothing ever read the table, so a job a user had already flagged as
+// gone kept being served to everyone else. (Confirmed: HR Generalist @
+// ineventapp was reported 'expired', independently verified as a 404, and
+// still surfaced afterwards.) This makes that promise true.
+//
+// Rule: an 'expired' report suppresses on its own — the user is telling us
+// the posting is gone, which is self-evident and cheap to honour. Any other
+// single reason needs corroboration (2+ reports), since one person can
+// misread an eligibility verdict they merely disagree with.
+const SUPPRESS_TTL_MS = 5 * 60_000;
+let _suppress = { ids: new Set(), at: 0, loading: null };
+
+// ── Liveness column probe ────────────────────────────────────────────────
+// The liveness gate depends on migration 010 having been run in Supabase.
+// Deploy order is not guaranteed (Render can redeploy this code before the
+// SQL is applied), and filtering on a column that doesn't exist would 500
+// EVERY search. So we probe once and simply skip the gate until the column
+// is there — degrading to today's behaviour instead of taking search down.
+let _hasLiveness = null;
+async function livenessAvailable() {
+  if (_hasLiveness !== null) return _hasLiveness;
+  const { error } = await supabase.from("jobs").select("link_status").limit(1);
+  _hasLiveness = !error;
+  console.log(error
+    ? "ℹ️  liveness gate OFF — run supabase/migrations/010_job_liveness.sql to enable"
+    : "✅ liveness gate ON");
+  return _hasLiveness;
+}
+
+async function suppressedJobIds() {
+  const now = Date.now();
+  if (now - _suppress.at < SUPPRESS_TTL_MS) return _suppress.ids;
+  if (_suppress.loading) return _suppress.loading;      // in-flight: don't stampede
+  _suppress.loading = (async () => {
+    try {
+      const { data, error } = await supabase
+        .from("job_reports").select("job_id, reason").not("job_id", "is", null);
+      if (error) throw new Error(error.message);
+      const counts = new Map();
+      const ids = new Set();
+      for (const r of data || []) {
+        if (r.reason === "expired") ids.add(r.job_id);
+        counts.set(r.job_id, (counts.get(r.job_id) || 0) + 1);
+      }
+      for (const [id, n] of counts) if (n >= 2) ids.add(id);
+      _suppress = { ids, at: Date.now(), loading: null };
+      return ids;
+    } catch (e) {
+      // Never fail a search because the reports table hiccuped — reuse the
+      // last known set (possibly empty) and try again on the next request.
+      console.log("⚠️  suppression refresh failed:", e.message);
+      _suppress = { ..._suppress, at: Date.now() - SUPPRESS_TTL_MS + 30_000, loading: null };
+      return _suppress.ids;
+    }
+  })();
+  return _suppress.loading;
+}
+
 app.get("/health", async (_req, res) => {
   const ok = await isLLMHealthy();
   res.json({ status: "ok", service: "job-copilot-v3.1", model: llmConfig.model, ollama: ok ? "connected" : "offline" });
@@ -120,6 +180,15 @@ app.get("/ai/search", searchLimit, async (req, res) => {
     const cutoff = new Date(Date.now() - 28 * 24 * 60 * 60 * 1000).toISOString();
     dbQuery = dbQuery.or(`last_seen_at.is.null,last_seen_at.gte.${cutoff}`);
 
+    // LIVENESS GATE — drop listings the link checker proved are gone (404/410,
+    // or a page that says the role is closed). 'unknown' and never-checked
+    // stay visible on purpose: a bot-block or timeout is not evidence of
+    // death, and hiding real jobs over it would be its own trust failure.
+    // See ingest/check_links.js and migration 010.
+    if (await livenessAvailable()) {
+      dbQuery = dbQuery.or("link_status.is.null,link_status.neq.dead");
+    }
+
     // Eligibility region pre-filter for African country searches.
     // Cuts US/UK/EU-only jobs from the pool before the engine sees them.
     if (intent.locationCountry && intent.locationCountry !== "worldwide") {
@@ -136,9 +205,13 @@ app.get("/ai/search", searchLimit, async (req, res) => {
     // Order by recency BEFORE the limit.
     dbQuery = dbQuery.order("posted_at", { ascending: false, nullsFirst: false });
 
-    const { data: rawJobs, error } = await dbQuery.limit(500);
+    const { data: rawJobsAll, error } = await dbQuery.limit(500);
     if (error) return res.status(500).json({ error: error.message });
-    if (!rawJobs?.length) return res.json({ query: q, total: 0, data: [], message: "No jobs found. Try a broader query." });
+    if (!rawJobsAll?.length) return res.json({ query: q, total: 0, data: [], message: "No jobs found. Try a broader query." });
+
+    // Honour user reports (see suppressedJobIds above).
+    const suppressed = await suppressedJobIds();
+    const rawJobs = suppressed.size ? rawJobsAll.filter((j) => !suppressed.has(j.id)) : rawJobsAll;
 
     // --- local scoring + hard eligibility gate ---
     const scored = rawJobs.map((job) => {
