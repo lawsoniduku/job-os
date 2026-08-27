@@ -643,9 +643,9 @@ function JobCard({ job, onTailor, onReport }) {
   // black box — {roleScore: 0-55, locScore: 20-48, bonus: freshness/salary}.
   const mb = job.match_breakdown;
   const matchLines = mb ? [
-    [Math.round(mb.roleScore), 55, "How well the role matches your search"],
-    [Math.round(mb.locScore), 48, "How confident we are it's open to you"],
-    [Math.round(mb.bonus), null, "Freshness / salary listed"],
+    [Math.round(mb.roleScore), 50, "How well the role matches your search"],
+    [Math.round(mb.locScore), 35, "How confident we are it's open to you"],
+    [Math.round(mb.bonus), 15, "Freshness / salary listed"],
   ] : null;
 
   const REASONS = [

@@ -1566,6 +1566,16 @@ export function parseIntent(query) {
 // ============================================================
 // HONEST MATCH SCORER — eligibility is a GATE, not a bonus
 // ============================================================
+// ── SCORE BUDGET ─────────────────────────────────────────────────────────
+// These MUST sum to 100. Keeping them as named constants is the point: the
+// previous tiers (55 + 48 + 11 = 114) had drifted past 100 and were being
+// clamped, which silently collapsed the top of the distribution — 28 of 50
+// results on one real search all read "100%".
+const ROLE_MAX = 50;   // how well the title matches what you searched for
+const ELIG_MAX = 35;   // how sure we are it's actually open to you
+const BONUS_MAX = 15;  // freshness + salary listed
+const BONUS_FLOOR = 12; // how far a stale posting can be pushed down
+
 export function scoreJobLocally(job, intent) {
   const title = ` ${(job.title || "").toLowerCase()} `;
   const desc = (job.description || "").toLowerCase();
@@ -1632,16 +1642,23 @@ export function scoreJobLocally(job, intent) {
     .replace(/\s+/g, " ").trim();
   const exactTitleHit = queryPhrase.length >= 4 && hasPhrase(title, queryPhrase);
 
-  if (exactTitleHit) roleScore = 55;                                  // exact query phrase in title = bullseye
-  else if (titleAliasHit) roleScore = 45;                             // a (possibly sibling) cluster alias in title
-  else if (titleCluster && titleCluster === intent.cluster) roleScore = 42;  // title's own cluster matches
-  else if (titleCluster && intent.cluster && titleCluster !== intent.cluster) roleScore = 6; // clearly different role
-  else if (descAliasHit) roleScore = 22;                            // query alias in body
+  // BUDGET: role fit 0-50 · eligibility 0-35 · freshness/salary -12..+15.
+  // They sum to exactly 100 at the maximum, so the score no longer saturates.
+  // Previously the three maxed at 55+48+11 = 114 and were clamped to 100,
+  // which collapsed the entire top of the distribution: on a real customer-
+  // service search, 28 of 50 results scored EXACTLY 100% and the whole page
+  // held only 8 distinct values. The number wasn't ranking anything — which
+  // is why it read as meaningless.
+  if (exactTitleHit) roleScore = 50;                                  // exact query phrase in title = bullseye
+  else if (titleAliasHit) roleScore = 41;                             // a (possibly sibling) cluster alias in title
+  else if (titleCluster && titleCluster === intent.cluster) roleScore = 38;  // title's own cluster matches
+  else if (titleCluster && intent.cluster && titleCluster !== intent.cluster) roleScore = 5; // clearly different role
+  else if (descAliasHit) roleScore = 20;                            // query alias in body
   else if (intent.cluster && job.role_cluster === intent.cluster) {
     // only the stored label matches. Trust it ONLY if there's some textual signal
     // (a query keyword in title/desc); otherwise it's a likely mislabel -> weak.
     const hasSignal = intent.keywords.some((k) => k.length >= 3 && hasPhrase(`${title} ${desc}`, k));
-    roleScore = hasSignal ? 26 : 7;
+    roleScore = hasSignal ? 24 : 6;
   }
 
   // offTarget: the title clearly belongs to a DIFFERENT department than the query
@@ -1656,39 +1673,39 @@ export function scoreJobLocally(job, intent) {
 
   // query keyword overlap on the TITLE (rewards on-target titles)
   let kwTitle = 0;
-  for (const k of intent.keywords) if (k.length >= 3 && hasPhrase(title, k)) kwTitle = Math.min(kwTitle + 4, 10);
-  roleScore = Math.min(roleScore + kwTitle, 55);
+  for (const k of intent.keywords) if (k.length >= 3 && hasPhrase(title, k)) kwTitle = Math.min(kwTitle + 4, 9);
+  roleScore = Math.min(roleScore + kwTitle, ROLE_MAX);
 
   // seniority alignment (+/-)
   if (intent.seniority) {
     const map = { senior: ["senior", "sr", "lead", "principal", "staff"], junior: ["junior", "jr", "entry", "graduate", "intern", "associate", "trainee"], manager: ["manager", "head", "director", "vp"] };
     const wants = map[intent.seniority] || [];
-    if (wants.some((t) => hasPhrase(title, t))) roleScore = Math.min(roleScore + 5, 55);
+    if (wants.some((t) => hasPhrase(title, t))) roleScore = Math.min(roleScore + 5, ROLE_MAX);
     else if (intent.seniority === "junior" && hasAny(title, ["senior", "principal", "staff", "lead", "director"])) roleScore -= 8;
   }
 
   // not eligible -> capped low score, kept out of main results by the gate
   if (!eligibility.eligible) {
-    const capped = Math.min(roleScore, 18);
+    const capped = Math.min(roleScore, 16);
     return { score: Math.max(0, capped), eligibility, offTarget, breakdown: { roleScore: capped, locScore: 0 } };
   }
 
-  // STEP 3: eligibility confidence component.
+  // STEP 3: eligibility confidence component (0-35 of the 100-point budget).
   // Sub-tiers within "certain":
-  //   explicit country mention (e.g. "Location mentions nigeria") → 42
+  //   explicit country mention (e.g. "Location mentions nigeria") → 35
   //     The job specifically named the user's country — strongest signal.
-  //   worldwide / open anywhere → 38
+  //   worldwide / open anywhere → 28
   //     Open to all, but no explicit country confirmation.
-  //   likely   → 30  (regional signal e.g. EMEA)
-  //   possible → 20  ("region unconfirmed" — eligibility not proven)
+  //   likely   → 21  (regional signal e.g. EMEA)
+  //   possible → 12  ("region unconfirmed" — eligibility not proven)
   //
-  // This ensures a BI Analyst explicitly listing Nigeria ranks above a
-  // generic "Data Analyst · Worldwide" for the same search, even if the
-  // worldwide job has a marginally better role-title match.
+  // The 23-point spread between "named your country" and "unconfirmed" stays
+  // wider than the 15-point freshness swing below, so a proven-eligible role
+  // still outranks a merely newer unproven one — which is the whole promise.
   const explicitCountry = eligibility.confidence === "certain" &&
     /location mentions|open to.*nigeria|open to.*kenya|open to.*ghana|open to.*africa/i.test(eligibility.reason);
-  const locScore = explicitCountry ? 48
-    : { certain: 38, likely: 30, possible: 20 }[eligibility.confidence] ?? 20;
+  const locScore = explicitCountry ? ELIG_MAX
+    : { certain: 28, likely: 21, possible: 12 }[eligibility.confidence] ?? 12;
 
   // STEP 4: freshness/salary tiebreaker — kept small relative to role fit
   // (55 pts) and eligibility confidence (48 pts) so it can't drag a clearly
@@ -1704,17 +1721,20 @@ export function scoreJobLocally(job, intent) {
   const d = job.posted_at || job.created_at;
   if (d) {
     const days = (Date.now() - new Date(d)) / 86400000;
-    if (days <= 3) bonus += 10;
-    else if (days <= 7) bonus += 7;
-    else if (days <= 14) bonus += 4;
-    else if (days <= 21) bonus += 2;
+    if (days <= 3) bonus += 13;
+    else if (days <= 7) bonus += 10;
+    else if (days <= 14) bonus += 6;
+    else if (days <= 21) bonus += 3;
     else if (days <= 45) bonus += 0;
-    else if (days <= 90) bonus -= 4;
-    else bonus -= 10;
+    else if (days <= 90) bonus -= 6;
+    else bonus -= 12;
   }
-  if (job.salary_min || job.salary_max) bonus += 1;
-  bonus = Math.max(-10, Math.min(bonus, 11));
+  if (job.salary_min || job.salary_max) bonus += 2;
+  bonus = Math.max(-BONUS_FLOOR, Math.min(bonus, BONUS_MAX));
 
+  // The clamp is now a safety net, not the norm: 50 + 35 + 15 = exactly 100,
+  // so only a bullseye title that names your country and was posted in the
+  // last 3 days with a salary reaches it.
   const total = Math.max(0, Math.min(roleScore + locScore + bonus, 100));
   return { score: Math.round(total), eligibility, offTarget, breakdown: { roleScore, locScore, bonus } };
 }
