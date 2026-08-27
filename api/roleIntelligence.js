@@ -1423,10 +1423,26 @@ export function extractEligibilitySignals(job = {}) {
   };
 }
 
-/** Use the stored blob when it matches the current logic version, else recompute. */
+/**
+ * Use the stored blob when it matches the current logic version, else
+ * recompute from the description.
+ *
+ * The dangerous case is BOTH being unavailable: an unusable blob (missing, or
+ * from an older SIGNALS_VERSION) AND no description, because search stopped
+ * fetching descriptions. Recomputing from an empty string doesn't fail — it
+ * quietly returns "no restrictions found anywhere", i.e. a confident WRONG
+ * verdict that would let US-only roles through. So we mark it and let the
+ * caller degrade honestly instead. The lean-payload probe in server.js is
+ * version-aware specifically so this should never trigger; this is the
+ * backstop for when it does.
+ */
 function signalsFor(job) {
   const s = job?.elig_signals;
-  return s && s.v === SIGNALS_VERSION ? s : extractEligibilitySignals(job);
+  if (s && s.v === SIGNALS_VERSION) return s;
+  const computed = extractEligibilitySignals(job);
+  const desc = job?.description;
+  if (typeof desc !== "string" || desc.length === 0) computed._degraded = true;
+  return computed;
 }
 
 /**
@@ -1455,6 +1471,11 @@ export function checkEligibility(job, country) {
   const isAfrican = country === "africa" || AFRICAN_COUNTRIES.has(country);
   // Everything that would have required the full description.
   const sig = signalsFor(job);
+
+  // Neither stored signals nor a description — we genuinely cannot judge this
+  // one. Say so at the lowest confidence rather than inventing a verdict.
+  if (sig._degraded)
+    return { eligible: true, confidence: "possible", reason: "Eligibility not yet verified for this listing" };
 
   // Broad-region targets → their positive location signals
   const REGION_POSITIVE = {

@@ -30,6 +30,7 @@ import {
   getAliasesForCluster,
   ROLE_TAXONOMY,
   LOCATION_INTELLIGENCE,
+  SIGNALS_VERSION,
 } from "./roleIntelligence.js";
 import { generateJSON, generateText, isLLMHealthy, llmConfig, llmState } from "../lib/llm.js";
 
@@ -168,10 +169,19 @@ async function useLeanColumns() {
   if (Date.now() - _lean.at < LEAN_TTL_MS) return _lean.on;
   try {
     const { count: total } = await supabase.from("jobs").select("*", { count: "estimated", head: true });
-    const { count: missing, error } = await supabase.from("jobs")
-      .select("*", { count: "estimated", head: true }).is("elig_signals", null);
+    // Count rows whose signals match the CURRENT logic version — not merely
+    // non-null. Checking null-ness was a real bug: after a SIGNALS_VERSION
+    // bump every row still has a (stale) blob, so the probe would report full
+    // coverage, switch to the lean payload, and then checkEligibility would
+    // find the blob unusable and recompute from a description that is no
+    // longer being fetched. Version-aware means a bump correctly drops
+    // coverage to 0 and search falls back to the safe path until the backfill
+    // catches up.
+    const { count: current, error } = await supabase.from("jobs")
+      .select("*", { count: "estimated", head: true })
+      .eq("elig_signals->>v", String(SIGNALS_VERSION));
     if (error) throw new Error(error.message);
-    const covered = total > 0 ? 1 - (missing || 0) / total : 0;
+    const covered = total > 0 ? (current || 0) / total : 0;
     const on = covered >= 0.95;
     if (on !== _lean.on) {
       console.log(on

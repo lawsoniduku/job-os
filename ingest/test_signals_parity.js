@@ -33,10 +33,17 @@ async function run() {
     .order("id").limit(N);
   if (error) { console.log("fetch failed:", error.message); process.exit(1); }
 
-  let checked = 0, mismatch = 0;
+  let checked = 0, mismatch = 0, skipped = 0;
   const examples = [];
 
   for (const row of data) {
+    // Rows with no description are excluded from the COMPARISON, not from the
+    // system. There is nothing to "compute from the description" for them, so
+    // the A arm would only be measuring the degraded-path guard, not parity.
+    // In production they carry signals extracted from that same empty
+    // description at ingest, so the verdict is identical either way — which
+    // is exactly what makes them uninteresting here.
+    if (!row.description || row.description.length === 0) { skipped++; continue; }
     const signals = extractEligibilitySignals(row);
     for (const country of COUNTRIES) {
       // A: no signals -> computes from description
@@ -59,6 +66,7 @@ async function run() {
   }
 
   console.log(`  verdicts compared : ${checked}`);
+  console.log(`  rows skipped      : ${skipped} (no description to compare against)`);
   console.log(`  mismatches        : ${mismatch}`);
   if (examples.length) { console.log("\n  examples:"); examples.forEach((e) => console.log(e)); }
   console.log(mismatch === 0
