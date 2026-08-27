@@ -83,10 +83,21 @@ function safeFilterValue(s = "") {
 // At ~35 chars per filter that's under 2KB of query string, well inside
 // PostgREST's limits.
 const MAX_ALIAS_FILTERS = 55;
-// How many rows we deeply score per search. 1000 is not arbitrary: it's
-// PostgREST's max-rows ceiling, so asking for more silently returns 1000
-// anyway. Was 500 — and the cap was binding on EVERY query.
-const EVAL_LIMIT = 1000;
+// How many rows we deeply score per search.
+//
+// This is a LATENCY vs RECALL trade, and the binding constraint is bytes on
+// the wire, not CPU. Measured: scoring is ~1.6ms/job (1000 jobs = 1.6s), but
+// fetching those 1000 rows moves ~2.2 MB of description text and took
+// 4.6-13.3s depending on the link. Raising this to 1000 took end-to-end
+// search from ~7s to ~15s, which is a worse user experience than the recall
+// was worth.
+//
+// 600 keeps most of the recall gain over the old 500 while cutting the
+// payload ~40%. The real fix is architectural — stop shipping full
+// descriptions to score them (precompute the eligibility signals at ingest,
+// the way eligibility_region already is) — but that's a bigger change than
+// a constant.
+const EVAL_LIMIT = 600;
 function minimalAliasSet(aliases = []) {
   const sorted = [...new Set(aliases.map((a) => a.toLowerCase().trim()).filter(Boolean))]
     .sort((a, b) => a.length - b.length);
@@ -189,10 +200,12 @@ app.get("/ai/search", searchLimit, async (req, res) => {
     console.log(`🔍 "${q}" -> cluster=${intent.cluster} country=${intent.locationCountry} remote=${intent.remoteOnly}`);
 
     // --- retrieval: prefer cluster, fall back to safe keyword ilike ---
-    // count:"exact" gives the TRUE size of the matching pool, independent of
-    // the row limit below — so the UI can report what was really searched
-    // instead of echoing the LIMIT constant back at the user.
-    let dbQuery = supabase.from("jobs").select(JOB_COLUMNS, { count: "exact" });
+    // count:"planned" uses the planner's estimate instead of counting every
+    // matching row. An exact count over a 55-way ILIKE OR cost ~1.3s per
+    // search — real money for a figure the UI doesn't even display (it shows
+    // `evaluated`, the rows we actually checked, because that's the honest
+    // number). An estimate is plenty for the `scanned` diagnostic field.
+    let dbQuery = supabase.from("jobs").select(JOB_COLUMNS, { count: "planned" });
     if (intent.cluster) {
       const aliases = minimalAliasSet(getAliasesForCluster(intent.cluster))
         .map(safeFilterValue).filter(Boolean).slice(0, MAX_ALIAS_FILTERS);
