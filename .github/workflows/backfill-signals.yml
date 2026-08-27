@@ -1,0 +1,58 @@
+name: Backfill eligibility signals
+
+# One-off / occasional: populates jobs.elig_signals so search can stop
+# fetching job descriptions (see migration 011 and SIGNALS_VERSION).
+#
+# WHY HERE RATHER THAN LOCALLY: this is ~48k round trips. On a home
+# connection, concurrency 24 produced a 44% "TypeError: fetch failed" rate and
+# a ~4 hour projection; concurrency 8 is clean but takes ~80 minutes of
+# saturated bandwidth. GitHub's runners sit next to the internet backbone, so
+# they can hold far more connections open and finish in minutes.
+#
+# WHEN TO RUN IT:
+#   - after migration 011, to populate the column the first time
+#   - after any SIGNALS_VERSION bump in api/roleIntelligence.js (search
+#     automatically falls back to the safe full-description path until
+#     coverage recovers, so there's no rush — but it stays slow until you do)
+#
+# Safe to re-run and safe to interrupt: it pages by "signals still missing",
+# so a cancelled run just resumes where it stopped.
+
+on:
+  workflow_dispatch:
+    inputs:
+      concurrency:
+        description: "Parallel writes (datacenter link handles 32 comfortably)"
+        required: false
+        default: "32"
+      all:
+        description: "Re-stamp EVERY row, not just missing ones (use after a SIGNALS_VERSION bump)"
+        required: false
+        default: "false"
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install
+
+      - name: Backfill elig_signals
+        run: |
+          node ingest/backfill_signals.js \
+            --concurrency ${{ github.event.inputs.concurrency || 32 }} \
+            ${{ github.event.inputs.all == 'true' && '--all' || '' }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+
+      - name: Verify parity before search relies on it
+        run: node ingest/test_signals_parity.js 800
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}

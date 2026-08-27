@@ -31,8 +31,12 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY
 
 const args = process.argv.slice(2);
 const ALL = args.includes("--all");
+// 8 measured clean on a home connection; 24 produced a 44% `TypeError: fetch
+// failed` rate — the client simply can't hold that many concurrent TLS
+// connections open, and every failure costs 4 retries before the row is
+// skipped. Higher is only safe on a datacenter link (see the GitHub Action).
 const ci = args.indexOf("--concurrency");
-const CONCURRENCY = ci > -1 && args[ci + 1] ? parseInt(args[ci + 1], 10) || 10 : 10;
+const CONCURRENCY = ci > -1 && args[ci + 1] ? parseInt(args[ci + 1], 10) || 8 : 8;
 const PAGE = 500;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -53,12 +57,15 @@ async function fetchPage() {
   return null;
 }
 
+let lastError = null;   // surfaced in the progress line — silent failures hid
+                        // a 44% error rate behind a plausible-looking counter
 async function writeOne(row) {
   const signals = extractEligibilitySignals(row);
   for (let a = 1; a <= 4; a++) {
     const { error } = await supabase.from("jobs")
       .update({ elig_signals: signals }).eq("id", row.id);
     if (!error) return true;
+    lastError = error.message;
     await sleep(700 * a);
   }
   return false;
@@ -89,7 +96,12 @@ async function run() {
 
     const rate = done / Math.max((Date.now() - started) / 1000, 1);
     const left = Math.max((missing || 0) - done, 0);
-    console.log(`   …${done} written · ${failed} failed · ${rate.toFixed(0)}/s · ~${Math.ceil(left / Math.max(rate, 1) / 60)}min left`);
+    console.log(`   …${done} written · ${failed} failed · ${rate.toFixed(0)}/s · ~${Math.ceil(left / Math.max(rate, 1) / 60)}min left`
+      + (failed > 0 && lastError ? `   last error: ${lastError.slice(0, 60)}` : ""));
+    if (failed > done * 0.2 && done > 200) {
+      console.log(`\n   ⚠️  failure rate above 20% — lower --concurrency (8 is safe on a home link),`);
+      console.log(`      or run the GitHub Action, which has a datacenter connection.\n`);
+    }
 
     // --all has no shrinking predicate to page through, so stop after one pass.
     if (ALL) break;
