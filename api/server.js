@@ -143,13 +143,17 @@ app.get("/ai/search", searchLimit, async (req, res) => {
     // --- local scoring + hard eligibility gate ---
     const scored = rawJobs.map((job) => {
       const r = scoreJobLocally(job, intent);
-      return { ...job, score: r.score, eligibility: r.eligibility, offTarget: r.offTarget };
+      return { ...job, score: r.score, eligibility: r.eligibility, offTarget: r.offTarget, match_breakdown: r.breakdown };
     });
     // drop geo-restricted AND cross-department mismatches (e.g. "Support Engineer"
     // surfacing in a Customer Support search because of a stale stored label).
     const eligible = scored.filter((j) => j.eligibility.eligible !== false && !j.offTarget);
     const excludedCount = scored.length - eligible.length;
-    eligible.sort((a, b) => b.score - a.score);
+    // Tie-break equal scores by recency — a backstop on top of the scorer's
+    // own (small, deliberate) freshness weighting, so two jobs that land on
+    // the exact same rounded score never show the older one first.
+    const postedTs = (j) => new Date(j.posted_at || j.created_at || 0).getTime();
+    eligible.sort((a, b) => b.score - a.score || postedTs(b) - postedTs(a));
     console.log(`✅ eligible=${eligible.length} ❌ excluded=${excludedCount}`);
 
     // --- optional ONE-SHOT batched LLM re-rank of the top slice ---
@@ -167,7 +171,7 @@ app.get("/ai/search", searchLimit, async (req, res) => {
       finalResults = eligible.map((j) => ({ ...j, match_reason: j.eligibility.reason }));
     }
 
-    finalResults.sort((a, b) => b.score - a.score);
+    finalResults.sort((a, b) => b.score - a.score || postedTs(b) - postedTs(a));
     const totalAvailable = finalResults.length;        // how many eligible matches exist in all
     const results = finalResults.slice(offset, offset + limit);
     const hasMore = offset + limit < totalAvailable;   // is there another page after this one?

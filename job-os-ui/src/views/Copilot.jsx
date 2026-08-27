@@ -625,6 +625,7 @@ function ResultsBlock({ m, isLatest, onLoadMore, onTailor, onReport, busy }) {
 
 function JobCard({ job, onTailor, onReport }) {
   const [pop, setPop] = useState(false);
+  const [matchPop, setMatchPop] = useState(false);
   const [reporting, setReporting] = useState(false);
   const [reported, setReported] = useState(false);
   const v   = verdictOf(job);
@@ -632,11 +633,20 @@ function JobCard({ job, onTailor, onReport }) {
   const confLabel = { certain: "High", likely: "Good", possible: "Unconfirmed" }[job.eligibility?.confidence] || "—";
 
   useEffect(() => {
-    if (!pop) return;
-    const close = () => setPop(false);
+    if (!pop && !matchPop) return;
+    const close = () => { setPop(false); setMatchPop(false); };
     document.addEventListener("click", close);
     return () => document.removeEventListener("click", close);
-  }, [pop]);
+  }, [pop, matchPop]);
+
+  // Plain-English readout of the score breakdown, so "89% match" isn't a
+  // black box — {roleScore: 0-55, locScore: 20-48, bonus: freshness/salary}.
+  const mb = job.match_breakdown;
+  const matchLines = mb ? [
+    [Math.round(mb.roleScore), 55, "How well the role matches your search"],
+    [Math.round(mb.locScore), 48, "How confident we are it's open to you"],
+    [Math.round(mb.bonus), null, "Freshness / salary listed"],
+  ] : null;
 
   const REASONS = [
     ["location", "Not open to my country"],
@@ -682,10 +692,31 @@ function JobCard({ job, onTailor, onReport }) {
           <div className="jc-co">{job.company}{job.location ? ` · ${job.location}` : ""}</div>
         </div>
 
-        <div className="jc-match">
-          <div className="pct">{Math.min(job.score || 0, 100)}%</div>
-          <div className="m-lbl">match</div>
-        </div>
+        <span className="pop-wrap">
+          <button
+            className="jc-match"
+            onClick={(e) => { e.stopPropagation(); setMatchPop((p) => !p); }}
+            aria-expanded={matchPop}
+            title="What makes up this score"
+            style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}
+          >
+            <div className="pct">{Math.min(job.score || 0, 100)}%</div>
+            <div className="m-lbl">match</div>
+          </button>
+          {matchPop && matchLines && (
+            <div className="popover" onClick={(e) => e.stopPropagation()}>
+              <h4>What makes up this score</h4>
+              {matchLines.map(([val, max, label]) => (
+                <p key={label} style={{ margin: "4px 0" }}>
+                  <b>{val > 0 ? `+${val}` : val}{max ? `/${max}` : ""}</b> — {label}
+                </p>
+              ))}
+              <div className="conf" style={{ marginTop: 6 }}>
+                Role fit and eligibility drive the score; recency and salary only nudge it — a strong match never loses to a merely newer, weaker one.
+              </div>
+            </div>
+          )}
+        </span>
       </div>
 
       {job.match_reason && <div className="jc-why">{job.match_reason}</div>}

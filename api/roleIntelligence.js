@@ -1534,20 +1534,30 @@ export function scoreJobLocally(job, intent) {
   const locScore = explicitCountry ? 48
     : { certain: 38, likely: 30, possible: 20 }[eligibility.confidence] ?? 20;
 
-  // STEP 4: tiny tiebreaker signals — kept SMALL (max ~3 total) so they only
-  // separate near-identical results and can never overcome a role-fit gap.
+  // STEP 4: freshness/salary tiebreaker — kept small relative to role fit
+  // (55 pts) and eligibility confidence (48 pts) so it can't drag a clearly
+  // WORSE match above a clearly better one. But it used to be too small to
+  // matter at all (±7 max) AND had a silent dead zone — a job 21-45 days old
+  // got exactly zero freshness credit, neither a bonus nor a penalty, so a
+  // 3-week-old posting and a 6-week-old posting looked identical to the
+  // ranker. Real user complaint this fixes: a job posted today, an equally
+  // strong match, ranking BELOW one posted 3 weeks ago, with freshness too
+  // weak to make a visible difference. Widened + smoothed the day tiers, and
+  // server.js now also breaks exact score ties by posted_at as a backstop.
   let bonus = 0;
   const d = job.posted_at || job.created_at;
   if (d) {
     const days = (Date.now() - new Date(d)) / 86400000;
-    if (days <= 3) bonus += 6;
-    else if (days <= 7) bonus += 4;
+    if (days <= 3) bonus += 10;
+    else if (days <= 7) bonus += 7;
+    else if (days <= 14) bonus += 4;
     else if (days <= 21) bonus += 2;
-    else if (days > 90) bonus -= 6;
-    else if (days > 45) bonus -= 3;
+    else if (days <= 45) bonus += 0;
+    else if (days <= 90) bonus -= 4;
+    else bonus -= 10;
   }
   if (job.salary_min || job.salary_max) bonus += 1;
-  bonus = Math.max(-6, Math.min(bonus, 7));
+  bonus = Math.max(-10, Math.min(bonus, 11));
 
   const total = Math.max(0, Math.min(roleScore + locScore + bonus, 100));
   return { score: Math.round(total), eligibility, offTarget, breakdown: { roleScore, locScore, bonus } };
