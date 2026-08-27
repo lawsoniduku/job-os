@@ -16,15 +16,21 @@ name: Link Check (dead listings)
 # SETUP: uses the same repo secrets as ingest.yml (SUPABASE_URL, SUPABASE_KEY).
 # Requires migration 010_job_liveness.sql to have been run.
 
+# THROUGHPUT: the first real run measured ~21.75% of live-looking listings as
+# dead (87 of 400), i.e. roughly 10,500 across the table. At the original
+# 800/night that's a 61-day full pass — far too slow when a fifth of the
+# inventory is gone. Twice daily at 2,500 gets a full sweep in ~10 days, and
+# --recheck-days 7 then keeps it cycling.
 on:
   schedule:
-    - cron: "30 2 * * *"   # 02:30 UTC daily, before the 03:00 jobhive import
+    - cron: "30 2 * * *"    # 02:30 UTC, before the 03:00 jobhive import
+    - cron: "30 14 * * *"   # 14:30 UTC
   workflow_dispatch:
     inputs:
       limit:
         description: "How many listings to check this run"
         required: false
-        default: "800"
+        default: "2500"
 
 jobs:
   link-check:
@@ -39,7 +45,7 @@ jobs:
         run: npm install
 
       - name: Check listing links
-        run: node ingest/check_links.js --limit ${{ github.event.inputs.limit || 800 }}
+        run: node ingest/check_links.js --limit ${{ github.event.inputs.limit || 2500 }} --concurrency 12
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
