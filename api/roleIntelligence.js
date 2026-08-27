@@ -921,6 +921,15 @@ const HARD_EXCLUSIONS = [
   "australia only", "must be based in australia", "australian citizens",
   "latam only", "latin america only",
   "us time zones only", "must work us hours", "est/cst/pst only",
+  // A government/security clearance requirement is virtually always tied to
+  // citizenship of one specific country — a very reliable exclusion signal
+  // that had zero coverage. Real example this fixes: a "Remote" role that
+  // read as open-but-unconfirmed, whose only location detail was "must be
+  // able to obtain a US government clearance" plus "Remote within the DMV
+  // area" — clearly not open to a Nigeria-based applicant, but nothing
+  // above would have caught it.
+  "security clearance", "government clearance", "active clearance",
+  "eligible for a security clearance", "obtain a clearance", "obtain a us government clearance",
 ];
 
 // Company slugs VERIFIED (not guessed) to gate on US residency — the job
@@ -1023,6 +1032,7 @@ const _RESTRICT_REGIONS = [
   "united states", "the united states", "usa", "the usa", "u.s.", "us", "the us",
   "uk", "united kingdom", "the uk", "canada", "europe", "the eu", "european union",
   "germany", "australia", "india", "philippines", "north america",
+  "taiwan", "south korea", "hong kong", "israel",
 ];
 const RESTRICTION_PHRASES = [];
 for (const r of _RESTRICT_REGIONS) {
@@ -1061,6 +1071,7 @@ const FOREIGN_COUNTRIES = [
   "india", "china", "japan", "singapore", "australia", "new zealand", "brazil",
   "mexico", "argentina", "colombia", "philippines", "pakistan", "bangladesh",
   "vietnam", "indonesia", "malaysia", "thailand", "uae", "saudi arabia", "qatar",
+  "taiwan", "south korea", "hong kong", "israel", "chile", "peru", "russia",
 ];
 
 // ============================================================
