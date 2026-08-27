@@ -17,10 +17,24 @@ name: Link Check (dead listings)
 # Requires migration 010_job_liveness.sql to have been run.
 
 # THROUGHPUT: the first real run measured ~21.75% of live-looking listings as
-# dead (87 of 400), i.e. roughly 10,500 across the table. At the original
-# 800/night that's a 61-day full pass — far too slow when a fifth of the
-# inventory is gone. Twice daily at 2,500 gets a full sweep in ~10 days, and
-# --recheck-days 7 then keeps it cycling.
+# dead (87 of 400), i.e. roughly 10,500 across the table — too much to leave
+# uncrawled for long.
+#
+# Three things make a full sweep cheap rather than slow:
+#   - SCOPE. The checker skips regions the search can never surface (US / UK /
+#     Canada / Regional). That is 18,560 of 48,673 rows — 38% of the crawl
+#     removed without losing anything a user could see.
+#   - CONCURRENCY. Measured host spread in the queue: 28 distinct hosts per
+#     300 rows, averaging 1.4 consecutive requests to the same host. So the
+#     load is naturally spread and 24 parallel checks does not hammer any one
+#     ATS. (A home connection cannot do this — see backfill_signals.js — but a
+#     runner can.)
+#   - BODY CAP. Page reads stop at 256KB instead of pulling whole pages just
+#     to phrase-match.
+#
+# Net: ~30k reachable rows at 12,000 per run, twice daily = full coverage in
+# ~1.5 days instead of 10, then --recheck-days 7 keeps it cycling at a few
+# thousand a day.
 on:
   schedule:
     - cron: "30 2 * * *"    # 02:30 UTC, before the 03:00 jobhive import
@@ -30,12 +44,12 @@ on:
       limit:
         description: "How many listings to check this run"
         required: false
-        default: "2500"
+        default: "12000"
 
 jobs:
   link-check:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -45,7 +59,7 @@ jobs:
         run: npm install
 
       - name: Check listing links
-        run: node ingest/check_links.js --limit ${{ github.event.inputs.limit || 2500 }} --concurrency 12
+        run: node ingest/check_links.js --limit ${{ github.event.inputs.limit || 12000 }} --concurrency 24
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}

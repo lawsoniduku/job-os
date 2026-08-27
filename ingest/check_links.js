@@ -42,6 +42,7 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY
 
 const args = process.argv.slice(2);
 const dryRun = args.includes("--dry-run");
+const allRegions = args.includes("--all-regions");
 const num = (flag, dflt) => {
   const i = args.indexOf(flag);
   return i > -1 && args[i + 1] ? parseInt(args[i + 1], 10) || dflt : dflt;
@@ -98,6 +99,34 @@ const CHALLENGE_PHRASES = [
   "enable javascript and cookies", "verify you are human",
   "performing security verification", "ddos protection by",
 ];
+
+// Read at most this much of a page body. We only ever phrase-match against it,
+// and the "this role is closed" banner is always in the served markup near the
+// top — not 800KB down past the analytics bundles. In the first real run 273
+// of 400 checks were live pages downloaded in full purely to confirm nothing
+// was wrong with them.
+const MAX_BODY_BYTES = 256 * 1024;
+
+/** Read a response body up to MAX_BODY_BYTES, then stop pulling. */
+async function readCapped(res) {
+  try {
+    if (!res.body) return await res.text().catch(() => "");
+    const reader = res.body.getReader();
+    const chunks = [];
+    let size = 0;
+    while (size < MAX_BODY_BYTES) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      size += value.length;
+    }
+    reader.cancel().catch(() => {});   // stop the transfer; don't drain the rest
+    return new TextDecoder("utf-8", { fatal: false })
+      .decode(Buffer.concat(chunks.map((c) => Buffer.from(c))));
+  } catch {
+    return "";
+  }
+}
 
 /**
  * Did the server redirect us AWAY from the specific posting?
@@ -160,7 +189,7 @@ export async function checkOne(url) {
     if (redirectedAwayFromPosting(url, full.url)) return "dead";
     if (!(full.headers.get("content-type") || "").includes("text/html")) return "ok";
 
-    const html = (await full.text().catch(() => "")).toLowerCase();
+    const html = (await readCapped(full)).toLowerCase();
     if (!html) return "ok";
     const head = html.slice(0, 4000);                // challenges render immediately
     if (CHALLENGE_PHRASES.some((p) => head.includes(p))) return "unknown";
@@ -182,17 +211,27 @@ async function assertLivenessColumns() {
   }
 }
 
+// Regions the search pre-filter actually surfaces to an African candidate
+// (see /ai/search in api/server.js). A listing tagged US / UK / Canada /
+// Regional can never appear in results, so whether its link still works is
+// information no user will ever benefit from. Measured: 18,560 of 48,673 rows
+// — 38% of the crawl — were in that unreachable set. Skipping them is free
+// coverage, not a shortcut. Pass --all-regions to check everything anyway.
+const SEARCHABLE_REGIONS = ["Nigeria", "Africa", "Global", "Remote", "EMEA", "Unknown"];
+
 async function selectBatch() {
   const staleBefore = new Date(Date.now() - RECHECK_DAYS * 864e5).toISOString();
   const liveCutoff = new Date(Date.now() - 28 * 864e5).toISOString();
   for (let a = 1; a <= 4; a++) {
     // Only rows the search can actually surface today — no point spending
-    // requests on listings already gated out by freshness.
-    const { data, error } = await supabase
+    // requests on listings already gated out by freshness or by region.
+    let q = supabase
       .from("jobs")
       .select("id, apply_url, title, company, link_status, link_checked_at")
       .gte("last_seen_at", liveCutoff)
-      .or(`link_checked_at.is.null,link_checked_at.lt.${staleBefore}`)
+      .or(`link_checked_at.is.null,link_checked_at.lt.${staleBefore}`);
+    if (!allRegions) q = q.in("eligibility_region", SEARCHABLE_REGIONS);
+    const { data, error } = await q
       .order("link_checked_at", { ascending: true, nullsFirst: true })
       .limit(LIMIT);
     if (!error) return data || [];
