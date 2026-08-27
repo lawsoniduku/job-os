@@ -476,18 +476,57 @@ export const ROLE_TAXONOMY = [
       "executive leadership","organisational strategy","stakeholder management"]
   },
   {
+    // INFOSEC — distinct from the physical-security cluster below. Without
+    // this, "remote cybersecurity roles open to nigerians" resolved to
+    // cluster=null: the copilot asked "what kind of role are you looking
+    // for?" for a query that plainly names one, retrieval fell back to a
+    // single `title ilike %cybersecurity%` (41 rows instead of the 500-row
+    // pool), and the results were mislabelled — "Cybersecurity Analyst II"
+    // came back as Data Analytics, "Sr. Cybersecurity Instructor" as
+    // Education / Teaching.
+    // Broad stems ("cybersecurity", "cyber security", "information
+    // security") are FIRST on purpose: retrieval only uses the first 10
+    // aliases, and these substrings catch the long tail of real titles.
+    cluster: "Cybersecurity",
+    department: "Engineering",
+    related: ["Software Engineering", "Data Engineering", "Operations"],
+    aliases: [
+      "cybersecurity","cyber security","information security","security engineer",
+      "security analyst","soc analyst","penetration tester","security architect",
+      "infosec","application security",
+      "cybersecurity analyst","cybersecurity engineer","cyber security analyst",
+      "information security analyst","information security engineer",
+      "security operations center analyst","security operations analyst",
+      "appsec engineer","cloud security engineer","network security engineer",
+      "vulnerability analyst","threat intelligence analyst","incident response analyst",
+      "malware analyst","digital forensics","ethical hacker","red team","blue team",
+      "devsecops","iam engineer","identity and access management","siem engineer",
+      "grc analyst","cyber risk analyst","security compliance analyst",
+      "ciso","chief information security officer","security researcher",
+    ],
+    keywords: ["siem","soc","vulnerability","penetration testing","threat hunting",
+      "firewall","endpoint","zero trust","owasp","malware","phishing","encryption",
+      "iso 27001","soc 2","intrusion detection","security operations"]
+  },
+  {
+    // PHYSICAL security (guarding, patrol, loss prevention). Kept separate
+    // from Cybersecurity above. "security analyst"/"security specialist"/
+    // "security consultant" were removed from here — in remote job feeds
+    // those titles are overwhelmingly infosec, and having them here dragged
+    // cyber roles into a guard-work cluster. "incident response" likewise
+    // moved: it's a core infosec term and was hijacking cyber postings.
     cluster: "Security",
     department: "Security",
     related: ["Skilled Trades / Field", "Operations"],
     aliases: [
       "security officer","security supervisor","security manager","head of security",
-      "chief security officer","security coordinator","security analyst",
-      "security specialist","loss prevention officer","loss prevention manager",
-      "physical security manager","corporate security manager","security consultant",
-      "safety and security officer","security operations manager","cso",
+      "chief security officer","security coordinator",
+      "loss prevention officer","loss prevention manager",
+      "physical security manager","corporate security manager",
+      "safety and security officer","security guard","guard supervisor",
     ],
-    keywords: ["surveillance","access control","incident response","patrol",
-      "risk assessment","cctv","guard force","security protocol"]
+    keywords: ["surveillance","access control","patrol",
+      "cctv","guard force","security protocol"]
   },
   {
     cluster: "Quality Assurance",
@@ -979,7 +1018,21 @@ function isUsResidencyGatedCompany(company = "") {
 const JURISDICTION_MARKERS = {
   US: ["401(k)", "401k", "flsa", "w-2", "w2", "e-verify", "everify",
        "hsa", "cobra", "social security number", "h-1b", "h1b",
-       "us citizen", "u.s. citizen", "fair labor standards act"],
+       "us citizen", "u.s. citizen", "fair labor standards act",
+       // US federal / defense supply-chain programmes. These are not
+       // security best-practices, they are US GOVERNMENT regimes whose work
+       // is performed by US-based contractors — ITAR and "U.S. person" are
+       // literally legal access categories. Real leak this closes:
+       // "Cybersecurity Analyst II - Certified CMMC Professional" and
+       // "Sr. Cybersecurity Instructor" (NIST 800-171 / CMMC curriculum)
+       // both surfaced to Nigerian users as "region unconfirmed" — they
+       // carry no 401(k), so nothing else caught them.
+       // NOT listed, deliberately: "nist", "iso 27001", "soc 2", "gdpr",
+       // "pci dss" — international standards a security engineer anywhere
+       // may know. Excluding on those would gut legitimate global infosec roles.
+       "itar", "cmmc", "dfars", "fedramp", "nispom",
+       "u.s. person", "us person", "controlled unclassified information",
+       "facility clearance", "federal contractor"],
   UK: ["national insurance", "hmrc", "paye", "right to work in the uk"],
   Canada: ["rrsp", "canada pension plan", "canadian payroll"],
   Australia: ["superannuation", "fair work act"],
@@ -992,15 +1045,32 @@ const LOCK_NATIVE_COUNTRIES = {
   Canada: ["canada"],
   Australia: ["australia"],
 };
+// US federal/defence programme markers — a different KIND of lock from a
+// payroll benefit, so the user-facing reason should say so rather than claim
+// the posting "offers US statutory benefits" when it actually said ITAR.
+const US_FEDERAL_MARKERS = new Set(["itar", "cmmc", "dfars", "fedramp", "nispom",
+  "u.s. person", "us person", "controlled unclassified information",
+  "facility clearance", "federal contractor"]);
+
+// Returns { country, marker } so callers can explain WHY, or null.
 export function detectJurisdictionLock(text = "") {
-  for (const [lock, markers] of Object.entries(JURISDICTION_MARKERS)) {
-    if (hasAny(text, markers)) return lock;
+  for (const [country, markers] of Object.entries(JURISDICTION_MARKERS)) {
+    for (const marker of markers) {
+      if (hasAny(text, [marker])) return { country, marker };
+    }
   }
   return null;
 }
+// Human-readable, accurate reason for a given lock.
+function jurisdictionReason(lock) {
+  if (!lock) return "";
+  return US_FEDERAL_MARKERS.has(lock.marker)
+    ? `${lock.country} federal/defence programme work ("${lock.marker.toUpperCase()}") — restricted to ${lock.country}-based personnel`
+    : `${lock.country} payroll only — the posting offers ${lock.country}-specific statutory benefits ("${lock.marker}")`;
+}
 function lockAppliesTo(lock, country) {
   if (!lock) return false;
-  return !(LOCK_NATIVE_COUNTRIES[lock] || []).includes(String(country || "").toLowerCase());
+  return !(LOCK_NATIVE_COUNTRIES[lock.country] || []).includes(String(country || "").toLowerCase());
 }
 
 // Softer, general signal for companies we HAVEN'T individually verified:
@@ -1236,7 +1306,7 @@ function genericEligibility(job, title, desc) {
   // disqualifying here. See JURISDICTION_MARKERS.
   const guestLock = detectJurisdictionLock(body);
   if (guestLock)
-    return { eligible: false, confidence: "excluded", reason: `${guestLock} payroll only — posting offers ${guestLock}-specific statutory benefits` };
+    return { eligible: false, confidence: "excluded", reason: jurisdictionReason(guestLock) };
 
   const remoteSignal = job.remote === true ||
     hasAny(`${locField}${body}`, ["remote", "work from home", "wfh", "work from anywhere", "fully distributed"]);
@@ -1428,9 +1498,11 @@ export function checkEligibility(job, country) {
   // does the posting name a statutory benefit/tax instrument that only exists
   // for domestic payroll? If so this is not a globally-open remote role, it's
   // a domestic one that forgot to say so. See JURISDICTION_MARKERS above.
-  const lock = detectJurisdictionLock(desc);
+  // Scan title too — a lock is often stated only there, e.g.
+  // "Cybersecurity Analyst II - Certified CMMC Professional - CCP".
+  const lock = detectJurisdictionLock(`${title} ${desc}`);
   if (lockAppliesTo(lock, country))
-    return E("excluded", `Remote, but ${lock} payroll only — the posting offers ${lock}-specific statutory benefits`, false);
+    return E("excluded", `Remote, but ${jurisdictionReason(lock)}`, false);
 
   return E("possible", "Remote — region unconfirmed");
 }

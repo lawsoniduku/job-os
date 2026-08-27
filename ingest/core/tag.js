@@ -156,10 +156,10 @@ export function detectEligibilityRegion(description = "", location = "", regionH
   // means the search pre-filter drops these before scoring, instead of
   // surfacing them to Nigerian users as "Remote — region unconfirmed".
   const lock = detectJurisdictionLock(t);
-  if (lock === "US") return "US";
-  if (lock === "UK") return "UK";
-  if (lock === "Canada") return "Canada";
-  if (lock === "Australia") return "Regional";
+  if (lock?.country === "US") return "US";
+  if (lock?.country === "UK") return "UK";
+  if (lock?.country === "Canada") return "Canada";
+  if (lock?.country === "Australia") return "Regional";
 
   if (any(t, ["remote"])) return "Remote";
   return "Unknown";
