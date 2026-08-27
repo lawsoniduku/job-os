@@ -59,6 +59,7 @@ import { Readable } from "node:stream";
 import { normalizeJob } from "./core/normalize.js";
 import { tagJob } from "./core/tag.js";
 import { looksEnglishJob } from "./core/language.js";
+import { canonicalUrl, contentKey } from "./core/dedup.js";
 
 dotenv.config();
 
@@ -280,13 +281,25 @@ async function run() {
   );
   sourceStream.on("error", (err) => parser.destroy(err));
 
-  let scanned = 0, keptEligible = 0, notEnglish = 0, wrongRegion = 0, kept = 0, upserted = 0, failed = 0, fastRejected = 0;
+  let scanned = 0, keptEligible = 0, notEnglish = 0, wrongRegion = 0, kept = 0, upserted = 0, failed = 0, fastRejected = 0, duplicate = 0;
   const failedRows = []; // rows that failed mid-stream, retried once more after stream ends
   let batch = [];
   const keptUrls = []; // every apply_url kept this run, new AND already-existing —
   // powers the last_seen_at touch pass below, since ignoreDuplicates:true means
   // the upsert itself never refreshes last_seen_at on rows we've already seen.
   const regionTally = {};
+
+  // De-dup within this run. The SAME role is often posted many times under
+  // different req IDs/apply URLs by the same company — bulk ATS exports are
+  // especially prone to this (e.g. "Customer Service Rep - Work From Home"
+  // @ spadepartners showed up 5x in one run, each a different apply_url,
+  // flooding search results with what's really one job). pipeline.js already
+  // guards against this via dedup.js's dedupe(), but that needs the whole
+  // array in memory up front — this importer streams multi-hundred-MB files
+  // row by row on purpose, so we track the same two keys (canonical URL,
+  // content key) incrementally instead, to stay memory-safe.
+  const seenUrls = new Set();
+  const seenContent = new Set();
 
   let streamError = null;
   try {
@@ -328,6 +341,14 @@ async function run() {
 
       // 3) eligibility gate — keep only regions a Nigerian candidate can pursue
       if (!KEEP_REGIONS.has(job.eligibility_region)) { wrongRegion++; continue; }
+
+      // 4) de-dup — same content key (company + normalized title + location)
+      // or same canonical URL as a row we've already kept this run.
+      const dedupUrl = canonicalUrl(job.apply_url);
+      const dedupKey = contentKey(job);
+      if (seenUrls.has(dedupUrl) || seenContent.has(dedupKey)) { duplicate++; continue; }
+      seenUrls.add(dedupUrl);
+      seenContent.add(dedupKey);
 
       keptEligible++;
       kept++;
@@ -406,6 +427,7 @@ async function run() {
   console.log(`   fast-rejected (foreign on-site): ${fastRejected}`);
   console.log(`   dropped (lang): ${notEnglish}`);
   console.log(`   dropped (region): ${wrongRegion}`);
+  console.log(`   dropped (duplicate): ${duplicate}`);
   console.log(`   KEPT eligible:  ${kept}`);
   console.log(`   region split of kept:`, Object.fromEntries(Object.entries(regionTally).filter(([k]) => KEEP_REGIONS.has(k))));
   if (dryRun) console.log(`   (dry run — nothing written)`);

@@ -14,7 +14,7 @@
 // and dedup nukes them all. So we keep identity-ish params (id, job, jobid,
 // gh_jid, lever id, etc.) and drop only known tracking params.
 const KEEP_PARAMS = /^(id|jobid|job_id|job|jid|gh_jid|lever|posting|pid|p|ref_id)$/i;
-function canonicalUrl(url = "") {
+export function canonicalUrl(url = "") {
   let s = String(url).replace(/#.*$/, "").replace(/\/+$/, "").trim();
   const qIdx = s.indexOf("?");
   if (qIdx === -1) return s.toLowerCase();
@@ -26,7 +26,7 @@ function canonicalUrl(url = "") {
   return (kept.length ? `${base}?${kept.join("&")}` : base).toLowerCase();
 }
 
-function contentKey(job) {
+export function contentKey(job) {
   const company = (job.company || "").toLowerCase().trim();
   const title = (job.title || "").toLowerCase().replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ").trim();
   const loc = (job.location || "").toLowerCase().split(/[,/|]/)[0].trim();
