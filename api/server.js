@@ -53,7 +53,23 @@ const llmLimit = rateLimit({ windowMs: 60_000, max: 12, standardHeaders: true, l
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
-const JOB_COLUMNS =
+// Columns fetched per search candidate.
+//
+// `description` is deliberately ABSENT: it averaged ~2.6 KB/row and was the
+// entire reason a search moved 1.3-2.2 MB and took 4-13s. Everything the
+// eligibility check needed from it is precomputed into `elig_signals`
+// (~200 bytes) at ingest — see migration 011 and SIGNALS_VERSION.
+// Nothing downstream needs the description: the frontend never reads it, and
+// /ai/tailor + /ai/interview fetch it themselves by job id.
+const JOB_COLUMNS_LEAN =
+  "id, title, company, location, apply_url, remote, source, ats_source, " +
+  "role_cluster, department, seniority, posted_at, created_at, salary_min, " +
+  "salary_max, employment_type, remote_type, eligibility_region, elig_signals";
+
+// Fallback for before migration 011 / the backfill has run: without stored
+// signals, checkEligibility must read the description or it would silently
+// mis-judge every job. Slower, but correct — never the other way round.
+const JOB_COLUMNS_FULL =
   "id, title, company, location, description, apply_url, remote, source, ats_source, " +
   "role_cluster, department, seniority, posted_at, created_at, salary_min, " +
   "salary_max, employment_type, remote_type, eligibility_region";
@@ -137,6 +153,39 @@ async function livenessAvailable() {
   return _hasLiveness;
 }
 
+// ── Lean-payload probe ───────────────────────────────────────────────────
+// Only drop `description` from the search payload once elig_signals actually
+// exists AND is populated. Two separate failure modes to avoid:
+//   - column missing (migration 011 not run)  -> query would error outright
+//   - column present but mostly NULL (backfill not run) -> checkEligibility
+//     would fall back to a description we no longer fetched, and silently
+//     mis-judge eligibility. That is far worse than being slow.
+// Requires >95% coverage before switching, and re-checks every 10 minutes so
+// the switch flips on its own once the backfill finishes — no redeploy.
+let _lean = { on: false, at: 0 };
+const LEAN_TTL_MS = 10 * 60_000;
+async function useLeanColumns() {
+  if (Date.now() - _lean.at < LEAN_TTL_MS) return _lean.on;
+  try {
+    const { count: total } = await supabase.from("jobs").select("*", { count: "estimated", head: true });
+    const { count: missing, error } = await supabase.from("jobs")
+      .select("*", { count: "estimated", head: true }).is("elig_signals", null);
+    if (error) throw new Error(error.message);
+    const covered = total > 0 ? 1 - (missing || 0) / total : 0;
+    const on = covered >= 0.95;
+    if (on !== _lean.on) {
+      console.log(on
+        ? `✅ lean search payload ON — elig_signals ${(covered * 100).toFixed(1)}% populated (descriptions no longer fetched)`
+        : `ℹ️  lean payload OFF — elig_signals only ${(covered * 100).toFixed(1)}% populated; run ingest/reclassify.js`);
+    }
+    _lean = { on, at: Date.now() };
+  } catch {
+    _lean = { on: false, at: Date.now() };   // column absent -> stay on the safe path
+    console.log("ℹ️  lean payload OFF — run supabase/migrations/011_elig_signals.sql");
+  }
+  return _lean.on;
+}
+
 async function suppressedJobIds() {
   const now = Date.now();
   if (now - _suppress.at < SUPPRESS_TTL_MS) return _suppress.ids;
@@ -205,7 +254,9 @@ app.get("/ai/search", searchLimit, async (req, res) => {
     // search — real money for a figure the UI doesn't even display (it shows
     // `evaluated`, the rows we actually checked, because that's the honest
     // number). An estimate is plenty for the `scanned` diagnostic field.
-    let dbQuery = supabase.from("jobs").select(JOB_COLUMNS, { count: "planned" });
+    const lean = await useLeanColumns();
+    let dbQuery = supabase.from("jobs")
+      .select(lean ? JOB_COLUMNS_LEAN : JOB_COLUMNS_FULL, { count: "planned" });
     if (intent.cluster) {
       const aliases = minimalAliasSet(getAliasesForCluster(intent.cluster))
         .map(safeFilterValue).filter(Boolean).slice(0, MAX_ALIAS_FILTERS);
@@ -735,9 +786,13 @@ app.post("/ai/refine", searchLimit, async (req, res) => {
     // Let the explicit refinement override seniority.
     if (seniorityFilter) intent.seniority = seniorityFilter;
 
-    let dbQuery = supabase.from("jobs").select(JOB_COLUMNS);
+    // Same lean/full payload switch as /ai/search — refine re-runs the same
+    // scoring, so it benefits from not fetching descriptions too.
+    let dbQuery = supabase.from("jobs")
+      .select((await useLeanColumns()) ? JOB_COLUMNS_LEAN : JOB_COLUMNS_FULL);
     if (intent.cluster) {
-      const aliases = getAliasesForCluster(intent.cluster).slice(0, 10).map(safeFilterValue).filter(Boolean);
+      const aliases = minimalAliasSet(getAliasesForCluster(intent.cluster))
+        .map(safeFilterValue).filter(Boolean).slice(0, MAX_ALIAS_FILTERS);
       const titleFilters = aliases.map((a) => `title.ilike.%${a}%`).join(",");
       dbQuery = dbQuery.or(`role_cluster.eq.${safeFilterValue(intent.cluster)},${titleFilters}`);
     } else if (intent.keywords?.length) {

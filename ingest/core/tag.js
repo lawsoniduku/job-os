@@ -6,7 +6,7 @@
  * every query. Reuses the boundary-aware classifier from the role engine.
  */
 
-import { classifyJob, detectJurisdictionLock } from "../../api/roleIntelligence.js";
+import { classifyJob, detectJurisdictionLock, extractEligibilitySignals } from "../../api/roleIntelligence.js";
 
 function boundary(text, phrase) {
   return new RegExp(`(?:^|[^a-z0-9])${phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:[^a-z0-9]|$)`, "i").test(text);
@@ -167,7 +167,7 @@ export function detectEligibilityRegion(description = "", location = "", regionH
 
 export function tagJob(job) {
   const { role_cluster, department } = classifyJob(job.title, job.description);
-  return {
+  const tagged = {
     ...job,
     role_cluster,
     department,
@@ -175,4 +175,10 @@ export function tagJob(job) {
     remote_type: detectRemoteType(job.location, job.description),
     eligibility_region: detectEligibilityRegion(job.description, job.location, job._region_hint, job.country_iso),
   };
+  // Precompute everything the search-time eligibility check would otherwise
+  // need the full description for, so search can stop shipping descriptions
+  // over the wire entirely (see SIGNALS_VERSION in api/roleIntelligence.js).
+  // Computed AFTER eligibility_region above, because the hard-exclusion scan
+  // reads the region field too.
+  return { ...tagged, elig_signals: extractEligibilitySignals(tagged) };
 }

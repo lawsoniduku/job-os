@@ -1286,7 +1286,8 @@ const LOC_FOREIGN_HINTS = [
  */
 function genericEligibility(job, title, desc) {
   const locField = ` ${(job.location || "").toLowerCase()} `;
-  const body = ` ${title} ${desc.slice(0, 3000)} `;
+  // Reads precomputed signals so this path also works without a description.
+  const sig = signalsFor(job);
 
   // 0. Verified US-residency-gated recruiting funnel — see comment at
   // US_RESIDENCY_GATED_COMPANIES above. The gate lives in the application
@@ -1295,25 +1296,23 @@ function genericEligibility(job, title, desc) {
     return { eligible: false, confidence: "excluded", reason: "Application requires US residency (verified)" };
 
   // 1. Explicit restrictions anywhere -> out.
-  if (hasAny(locField, HARD_EXCLUSIONS) || hasAny(body, HARD_EXCLUSIONS))
+  if (hasAny(locField, HARD_EXCLUSIONS) || sig.hardExclusion)
     return { eligible: false, confidence: "excluded", reason: "Geographically restricted" };
-  if (RESTRICTION_PHRASES.some((p) => hasPhrase(body, p)))
+  if (sig.restricted)
     return { eligible: false, confidence: "excluded", reason: "Restricted to a specific region in the posting" };
 
   // 1b. Statutory benefit/tax instruments that only exist for domestic
   // payroll (401(k), FLSA, National Insurance, RRSP, superannuation…). The
   // guest path defaults to the Africa-first audience, so any such lock is
   // disqualifying here. See JURISDICTION_MARKERS.
-  const guestLock = detectJurisdictionLock(body);
-  if (guestLock)
-    return { eligible: false, confidence: "excluded", reason: jurisdictionReason(guestLock) };
+  if (sig.jurisdiction)
+    return { eligible: false, confidence: "excluded", reason: jurisdictionReason(sig.jurisdiction) };
 
-  const remoteSignal = job.remote === true ||
-    hasAny(`${locField}${body}`, ["remote", "work from home", "wfh", "work from anywhere", "fully distributed"]);
+  const remoteSignal = job.remote === true || hasAny(locField, ["remote", "work from home", "wfh"]) || sig.remoteWords;
 
   // Guests default to the Africa-first audience, so incompatible-timezone
   // REQUIREMENTS are a real friction — warn on otherwise-open roles.
-  const tzWarn = timezoneFriction(title, desc.slice(0, 3000));
+  const tzWarn = sig.tzFriction ? "warn" : null;
   const openReason = (base) => tzWarn
     ? `${base} — but needs a timezone that's hard from Africa; check the hours`
     : base;
@@ -1335,10 +1334,110 @@ function genericEligibility(job, title, desc) {
   return { eligible: true, confidence: "possible", reason: "Set your country in You → for a verified check" };
 }
 
+// ── PRECOMPUTED ELIGIBILITY SIGNALS ──────────────────────────────────────
+// Search used to ship every job's full description to the API on every
+// request purely to re-derive these facts. Measured: 600-1000 rows is
+// 1.3-2.2 MB on the wire and 4-13s of latency, while the scoring itself is
+// only ~1.6ms/job. The description is the payload; the verdict is ~200 bytes.
+//
+// The verdict itself CAN'T be precomputed — it depends on the user's target
+// country. But every check that needs the description is country-INdependent
+// (is this posting non-English? does it name a 401(k)? which countries does
+// it tie itself to?). So we extract those facts once at ingest and let
+// checkEligibility combine them with the small country-dependent fields
+// (location, title, eligibility_region) at request time.
+//
+// Bump SIGNALS_VERSION whenever the extraction logic changes — a stored blob
+// from an older version is ignored and recomputed from the description, so a
+// logic change can never be silently served from stale precomputed data.
+export const SIGNALS_VERSION = 1;
+
+const NON_EN_DESC = [
+  "estamos","nossa","nosso","você","trabalho","empresa","vaga","vagas","sobre",
+  "experiência","conhecimento","atuar","responsável","equipe","desenvolvimento",
+  "nuestra","nuestro","buscamos","trabajo","empresa","experiencia","conocimiento",
+  "responsable","equipo","habilidades","requisitos","ofrecemos","únete",
+];
+const LOC_CUES = ["location", "based", "headquarters", "hq", "office", "reside",
+  "authorized to work", "eligible to work", "must be", "candidates in", "role is in"];
+
+// Same de-gluing checkEligibility applies, so precomputed and live paths see
+// identical text ("AnalystLocation" -> "Analyst Location").
+const deglueText = (s) =>
+  String(s || "")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
+
+/**
+ * Everything checkEligibility needs from the DESCRIPTION, reduced to a small
+ * JSON blob. Computed at ingest (tag.js) and stored on jobs.elig_signals.
+ */
+export function extractEligibilitySignals(job = {}) {
+  const title = ` ${deglueText(job.title).toLowerCase()} `;
+  const loc = deglueText(job.location).toLowerCase();
+  const desc = deglueText(job.description).toLowerCase();
+  const region = (job.eligibility_region || "").toLowerCase();
+  const titleDesc = ` ${title} ${desc} `;
+  const all = ` ${loc} ${desc} ${region} `;
+
+  // First matching hard-exclusion phrase, so the reason string is preserved.
+  let hardExclusion = null;
+  for (const ex of HARD_EXCLUSIONS) {
+    if (hasPhrase(`${title} ${all}`, ex)) { hardExclusion = ex; break; }
+  }
+
+  let nonEnHits = 0;
+  for (const w of NON_EN_DESC) if (hasPhrase(desc, w)) nonEnHits++;
+  const diac = (desc.match(/[àâãäçéêíóôõúñ]/g) || []).length;
+  const diacRatio = diac / Math.max(desc.length, 1);
+
+  // Every foreign country the BODY ties itself to, in FOREIGN_COUNTRIES order
+  // — order matters because the live check returns the first match, and the
+  // search-time step skips whichever one is the user's own target.
+  const tiedCountries = [];
+  for (const c of FOREIGN_COUNTRIES) {
+    if (!hasPhrase(desc, c)) continue;
+    const idx = desc.indexOf(c);
+    if (idx === -1) continue;
+    const window = desc.slice(Math.max(0, idx - 60), idx + 60);
+    if (LOC_CUES.some((cue) => window.includes(cue))) tiedCountries.push(c);
+  }
+
+  const lock = detectJurisdictionLock(`${title} ${desc}`);
+
+  return {
+    v: SIGNALS_VERSION,
+    hardExclusion,
+    nonEnglishMarkers: hasAny(titleDesc, NON_ENGLISH_MARKERS),
+    nonEnglishLocal: nonEnHits >= 3 || diacRatio > 0.015,
+    restricted: hasAny(titleDesc, RESTRICTION_PHRASES),
+    tiedCountries,
+    worldwideDesc: hasAny(desc, WORLDWIDE_DESC_STRONG),
+    descMentionsForeign: hasAny(desc, FOREIGN_COUNTRIES),
+    insuranceLicensing: hasAny(desc, INSURANCE_LICENSING_SIGNAL),
+    jurisdiction: lock ? { country: lock.country, marker: lock.marker } : null,
+    tzFriction: timezoneFriction(title, desc) === "warn",
+    // genericEligibility (guest path) needs these two as well.
+    remoteWords: hasAny(` ${loc} ${title} ${desc} `,
+      ["remote", "work from home", "wfh", "work from anywhere", "fully distributed"]),
+  };
+}
+
+/** Use the stored blob when it matches the current logic version, else recompute. */
+function signalsFor(job) {
+  const s = job?.elig_signals;
+  return s && s.v === SIGNALS_VERSION ? s : extractEligibilitySignals(job);
+}
+
 /**
  * checkEligibility(job, country) -> { eligible, confidence, reason }
  * confidence: certain | likely | possible | excluded
  * Word-boundary matching throughout (fixes "campus only"/"remote user" bugs).
+ *
+ * Reads job.elig_signals when present so it does NOT need job.description —
+ * see the SIGNALS_VERSION block above. Falls back to computing from the
+ * description, so a row that hasn't been backfilled still gets the right
+ * verdict, just more slowly.
  */
 export function checkEligibility(job, country) {
   // Some scraped descriptions lose their spaces ("Data AnalystLocation : Remote,
@@ -1352,11 +1451,10 @@ export function checkEligibility(job, country) {
       .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
   const title = ` ${deglue(job.title).toLowerCase()} `;
   const loc = deglue(job.location).toLowerCase();
-  const desc = deglue(job.description).toLowerCase();
   const region = (job.eligibility_region || "").toLowerCase();
-  const titleDesc = ` ${title} ${desc} `;
-  const all = ` ${loc} ${desc} ${region} `;
   const isAfrican = country === "africa" || AFRICAN_COUNTRIES.has(country);
+  // Everything that would have required the full description.
+  const sig = signalsFor(job);
 
   // Broad-region targets → their positive location signals
   const REGION_POSITIVE = {
@@ -1372,7 +1470,7 @@ export function checkEligibility(job, country) {
   // REQUIREMENT downgrades an otherwise-positive verdict and warns. Computed
   // once here; applied to positive verdicts via softenForTimezone below.
   const tzWarn = (isAfrican || country === "mena" || country === "africa")
-    ? timezoneFriction(title, desc) : null;
+    ? (sig.tzFriction ? "warn" : null) : null;
   const softenForTimezone = (verdict) => {
     if (!tzWarn || !verdict.eligible) return verdict;
     // Never upgrade; only downgrade certain/likely → possible with a warning.
@@ -1393,10 +1491,10 @@ export function checkEligibility(job, country) {
   // title — "AI Adoption Specialist | Top Secret Required", "Engineer (US
   // Only)" — slipped through every check below and surfaced as merely
   // "region unconfirmed".
-  for (const ex of HARD_EXCLUSIONS) if (hasPhrase(`${title} ${all}`, ex)) return E("excluded", `Restricted: "${ex}"`, false);
+  if (sig.hardExclusion) return E("excluded", `Restricted: "${sig.hardExclusion}"`, false);
 
   // 1b. Non-English posting → drop.
-  if (hasAny(titleDesc, NON_ENGLISH_MARKERS)) return E("excluded", "Non-English posting", false);
+  if (sig.nonEnglishMarkers) return E("excluded", "Non-English posting", false);
 
   // 1c. Non-Latin location (Arabic/CJK/Cyrillic) → region-specific, drop.
   if ((loc.match(/[^\x00-\x7F]/g) || []).length > 3)
@@ -1404,47 +1502,22 @@ export function checkEligibility(job, country) {
 
   // 1d. Explicit restriction in TITLE or BODY overrides any generic "Anywhere" tag.
   if (hasAny(title, FOREIGN_GEO)) return E("excluded", "Title names a specific location", false);
-  if (hasAny(titleDesc, RESTRICTION_PHRASES)) return E("excluded", "Role restricted to a specific region", false);
+  if (sig.restricted) return E("excluded", "Role restricted to a specific region", false);
 
   // 1e. Non-English DESCRIPTION → drop, even if the location field says "Anywhere".
   // Catches local-market roles (e.g. Brazilian/Mexican companies posting in
-  // Portuguese/Spanish) that mislabel their location as worldwide. We detect by
-  // (a) Portuguese/Spanish marker words, or (b) heavy diacritic density.
-  const NON_EN_DESC = [
-    "estamos","nossa","nosso","você","trabalho","empresa","vaga","vagas","sobre",
-    "experiência","conhecimento","atuar","responsável","equipe","desenvolvimento",
-    "nuestra","nuestro","buscamos","trabajo","empresa","experiencia","conocimiento",
-    "responsable","equipo","habilidades","requisitos","ofrecemos","únete",
-  ];
-  let nonEnHits = 0;
-  for (const w of NON_EN_DESC) if (hasPhrase(desc, w)) nonEnHits++;
-  const diac = (desc.match(/[àâãäçéêíóôõúñ]/g) || []).length;
-  const diacRatio = diac / Math.max(desc.length, 1);
-  if (nonEnHits >= 3 || diacRatio > 0.015) {
+  // Portuguese/Spanish) that mislabel their location as worldwide.
+  if (sig.nonEnglishLocal) {
     return E("excluded", "Non-English posting (local-market role)", false);
   }
 
   // 1f. Body ties the role to a SPECIFIC foreign country (and the user isn't
-  // targeting it) → overrides a "worldwide" location field. Real postings phrase
-  // this many ways ("based in X", "Location: Remote, UK", "Headquarters: Mexico…
-  // Mexico City"), so instead of matching fixed phrases we check whether a
-  // foreign country name appears NEAR a location cue word.
-  const LOC_CUES = ["location", "based", "headquarters", "hq", "office", "reside",
-    "authorized to work", "eligible to work", "must be", "candidates in", "role is in"];
+  // targeting it) → overrides a "worldwide" location field. The countries the
+  // body ties itself to are precomputed (in FOREIGN_COUNTRIES order); the only
+  // country-DEPENDENT part is skipping the user's own target, which we do here.
   const userTerms = COUNTRY_TERMS[country] || [];
-  function bodyTiesToForeignCountry() {
-    for (const c of FOREIGN_COUNTRIES) {
-      if (userTerms.some((t) => t === c) || country === c) continue; // user's own target
-      if (!hasPhrase(desc, c)) continue;
-      // country is mentioned — is it near a location cue? scan a window.
-      const idx = desc.indexOf(c);
-      if (idx === -1) continue;
-      const window = desc.slice(Math.max(0, idx - 60), idx + 60);
-      if (LOC_CUES.some((cue) => window.includes(cue))) return c;
-    }
-    return null;
-  }
-  const tiedCountry = bodyTiesToForeignCountry();
+  const tiedCountry = (sig.tiedCountries || [])
+    .find((c) => !userTerms.some((t) => t === c) && country !== c) || null;
   if (tiedCountry) {
     return E("excluded", `Body ties the role to ${tiedCountry}`, false);
   }
@@ -1480,27 +1553,27 @@ export function checkEligibility(job, country) {
   // A strong worldwide phrase in the body ("work from anywhere", "open to
   // candidates worldwide") is as definitive as a worldwide location field, so
   // it's "certain" — but only if the body doesn't ALSO tie it to a country.
-  if (hasAny(desc, WORLDWIDE_DESC_STRONG)) {
-    if (hasAny(desc, FOREIGN_COUNTRIES)) return E("likely", "Remote, worldwide language but a country is mentioned");
+  if (sig.worldwideDesc) {
+    if (sig.descMentionsForeign) return E("likely", "Remote, worldwide language but a country is mentioned");
     // A role that dangles US insurance licensing ("we'll get you licensed in
     // life and health insurance") is regulated state-by-state in the US and
     // effectively never open outside it, even though "work from anywhere"
     // copy says otherwise — that copy means anywhere IN THE US. This is a
     // pattern inference (not a verified gate like the company list above),
     // so it downgrades rather than excludes.
-    if (hasAny(desc, INSURANCE_LICENSING_SIGNAL))
+    if (sig.insuranceLicensing)
       return E("possible", "JD says \"open to anyone\", but role requires a US insurance license — confirm eligibility before applying");
     return softenForTimezone(E("certain", "JD: open to anyone, anywhere"));
   }
-  if (hasAny(desc, FOREIGN_COUNTRIES)) return E("excluded", "Remote, but body ties it to a specific country", false);
+  if (sig.descMentionsForeign) return E("excluded", "Remote, but body ties it to a specific country", false);
 
   // Last check before we'd otherwise shrug and call it "region unconfirmed":
   // does the posting name a statutory benefit/tax instrument that only exists
   // for domestic payroll? If so this is not a globally-open remote role, it's
   // a domestic one that forgot to say so. See JURISDICTION_MARKERS above.
-  // Scan title too — a lock is often stated only there, e.g.
-  // "Cybersecurity Analyst II - Certified CMMC Professional - CCP".
-  const lock = detectJurisdictionLock(`${title} ${desc}`);
+  // Precomputed from title + description (a lock is often stated only in the
+  // title, e.g. "Cybersecurity Analyst II - Certified CMMC Professional").
+  const lock = sig.jurisdiction;
   if (lockAppliesTo(lock, country))
     return E("excluded", `Remote, but ${jurisdictionReason(lock)}`, false);
 

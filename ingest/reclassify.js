@@ -60,7 +60,7 @@ async function run() {
     for (let attempt = 1; attempt <= 5; attempt++) {
       const { data, error } = await supabase
         .from("jobs")
-        .select("id, title, description, location, role_cluster, eligibility_region, country_iso")
+        .select("id, title, description, location, role_cluster, eligibility_region, country_iso, elig_signals")
         // .order() is required for .range() pagination to be stable — without
         // it Postgres/PostgREST doesn't guarantee row order is consistent
         // across separate page fetches, and this script UPDATEs rows between
@@ -99,14 +99,19 @@ async function run() {
       const descChanged = cleanedDesc && cleanedDesc !== row.description;
 
       const regionChanged = tagged.eligibility_region !== row.eligibility_region;
+      // Backfill the precomputed eligibility blob whenever it's missing or
+      // from an older logic version — this is what lets search stop shipping
+      // descriptions. See migration 011 / SIGNALS_VERSION.
+      const signalsStale = !row.elig_signals || row.elig_signals.v !== tagged.elig_signals?.v;
       const labelChanged = after !== row.role_cluster || regionChanged;
-      if (labelChanged || descChanged) {
+      if (labelChanged || descChanged || signalsStale) {
         const patch = {
           role_cluster: tagged.role_cluster,
           department: tagged.department,
           seniority: tagged.seniority,
           remote_type: tagged.remote_type,
           eligibility_region: tagged.eligibility_region,
+          elig_signals: tagged.elig_signals,
         };
         if (descChanged) patch.description = cleanedDesc;
         const okUpdate = await updateWithRetry(row.id, patch);
