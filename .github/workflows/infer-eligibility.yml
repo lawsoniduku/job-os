@@ -44,7 +44,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          # 22, like every other workflow here, and not lower: @supabase/
+          # supabase-js constructs a RealtimeClient at createClient() time and
+          # that needs a native WebSocket, which Node gained in 22. On 20 this
+          # throws before a single line of our code runs.
+          node-version: 22
           cache: npm
       - run: npm ci
 
