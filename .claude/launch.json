@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "api",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["--env-file=.env", "api/server.js"],
+      "port": 3000
+    },
+    {
+      "name": "ui",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "job-os-ui", "run", "dev", "--", "--host"],
+      "port": 5173
+    }
+  ]
+}

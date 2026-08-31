@@ -562,10 +562,19 @@ ${text.slice(0, 12000)}`;
       return res.status(403).json({ error: "This candidate is no longer open to being contacted." });
     }
 
-    const { data: prior } = await supabase
+    // .is() rather than .eq() for the null case: PostgREST renders
+    // .eq(col, null) as `col=eq.null`, which compares against the literal
+    // string and matches nothing — so a general (posting-less) intro would
+    // never find its own prior request, and the "don't ask twice" guarantee
+    // would silently not hold for exactly the requests that aren't tied to
+    // a role. Postgres also treats NULLs as distinct in the unique index,
+    // so this query is the only thing enforcing it there.
+    const priorQ = supabase
       .from("intro_requests").select("id, status")
-      .eq("org_id", req.orgId).eq("candidate_id", candidate_id)
-      .eq("posting_id", posting_id || null).maybeSingle();
+      .eq("org_id", req.orgId).eq("candidate_id", candidate_id);
+    const { data: prior } = await (posting_id
+      ? priorQ.eq("posting_id", posting_id)
+      : priorQ.is("posting_id", null)).maybeSingle();
 
     if (prior?.status === "declined") {
       return res.status(409).json({ error: "They declined an earlier request for this role." });
