@@ -35,6 +35,7 @@ const DWELL_MIN_MS   = 15 * 1000;            // faster than this = didn't apply
 const INTENT_MAX_AGE = 14 * 24 * 3600 * 1000; // after a fortnight, don't bother
 const REASK_GAP_MS   = 6 * 3600 * 1000;       // minimum time between two asks
 const MAX_NUDGES     = 2;
+const CHECK_THROTTLE_MS = 60 * 1000;          // at most one lookup a minute
 
 // Same vocabulary as the "this job isn't actually open to me" report in
 // Copilot — one shared set of reasons means one comparable dataset, and this
@@ -55,9 +56,20 @@ export default function ReturnNudge({ user, showToast }) {
   const [busy, setBusy]     = useState(false);
   const dismissed = useRef(new Set());          // ids silenced for this session
   const bounced   = useRef(new Set());          // fast-bounces already logged
+  const lastCheck = useRef(0);                  // throttle — see below
 
   const check = useCallback(async () => {
     if (!user?.id || !supabase) return;
+
+    // THROTTLE. focus and visibilitychange both fire on every alt-tab, every
+    // dismissed file picker, every return from a background tab — and the
+    // first version ran a query on each one. That is a lot of round trips on
+    // a weak mobile connection for a question that can only usefully be asked
+    // once a minute. An apply intent is minutes old at the earliest, so
+    // nothing is missed by waiting.
+    const now = Date.now();
+    if (now - lastCheck.current < CHECK_THROTTLE_MS) return;
+    lastCheck.current = now;
 
     const { data, error } = await supabase
       .from("applications")
@@ -69,7 +81,6 @@ export default function ReturnNudge({ user, showToast }) {
       .limit(5);
     if (error || !data?.length) return;
 
-    const now = Date.now();
     for (const a of data) {
       if (dismissed.current.has(a.id)) continue;
       const clicked = new Date(a.apply_clicked_at).getTime();

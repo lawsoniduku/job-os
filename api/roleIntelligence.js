@@ -1147,6 +1147,90 @@ const FOREIGN_GEO = [
 
 export const LOCATION_INTELLIGENCE = COUNTRY_TERMS;
 
+// ============================================================
+// ISO COUNTRY CODES IN TITLES  — "Online Data Analyst - Bengali (IN)"
+// ============================================================
+// Crowdsourcing boards (TELUS Digital, Appen, Welocalize) tag the hiring
+// market as a bracketed alpha-2 code and set the location field to
+// "Worldwide", because the WORK is remote even though the WORKER must live in
+// that country. checkEligibility trusted the location field and shipped
+// India-only roles to Nigerian users as "certain — open worldwide/anywhere".
+//
+// The old title check only caught these BY ACCIDENT: FOREIGN_GEO contains
+// "us" and "uk", so "(US)" and "(UK)" matched, while "(IN)", "(DE)", "(PH)"
+// and every other code sailed through. Adding the codes to FOREIGN_GEO is not
+// an option — it is matched case-insensitively against the whole title, and
+// "in", "de", "it" as bare words would exclude nearly every posting.
+//
+// So: match ONLY an uppercase two-letter code inside brackets, against the
+// RAW title before lowercasing. That is the board convention and it cannot
+// collide with an English word in running text.
+const TITLE_COUNTRY_CODES = {
+  IN: "india",     PH: "philippines", PK: "pakistan",  BD: "bangladesh",
+  LK: "srilanka",  NP: "nepal",       ID: "indonesia", VN: "vietnam",
+  TH: "thailand",  MY: "malaysia",    SG: "singapore", JP: "japan",
+  CN: "china",     KR: "south korea", TW: "taiwan",    HK: "hong kong",
+  US: "us",        GB: "uk",          UK: "uk",        CA: "canada",
+  MX: "mexico",    BR: "brazil",      CL: "chile",     CO: "colombia",
+  PE: "peru",      DE: "germany",     FR: "france",    ES: "spain",
+  NL: "netherlands", PL: "poland",    PT: "portugal",  RO: "romania",
+  BG: "bulgaria",  GR: "greece",      CZ: "czechia",   AT: "austria",
+  BE: "belgium",   CH: "switzerland", DK: "denmark",   NO: "norway",
+  FI: "finland",   IE: "ireland",     UA: "ukraine",   RS: "serbia",
+  TR: "turkey",    IL: "israel",      AE: "uae",       AU: "australia",
+  NZ: "new zealand", RU: "russia",
+  // African codes are listed so a match can be RECOGNISED and then allowed
+  // for the right user — a Nigerian should still see "(NG)".
+  NG: "nigeria",   KE: "kenya",       GH: "ghana",     ZA: "southafrica",
+  EG: "egypt",     UG: "uganda",      RW: "rwanda",    ET: "ethiopia",
+  TZ: "tanzania",  MA: "morocco",     SN: "senegal",   ZM: "zambia",
+  ZW: "zimbabwe",
+};
+
+// Real country codes deliberately NOT in the map above, because in a JOB
+// TITLE each is overwhelmingly a job-function acronym rather than a country.
+// Excluding them costs us a few genuine country tags; including them would
+// hide huge numbers of legitimate roles, which is the worse error:
+//   BI Burundi/Business Intelligence · ML Mali/Machine Learning
+//   QA Qatar/Quality Assurance      · HR Croatia/Human Resources
+//   IT Italy/Information Technology · PR Puerto Rico/Public Relations
+//   SE Sweden/Software Engineer     · MD Moldova/Managing Director
+//   AI Anguilla/Artificial Intel.   · AR Argentina/Augmented Reality
+//   SA Saudi/Systems Analyst        · PA Panama/Personal Assistant
+//   BA Bosnia/Business Analyst      · CX Christmas Is./Customer Experience
+// (Argentina and Saudi Arabia stay reachable through their full names in
+// FOREIGN_GEO and the body checks — only the two-letter form is ignored.)
+
+/**
+ * detectTitleCountryCode(rawTitle) -> { code, country } | null
+ * Takes the RAW title: the uppercase requirement is the entire safety
+ * mechanism, so it must run before any lowercasing.
+ */
+export function detectTitleCountryCode(rawTitle = "") {
+  const t = String(rawTitle || "");
+  // (IN) · [IN] · （IN） — bracketed, exactly two uppercase letters.
+  for (const m of t.matchAll(/[([［（]\s*([A-Z]{2})\s*[)\]］）]/g)) {
+    const code = m[1];
+    const country = TITLE_COUNTRY_CODES[code];
+    if (country) return { code, country };
+  }
+  return null;
+}
+
+/** Does a title's country tag point at somewhere this user can work? */
+function titleCodeAllowsCountry(tag, country) {
+  if (!tag) return true;
+  const target = String(country || "").toLowerCase();
+  if (tag.country === target) return true;
+  // Region targets: "africa" accepts any African country tag.
+  if (target === "africa") return AFRICAN_COUNTRIES.has(tag.country);
+  // Accept when the tagged country's own terms are the user's terms
+  // (covers uk/gb and any future aliasing).
+  const userTerms = COUNTRY_TERMS[target] || [];
+  const tagTerms = COUNTRY_TERMS[tag.country] || [];
+  return tagTerms.some((t) => userTerms.includes(t));
+}
+
 // Restriction phrases that appear in the TITLE or BODY and OVERRIDE a board's
 // generic "Anywhere in the World" location tag (WeWorkRemotely stamps that on
 // nearly every post, including US-only ones). Generated from foreign regions.
@@ -1525,6 +1609,15 @@ export function checkEligibility(job, country) {
 
   // 1d. Explicit restriction in TITLE or BODY overrides any generic "Anywhere" tag.
   if (hasAny(title, FOREIGN_GEO)) return E("excluded", "Title names a specific location", false);
+  // Bracketed ISO code in the title — "Online Data Analyst - Bengali (IN)".
+  // Runs on job.title RAW, because the uppercase requirement is what stops
+  // "(in)" in ordinary prose from matching. Boards that use this convention
+  // ALSO set location to "Worldwide", so without this the check at step 3
+  // below returns "certain — open worldwide/anywhere" for a role that is
+  // legally India-only.
+  const titleCode = detectTitleCountryCode(job.title);
+  if (titleCode && !titleCodeAllowsCountry(titleCode, country))
+    return E("excluded", `Title is tagged for ${titleCode.country} ("${titleCode.code}")`, false);
   if (sig.restricted) return E("excluded", "Role restricted to a specific region", false);
 
   // 1e. Non-English DESCRIPTION → drop, even if the location field says "Anywhere".
