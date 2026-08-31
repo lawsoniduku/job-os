@@ -32,7 +32,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { extractEligibilitySignals, SIGNALS_VERSION, INFER_VERSION } from "../api/roleIntelligence.js";
 import { inferEligibility, needsInference } from "../api/inferEligibility.js";
-import { isLLMHealthy, llmConfig } from "../lib/llm.js";
+import { isLLMHealthy, llmConfig, llmState } from "../lib/llm.js";
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
@@ -57,8 +57,22 @@ async function run() {
   console.log(`\n🤖 ELIGIBILITY INFERENCE — ${llmConfig.provider}/${llmConfig.model}`);
   console.log(`   scope: ${ALL ? "ALL rows" : `last ${DAYS} days`} · limit ${LIMIT} · concurrency ${CONCURRENCY}\n`);
 
+  // Check the boring cause FIRST. "Model unreachable" is true but useless when
+  // the real answer is that nobody ever created the API key — isLLMHealthy()
+  // cannot tell those apart (it reports a missing key as lastError: null), so
+  // a run that fails this way otherwise sends you looking at the network.
+  if ((process.env.LLM_PROVIDER || "").toLowerCase() === "groq" && !process.env.GROQ_API_KEY) {
+    console.log("❌ GROQ_API_KEY is empty or unset.");
+    console.log("   In GitHub: Settings → Secrets and variables → Actions → New repository secret.");
+    console.log("   This is the only workflow in the repo that needs it, so it is very likely missing");
+    console.log("   rather than wrong. Nothing was written; re-run once it exists.\n");
+    process.exit(1);
+  }
+
   if (!(await isLLMHealthy())) {
-    console.log("❌ model unreachable — nothing done, safe to re-run later.\n");
+    console.log(`❌ model unreachable${llmState.lastError ? ` — ${llmState.lastError}` : ""}.`);
+    console.log(`   provider=${llmConfig.provider} model=${llmConfig.model}`);
+    console.log("   Nothing was written; safe to re-run later.\n");
     process.exit(1);
   }
 

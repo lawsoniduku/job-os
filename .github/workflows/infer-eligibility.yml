@@ -13,6 +13,16 @@ name: Infer eligibility (new jobs)
 #
 # WHY 30 MINUTES AFTER INGEST: ingest runs at 06:00 and 18:00 UTC. This gives
 # it time to finish so the new rows are actually there to be enriched.
+#
+# REQUIRED SECRETS — note GROQ_API_KEY in particular:
+#   SUPABASE_URL, SUPABASE_KEY   already used by every other workflow here
+#   GROQ_API_KEY                 THIS IS THE ONLY WORKFLOW THAT NEEDS IT.
+#                                Nothing else in the repo calls a model from
+#                                CI, so it will not already exist — create it
+#                                under Settings → Secrets and variables →
+#                                Actions. Without it the run exits 1 with a
+#                                message naming the missing key.
+#   GROQ_MODEL                   optional; falls back to llama-3.3-70b-versatile.
 
 on:
   schedule:
