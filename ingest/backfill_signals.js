@@ -46,7 +46,10 @@ async function fetchPage() {
     // signals as we go, the "still missing" set shrinks every pass — no
     // offset bookkeeping, and a crash just resumes where it left off.
     let q = supabase.from("jobs")
-      .select("id, title, location, description, eligibility_region")
+      // elig_signals is selected so writeOne can carry the LLM inference
+      // across — see the comment there. Without it this backfill silently
+      // deletes work that cost model calls to produce.
+      .select("id, title, location, description, eligibility_region, elig_signals")
       .order("id").limit(PAGE);
     if (!ALL) q = q.is("elig_signals", null);
     const { data, error } = await q;
@@ -61,6 +64,13 @@ let lastError = null;   // surfaced in the progress line — silent failures hid
                         // a 44% error rate behind a plausible-looking counter
 async function writeOne(row) {
   const signals = extractEligibilitySignals(row);
+  // PRESERVE THE INFERENCE. extractEligibilitySignals derives everything from
+  // the posting text; infer is the one key it cannot regenerate, because it
+  // came from a model call that cost money and time (see
+  // ingest/infer_pending.js). This update replaces the whole jsonb column, so
+  // without carrying it forward explicitly, every run of this backfill would
+  // wipe the inferences and they would have to be bought again.
+  if (row.elig_signals?.infer) signals.infer = row.elig_signals.infer;
   for (let a = 1; a <= 4; a++) {
     const { error } = await supabase.from("jobs")
       .update({ elig_signals: signals }).eq("id", row.id);
