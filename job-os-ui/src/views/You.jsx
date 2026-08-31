@@ -65,6 +65,7 @@ export default function You({ shared, active, refreshProfile }) {
   const [cvInfo, setCvInfo]       = useState(null);      // { filename, updated_at }
   const [uploading, setUploading] = useState(false);
   const [extracting, setExtracting] = useState(false);
+  const [extractError, setExtractError] = useState("");
   const fileRef = useRef(null);
 
   // Hydrate form from profile.
@@ -174,10 +175,15 @@ export default function You({ shared, active, refreshProfile }) {
   const runExtraction = useCallback(async (cvText) => {
     if (!user || !cvText?.trim()) return;
     setExtracting(true);
+    setExtractError("");
     try {
       const { extract } = await aiCvExtract({ cvText });
-      if (!extract) return;
-      await supabase.from("profiles").upsert({
+      if (!extract) throw new Error("The reader returned nothing usable.");
+
+      // The DB write is checked, not fired and forgotten. A silent failure
+      // here is indistinguishable from "the parse didn't work" to the user,
+      // and it is exactly how a missing column stays invisible for a week.
+      const { error } = await supabase.from("profiles").upsert({
         id: user.id,
         email: user.email,
         cv_extract: extract,
@@ -186,13 +192,18 @@ export default function You({ shared, active, refreshProfile }) {
         cv_years: Number.isFinite(extract.years_experience) ? extract.years_experience : null,
         cv_parsed_at: new Date().toISOString(),
       }, { onConflict: "id" });
+      if (error) throw new Error(error.message);
+
       track(user, "cv_extracted", {
         skills: extract.skills?.length || 0,
         years: extract.years_experience || 0,
       });
       refreshProfile?.();
-    } catch {
-      // Silent: the CV is saved either way, and "Read my CV" offers a retry.
+    } catch (err) {
+      // Non-blocking — the CV itself is saved and the product still works —
+      // but never invisible. "Read my CV" is the retry.
+      if (import.meta.env.DEV) console.warn("cv extraction:", err.message);
+      setExtractError(err.message || "Couldn't read that CV.");
     } finally {
       setExtracting(false);
     }
@@ -333,12 +344,18 @@ export default function You({ shared, active, refreshProfile }) {
             <button className="btn" onClick={reExtract}>Read my CV</button>
           )}
           {extracting && <span className="cv-source">Reading your CV — this takes a few seconds…</span>}
-          {!extracting && profile?.cv_parsed_at && (
+          {!extracting && profile?.cv_parsed_at && !extractError && (
             <span className="cv-source">
               Read {new Date(profile.cv_parsed_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}
             </span>
           )}
         </div>
+        {extractError && !extracting && (
+          <div className="cv-error">
+            Couldn't read your CV: {extractError}
+            <button className="btn sm" onClick={reExtract}>Try again</button>
+          </div>
+        )}
         <input ref={fileRef} type="file" accept=".pdf,.docx,.doc,.txt,.md" style={{ display: "none" }} onChange={handleCvUpload} />
       </div>
 

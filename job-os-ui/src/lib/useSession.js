@@ -2,9 +2,19 @@
  * lib/useSession.js
  * =================
  * Tracks the current Supabase auth session + the user's profile row.
- * Now loads the full talent-graph profile (migration 006): target_roles,
- * preferences (seniority etc.), headline — these power the Briefing feed
- * and the You page.
+ *
+ * SELECTS * ON PURPOSE. This used to name its columns explicitly, and the
+ * list silently fell behind every migration that added one: 012 added the
+ * cv_* columns and the consent flag, 013 added availability and
+ * profile_completed_at, and none of them were ever read back. The writes
+ * landed in Postgres and the UI saw undefined, so the CV review card never
+ * appeared, the consent toggle always read "off", and the strength meter
+ * scored filled-in fields as missing — all of it looking exactly like
+ * "nothing is being saved".
+ *
+ * An explicit list is a footgun here because profiles gains columns most
+ * migrations. It is one row behind RLS; * costs a couple of KB and cannot
+ * drift. Do not "optimise" this back into a column list.
  */
 import { useState, useEffect, useCallback } from "react";
 import { supabase, authEnabled } from "./supabaseClient";
@@ -18,10 +28,14 @@ export function useSession() {
     if (!supabase || !userId) { setProfile(null); return; }
     const { data, error } = await supabase
       .from("profiles")
-      .select("id, email, full_name, country, headline, years_experience, skills, target_roles, target_salary_min, preferences")
+      .select("*")
       .eq("id", userId)
       .maybeSingle();
-    if (!error && data) setProfile(data);
+    if (error) {
+      if (import.meta.env.DEV) console.warn("loadProfile:", error.message);
+      return;
+    }
+    if (data) setProfile(data);
   }, []);
 
   useEffect(() => {
