@@ -58,7 +58,10 @@ async function run() {
   console.log("015a — tables");
   let missing = 0;
   for (const t of TABLES) {
-    const { error } = await supabase.from(t).select("id").limit(1);
+    // select("*") rather than select("id"): employer_members is keyed on
+    // (org_id, user_id) and has no id column, so asking for one reported
+    // 42703 and made a table that exists look like a table that doesn't.
+    const { error } = await supabase.from(t).select("*").limit(1);
     if (!error) { ok(t); continue; }
     missing++;
     if (error.code === "PGRST205") {
@@ -121,7 +124,7 @@ async function run() {
       no("couldn't read job-os-ui/.env — skipped the RLS checks");
     } else {
       for (const t of ["employer_orgs", "job_postings", "posting_submissions", "intro_requests"]) {
-        const { data, error } = await anon.from(t).select("id").limit(1);
+        const { data, error } = await anon.from(t).select("*").limit(1);
         // Either an explicit refusal or an empty result is correct; a row
         // coming back means the client can read a table it must not.
         (error || (data || []).length === 0)
