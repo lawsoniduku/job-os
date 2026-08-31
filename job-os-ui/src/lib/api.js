@@ -85,6 +85,13 @@ export function aiCvRewrite({ cvText, jobId }) {
   return call(`/ai/cv-rewrite`, { method: "POST", body: { cvText, jobId }, timeoutMs: 120000, attempts: 2 });
 }
 
+export function aiCvExtract({ cvText }) {
+  // Runs in the background right after a CV upload, so it must never be the
+  // reason an upload appears to fail: callers treat a rejection as "no
+  // extraction this time", not as an error worth showing.
+  return call(`/ai/cv-extract`, { method: "POST", body: { cvText }, timeoutMs: 75000, attempts: 2 });
+}
+
 export function aiCvMatch({ cvText, jobId }) {
   return call(`/ai/cv-match`, { method: "POST", body: { cvText, jobId }, timeoutMs: 90000, attempts: 2 });
 }

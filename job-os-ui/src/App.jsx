@@ -12,6 +12,7 @@ import Briefing from "./views/Briefing";
 import Pipeline from "./views/Pipeline";
 import Studio from "./views/Studio";
 import You from "./views/You";
+import ReturnNudge from "./ReturnNudge";
 
 const NAV = [
   { key: "copilot", label: "Copilot", icon: <path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.6 8.6 0 0 1-3.8-.9L3 20l1-4.9A8.4 8.4 0 1 1 21 11.5Z" /> },
@@ -130,6 +131,10 @@ export default function App() {
       </main>
 
       {showAuth && <AuthModal onClose={() => setShowAuth(false)} />}
+      {/* Lives at the shell, not in a view: someone can return from an
+          employer's site onto any tab, and the question belongs to the
+          session rather than to a screen. */}
+      {user && <ReturnNudge user={user} showToast={showToast} />}
       <div className={`toast ${toast ? "show" : ""}`} role="status">
         <span className="t-dot" />{toast}
       </div>
