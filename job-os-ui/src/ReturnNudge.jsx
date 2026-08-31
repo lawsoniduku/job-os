@@ -174,12 +174,18 @@ export default function ReturnNudge({ user, showToast }) {
     setApp(null);
 
     // The reply is the payoff, not a thank-you — say what we'll now do.
+    // Each line names where the card actually went. They are worth keeping in
+    // step with the status map in resolveApplyIntent — the previous "Kept in
+    // Saved" was said while the card stayed under Applied, which teaches
+    // people not to trust the toast.
     if (outcome === "applied") {
       showToast?.("Tracked. I'll flag it in Briefing if there's no reply by day 7.");
     } else if (outcome === "not_yet") {
-      showToast?.("Kept in Saved — it'll resurface in your Briefing.");
+      showToast?.("Moved back to Saved — it'll resurface in your Briefing.");
+    } else if (reason === "broken") {
+      showToast?.("Back in Saved so you can retry — and noted, that helps.");
     } else {
-      showToast?.("Noted, and it helps: that feedback tunes what reaches you.");
+      showToast?.("Moved to Closed. That feedback tunes what reaches you.");
     }
   }
 
@@ -202,9 +208,13 @@ export default function ReturnNudge({ user, showToast }) {
             </div>
           </div>
           <div className="nudge-acts">
+            {/* Three answers with three different outcomes, so each label has
+                to carry its consequence. "Not yet" and "Didn't apply" read as
+                near-synonyms while doing opposite things — one keeps the job,
+                the other closes it. */}
             <button className="btn primary" onClick={() => answer("applied")} disabled={busy}>Yes, applied</button>
-            <button className="btn" onClick={() => answer("not_yet")} disabled={busy}>Not yet</button>
-            <button className="btn subtle" onClick={() => setAsking(true)} disabled={busy}>Didn't apply</button>
+            <button className="btn" onClick={() => answer("not_yet")} disabled={busy}>Not yet — keep it</button>
+            <button className="btn subtle" onClick={() => setAsking(true)} disabled={busy}>Not applying</button>
           </div>
           <button className="nudge-x" onClick={dismiss} aria-label="Dismiss">✕</button>
         </>
@@ -212,7 +222,10 @@ export default function ReturnNudge({ user, showToast }) {
         <>
           <div className="nudge-body">
             <div className="nudge-q">What stopped you?</div>
-            <div className="nudge-sub">This is the signal that keeps roles you can't apply to out of your results.</div>
+            <div className="nudge-sub">
+              This is the signal that keeps roles you can't apply to out of your results.
+              The job moves to Closed — except a broken form, which goes back to Saved so you can retry.
+            </div>
           </div>
           <div className="nudge-reasons">
             {ABANDON_REASONS.map(([key, label]) => (
