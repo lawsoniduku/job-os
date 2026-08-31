@@ -198,10 +198,25 @@ function PrepModal({ app, onClose }) {
 
   useEffect(() => {
     let live = true;
-    aiInterviewCoach({ jobId: app.job_id, mode: "questions" })
-      .then((res) => { if (live) setResult(res.result); })
-      .catch((err) => { if (live) setError(err.message); })
-      .finally(() => { if (live) setLoading(false); });
+    (async () => {
+      // Send the saved CV. This call never passed one, so the endpoint's
+      // "aim at the seam between CV and JD" half was dead and every question
+      // came back generic. The CV is already on file; not sending it was
+      // simply an omission.
+      let cvText = "";
+      try {
+        const { data } = await supabase.from("saved_cvs").select("cv_text").maybeSingle();
+        cvText = data?.cv_text || "";
+      } catch { /* prep still works without it, just less sharply */ }
+      try {
+        const res = await aiInterviewCoach({ jobId: app.job_id, cvText, mode: "questions" });
+        if (live) setResult(res.result);
+      } catch (err) {
+        if (live) setError(err.message);
+      } finally {
+        if (live) setLoading(false);
+      }
+    })();
     return () => { live = false; };
   }, [app.job_id]);
 

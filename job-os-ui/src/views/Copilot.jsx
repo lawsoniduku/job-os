@@ -780,7 +780,7 @@ function JobCard({ job, onTailor, onReport, user }) {
 /* ── Tailor modal ───────────────────────────────────────────────────────── */
 
 function TailorModal({ job, shared, onSaveForLater, onClose }) {
-  const { user, requireAuth, showToast } = shared;
+  const { user, profile, requireAuth, showToast } = shared;
   const [cvText, setCvText]     = useState("");
   const [cvSource, setCvSource] = useState(null);  // "profile" | filename
   const [result, setResult]     = useState(null);
@@ -832,9 +832,16 @@ function TailorModal({ job, shared, onSaveForLater, onClose }) {
       const r = res.result || {};
       // Map the endpoint shape into what CvPreview / downloadCvPdf expect.
       const t = r.tailored_cv || {};
+      // The header is not optional. The prompt used to omit name/contact
+      // entirely while this code read them, so every generated PDF came out
+      // anonymous — no name, no email, opening straight into PROFESSIONAL
+      // SUMMARY. The prompt asks for them now; this is the belt-and-braces
+      // fallback to the signed-in profile so a model slip can never again
+      // produce a CV nobody can be contacted about.
+      const contactBits = [user?.email, profile?.country ? cap(profile.country) : null].filter(Boolean);
       const cv = {
-        name: t.name || null,
-        contact: t.contact || null,
+        name: t.name?.trim() || profile?.full_name || null,
+        contact: t.contact?.trim() || (contactBits.length ? contactBits.join(" · ") : null),
         summary: t.summary || "",
         sections: t.sections || [],
       };

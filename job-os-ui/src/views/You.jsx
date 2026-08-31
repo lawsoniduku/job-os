@@ -27,7 +27,7 @@ import { track } from "../lib/track";
 import { API, aiCvExtract } from "../lib/api";
 import { COUNTRY_OPTIONS, COUNTRY_LABEL } from "../AuthModal";
 import {
-  strengthOf, strengthLabel, AVAILABILITY_OPTIONS, availabilityLabel, employerPreview,
+  strengthOf, strengthLabel, AVAILABILITY_OPTIONS, employerPreview,
 } from "../lib/profile";
 
 // Fallback if /ai/role-suggestions is unreachable (Render cold start).
