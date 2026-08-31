@@ -15,7 +15,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { aiSearch, aiRefine, aiClarify, aiChat, aiCvRewrite, verdictOf, fmtSalary } from "../lib/api";
 import { supabase } from "../lib/supabaseClient";
 import { track } from "../lib/track";
-import { recordApplyIntent } from "../lib/applyIntent";
+import { recordApplyIntent, EARLY_STAGES } from "../lib/applyIntent";
 import { extractTextFromFile } from "../lib/extractText";
 import { downloadCvPdf, cvFilename } from "../lib/pdf";
 
@@ -354,6 +354,32 @@ export default function Copilot({ shared, active, initialQuery, onInitialConsume
     }, { onConflict: "user_id,job_id", ignoreDuplicates: true });
     if (error) {
       showToast(`Couldn't save: ${error.message}`);
+      return false;
+    }
+
+    // The upsert above only INSERTS — ignoreDuplicates leaves an existing row
+    // completely untouched. That was harmless until apply-intent capture
+    // started creating the row first: opening the posting from this same modal
+    // writes status "applied_intent", so the save then changed nothing and the
+    // card sat under Applied while the toast said it was saved.
+    //
+    // "Save for later" is an explicit statement of intent, so it moves the
+    // card — but only from a stage where that is not a downgrade. A row at
+    // interview stays at interview.
+    const { error: moveErr } = await supabase.from("applications")
+      .update({
+        status: "saved",
+        // Saving IS the answer to "did you apply?" — no, not yet. Recording it
+        // here stops ReturnNudge asking about a job they have just filed away,
+        // and keeps apply_outcome consistent with where the card now sits.
+        apply_outcome: "not_yet",
+        outcome_at: new Date().toISOString(),
+      })
+      .eq("user_id", user.id)
+      .eq("job_id", job.id)
+      .in("status", EARLY_STAGES);
+    if (moveErr) {
+      showToast(`Couldn't save: ${moveErr.message}`);
       return false;
     }
     track(user, "saved_for_later", { job_id: job.id, company: job.company });

@@ -31,7 +31,12 @@ import { track } from "./track";
 
 // Stages where "they just clicked through to apply" is still news.
 // Anything past this list has already told us more than the click would.
-const EARLY_STAGES = ["saved", "shortlist", "interested", "cv_tailored", "applied_intent"];
+//
+// Exported because it is also the correct guard for any OTHER explicit status
+// move the user makes from the search UI: a deliberate action should be able
+// to reposition a card that is still early, and must never drag a real
+// application backwards. Keeping one list means the two can't disagree.
+export const EARLY_STAGES = ["saved", "shortlist", "interested", "cv_tailored", "applied_intent"];
 
 /**
  * recordApplyIntent({ user, job, source })
@@ -122,10 +127,21 @@ export async function resolveApplyIntent(app, outcome, reason = null) {
   // The status move is conditional: only a card still sitting at
   // applied_intent gets repositioned. If the user moved it themselves in the
   // meantime, their action beats our question.
+  //
+  // "not_yet" USED TO LEAVE THE CARD ALONE, on the reasoning that the
+  // intention was still live. That was wrong on screen: applied_intent renders
+  // in the Applied column, so answering "Not yet" left the job sitting under
+  // Applied while the toast said "Kept in Saved". The card has to go where the
+  // answer says it is.
+  //
+  // "broken" is carved out of abandoned for the same reason — a form that
+  // failed is not a decision against the role, and closing it would bury a job
+  // the user still wants. It goes back to Saved so they can retry.
   const move =
     outcome === "applied"   ? { status: "applied", applied_at: app.applied_at || now } :
-    outcome === "abandoned" ? { status: "closed" } :
-    null;   // "not_yet" is still a live intention — leave it where it is.
+    outcome === "not_yet"   ? { status: "saved" } :
+    outcome === "abandoned" ? { status: reason === "broken" ? "saved" : "closed" } :
+    null;
 
   if (move) {
     await supabase.from("applications")
