@@ -35,7 +35,12 @@ const DWELL_MIN_MS   = 15 * 1000;            // faster than this = didn't apply
 const INTENT_MAX_AGE = 14 * 24 * 3600 * 1000; // after a fortnight, don't bother
 const REASK_GAP_MS   = 6 * 3600 * 1000;       // minimum time between two asks
 const MAX_NUDGES     = 2;
-const CHECK_THROTTLE_MS = 60 * 1000;          // at most one lookup a minute
+// Throttle for INCIDENTAL focus events only. A real return from an employer's
+// site is never throttled — see the comment on check().
+const CHECK_THROTTLE_MS = 60 * 1000;
+// How long the page must have been hidden/blurred to count as "they actually
+// went somewhere" rather than a file picker or a flick to another window.
+const REAL_TRIP_MS = 5 * 1000;
 
 // Same vocabulary as the "this job isn't actually open to me" report in
 // Copilot — one shared set of reasons means one comparable dataset, and this
@@ -56,19 +61,31 @@ export default function ReturnNudge({ user, showToast }) {
   const [busy, setBusy]     = useState(false);
   const dismissed = useRef(new Set());          // ids silenced for this session
   const bounced   = useRef(new Set());          // fast-bounces already logged
-  const lastCheck = useRef(0);                  // throttle — see below
+  const lastCheck = useRef(0);                  // throttle — see check()
+  // When the page was last hidden. null (not 0) means "hasn't left", so the
+  // sentinel can never collide with a real timestamp.
+  const awaySince = useRef(null);
 
-  const check = useCallback(async () => {
+  /**
+   * check({ force })
+   *
+   * THROTTLING, AND WHY IT MUST NOT APPLY TO A RETURN. focus and
+   * visibilitychange fire on every alt-tab and every dismissed file picker, so
+   * incidental ones are rate-limited to one lookup a minute.
+   *
+   * A return from the employer's site is NOT incidental — it is the entire
+   * reason this component exists — so it passes force and skips the throttle.
+   * An earlier version threw the throttle across everything, on the reasoning
+   * that "an apply intent is minutes old at the earliest". That was wrong: the
+   * intent is written the instant the user clicks out, and people come back in
+   * well under a minute. The mount check consumed the budget and the real
+   * return was then silently dropped, so the nudge never appeared at all.
+   */
+  const check = useCallback(async ({ force = false } = {}) => {
     if (!user?.id || !supabase) return;
 
-    // THROTTLE. focus and visibilitychange both fire on every alt-tab, every
-    // dismissed file picker, every return from a background tab — and the
-    // first version ran a query on each one. That is a lot of round trips on
-    // a weak mobile connection for a question that can only usefully be asked
-    // once a minute. An apply intent is minutes old at the earliest, so
-    // nothing is missed by waiting.
     const now = Date.now();
-    if (now - lastCheck.current < CHECK_THROTTLE_MS) return;
+    if (!force && now - lastCheck.current < CHECK_THROTTLE_MS) return;
     lastCheck.current = now;
 
     const { data, error } = await supabase
@@ -112,16 +129,32 @@ export default function ReturnNudge({ user, showToast }) {
   useEffect(() => {
     // App.jsx only mounts this for a signed-in user, and check() no-ops
     // without one, so there is no signed-out branch to handle here.
-    const onFocus = () => check();
-    const onVis = () => { if (document.visibilityState === "visible") check(); };
-    window.addEventListener("focus", onFocus);
+    // Note when the page goes away, so coming back can be told apart from an
+    // incidental focus event.
+    const leave = () => { awaySince.current = Date.now(); };
+
+    // Coming back. If the page was genuinely away — which is what happens when
+    // someone opens an employer's apply page — this is the moment the whole
+    // component exists for, so it bypasses the throttle.
+    const returned = () => {
+      const away = awaySince.current === null ? 0 : Date.now() - awaySince.current;
+      awaySince.current = null;
+      check({ force: away >= REAL_TRIP_MS });
+    };
+
+    const onVis = () =>
+      document.visibilityState === "hidden" ? leave() : returned();
+
+    window.addEventListener("blur", leave);
+    window.addEventListener("focus", returned);
     document.addEventListener("visibilitychange", onVis);
     // Cold return: they closed the tab and came back later. Deferred out of
     // the effect body so the first paint isn't waiting on a query.
-    const t = setTimeout(check, 0);
+    const t = setTimeout(() => check({ force: true }), 0);
     return () => {
       clearTimeout(t);
-      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("blur", leave);
+      window.removeEventListener("focus", returned);
       document.removeEventListener("visibilitychange", onVis);
     };
   }, [check]);
