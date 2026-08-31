@@ -41,15 +41,35 @@ const arg = (flag, fallback) => {
   return i > -1 && process.argv[i + 1] ? process.argv[i + 1] : fallback;
 };
 const DAYS  = Number(arg("--days", 14));
-const LIMIT = Number(arg("--limit", 300));
+// At ~10 calls/min this is ~15 minutes of work, comfortably inside the
+// workflow timeout. 300 would not finish, and an unfinished run is not a
+// failure here — the leftovers are simply still pending next time.
+const LIMIT = Number(arg("--limit", 150));
 const ALL   = process.argv.includes("--all");
 
-// Rate limiting, not parallelism, is the binding constraint — a 429 arrived on
-// a strictly sequential run. These two numbers are the throttle; raising them
-// makes runs fail faster, not finish faster.
-const CONCURRENCY = Number(process.env.INFER_CONCURRENCY || 2);
-const PACE_MS     = Number(process.env.INFER_PACE_MS || 1200);
-const RETRY_MS    = 8000;
+/* ── THROTTLE, SIZED TO THE GROQ FREE TIER ───────────────────────────────────
+ * The limit that binds is TOKENS per minute, not requests, and that changes
+ * what the right settings are:
+ *
+ *   descriptions are capped at 3,000 chars by normalize.js, so a prompt is
+ *   ~3,900 chars ≈ 975 input tokens, plus ~120 out  ≈ 1,095 tokens per call
+ *   free tier ≈ 12,000 TPM  ->  ~11 calls/min       (the real ceiling)
+ *   free tier ≈ 30 RPM      ->  30 calls/min        (never reached)
+ *
+ * The first version ran concurrency 2 at a 1,200ms pace — 100 calls/min, NINE
+ * TIMES over — which is precisely why 7 of 20 came back 429 in testing.
+ *
+ * CONCURRENCY IS 1 ON PURPOSE. When the constraint is tokens rather than
+ * requests, parallelism buys nothing: two workers at half the pace consume
+ * exactly the same tokens per minute, while making the bursts spikier and the
+ * 429s more likely. Pace is the only real dial.
+ *
+ * Raising either number does not make a run finish sooner. It makes it fail
+ * sooner, and failed rows just come back on the next run.
+ */
+const CONCURRENCY = Number(process.env.INFER_CONCURRENCY || 1);
+const PACE_MS     = Number(process.env.INFER_PACE_MS || 6000);   // ≈10 calls/min
+const RETRY_MS    = 15000;   // a 429 needs the token window to actually roll over
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

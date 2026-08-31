@@ -43,6 +43,25 @@
  * NEVER BLOCKS INGEST. Every failure path — no API key, timeout, rate limit,
  * malformed JSON, unparseable scope — returns null, and the job is stored
  * exactly as it is today. Inference is an enrichment, never a gate.
+ *
+ * ── FREE-TIER BUDGETS THIS FEATURE SPENDS ─────────────────────────────────
+ * Both providers are on free plans, so this is a real design constraint and
+ * not a footnote. Two separate budgets:
+ *
+ * GROQ (tokens/minute). Descriptions are capped at 3,000 chars by
+ * normalize.js, so a call is ~1,095 tokens. Against ~12,000 TPM that is a hard
+ * ceiling of ~11 calls/min — reached long before the 30 requests/min limit.
+ * This is why the pass is paced rather than parallel, and why "ask only the
+ * ambiguous rows" is a budget decision as much as a correctness one: it is the
+ * difference between ~10% of new rows and all of them.
+ *
+ * SUPABASE (500 MB). Measured: the jobs table is ~125 MB of text, 104 MB of it
+ * descriptions, on 53,755 rows. elig_signals is ~14 MB of that. Every key
+ * added here multiplies by the row count — `infer` runs ~200 chars, so
+ * applying it corpus-wide would add ~10 MB. That is affordable ONCE. It is not
+ * affordable as a habit, so resist storing anything here that can be derived
+ * from the description at read time, and keep evidence strings short (they are
+ * capped at 200 chars in the parser for exactly this reason).
  */
 
 import { generateJSON } from "../lib/llm.js";
@@ -101,7 +120,7 @@ JOB TITLE: ${job.title}
 COMPANY: ${job.company || "unknown"}
 LOCATION FIELD: ${job.location || "(blank)"}
 DESCRIPTION:
-${(job.description || "").slice(0, 6000)}
+${(job.description || "").slice(0, 3000)}
 
 Decide the hiring scope. Weigh indirect evidence, because most postings never state a rule outright:
 - Salary in a specific currency, or a country-specific benefit (401k, NHS, RRSP, pension auto-enrolment) => that country.

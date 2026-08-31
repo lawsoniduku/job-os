@@ -34,10 +34,17 @@ on:
         description: "How far back to look for pending rows"
         default: "14"
       limit:
-        description: "Max model calls this run (cost ceiling)"
-        default: "300"
+        description: "Max model calls this run (~10/min, so 150 is ~15 minutes)"
+        default: "150"
       all:
-        description: "Ignore the date window and process the whole corpus (the backfill decision — expensive)"
+        # DO THE ARITHMETIC BEFORE TICKING THIS. ~10% of the 53k-row corpus is
+        # ambiguous enough to ask about, so ~5,400 calls. On the free tier's
+        # ~10 calls/min that is roughly NINE HOURS — far past this job's
+        # timeout, so it would be killed part-way. It is not harmful (unfinished
+        # rows stay pending and the scheduled runs pick them up) but it is not
+        # how to backfill either: leave it off and let the twice-daily runs
+        # converge, or raise the limits only if the tier is upgraded.
+        description: "Whole corpus, not just recent (~5,400 calls ≈ 9h on free tier — will hit the timeout)"
         type: boolean
         default: false
 
@@ -69,12 +76,15 @@ jobs:
           LLM_PROVIDER: groq
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GROQ_MODEL: ${{ secrets.GROQ_MODEL }}
-          # Rate limiting, not parallelism, is the constraint here. Raising
-          # these makes runs fail faster, not finish faster.
-          INFER_CONCURRENCY: "2"
-          INFER_PACE_MS: "1200"
+          # Sized to the Groq FREE TIER, where tokens/min binds long before
+          # requests/min: ~1,095 tokens per call against ~12,000 TPM gives a
+          # ceiling of ~11 calls/min. Concurrency 1 because parallelism buys
+          # nothing under a token limit — it only makes the bursts spikier.
+          # The arithmetic is in ingest/infer_pending.js.
+          INFER_CONCURRENCY: "1"
+          INFER_PACE_MS: "6000"
         run: |
           node ingest/infer_pending.js \
             --days ${{ github.event.inputs.days || '14' }} \
-            --limit ${{ github.event.inputs.limit || '300' }} \
+            --limit ${{ github.event.inputs.limit || '150' }} \
             ${{ github.event.inputs.all == 'true' && '--all' || '' }}
