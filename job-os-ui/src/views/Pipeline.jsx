@@ -14,6 +14,7 @@ import { supabase } from "../lib/supabaseClient";
 import { aiInterviewCoach, fmtSalary, daysSince } from "../lib/api";
 import { track } from "../lib/track";
 import { openApply, resolveApplyIntent } from "../lib/applyIntent";
+import { REASON_LABELS } from "../lib/employerApi";
 
 const COLS = [
   { key: "saved",      label: "Saved",      statuses: ["saved", "shortlist", "interested", "cv_tailored"] },
@@ -37,15 +38,38 @@ export default function Pipeline({ shared, active }) {
   const [apps, setApps] = useState([]);
   const [loading, setLoading] = useState(false);
   const [prepApp, setPrepApp] = useState(null);
+  // application_id -> the employer's answer, for applications made to a
+  // posting inside JobCopilot. EmployerInbox shows a rejection ONCE, as a
+  // notification; this is where it stays reachable afterwards. Told-once
+  // and then gone would be a strange way to treat the one thing this
+  // product promises candidates they'll get.
+  const [answers, setAnswers] = useState({});
 
   const load = useCallback(async () => {
-    if (!user) { setApps([]); return; }
+    if (!user) { setApps([]); setAnswers({}); return; }
     setLoading(true);
     const { data, error } = await supabase
       .from("applications")
       .select("*")
       .order("updated_at", { ascending: false });
     if (!error) setApps(data || []);
+
+    // Feedback keys on submission, and submission is what knows the
+    // application it came from — so it takes both reads to get from "this
+    // card" to "what they said". Two small queries over the user's own
+    // rows; neither is on the critical path for rendering the board.
+    const [{ data: subs }, { data: fb }] = await Promise.all([
+      supabase.from("posting_submissions").select("id, application_id, stage"),
+      supabase.from("candidate_feedback").select("submission_id, decision, reason_code, note, sent_at"),
+    ]);
+    const bySubmission = {};
+    for (const f of fb || []) bySubmission[f.submission_id] = f;
+    const next = {};
+    for (const s of subs || []) {
+      if (s.application_id && bySubmission[s.id]) next[s.application_id] = { ...bySubmission[s.id], stage: s.stage };
+    }
+    setAnswers(next);
+
     setLoading(false);
   }, [user]);
 
@@ -126,6 +150,7 @@ export default function Pipeline({ shared, active }) {
                   <AppCard
                     key={app.id}
                     app={app}
+                    answer={answers[app.id]}
                     user={user}
                     onAdvance={advance}
                     onClose={closeApp}
@@ -145,7 +170,7 @@ export default function Pipeline({ shared, active }) {
   );
 }
 
-function AppCard({ app, user, onAdvance, onClose, onRemove, onPrep, onConfirm }) {
+function AppCard({ app, answer, user, onAdvance, onClose, onRemove, onPrep, onConfirm }) {
   const col = colOf(app.status);
   const days = daysSince(app.applied_at || app.created_at);
   const sal = fmtSalary(app.salary_min, app.salary_max);
@@ -171,6 +196,22 @@ function AppCard({ app, user, onAdvance, onClose, onRemove, onPrep, onConfirm })
         <div className="pc-confirm">
           <span className="pc-unconf">Did you apply?</span>
           <button onClick={() => onConfirm(app)}>Yes, I applied</button>
+        </div>
+      )}
+      {/* Only ever present on applications made to a posting inside
+          JobCopilot — which is the whole argument for applying here rather
+          than clicking through to a careers page. */}
+      {answer?.sent_at && (
+        <div className={`pc-answer a-${answer.decision}`}>
+          <span className="pc-answer-k">
+            {answer.decision === "rejected" ? "They said no"
+              : answer.decision === "hired" ? "You got the role"
+              : "Moving forward"}
+          </span>
+          {answer.decision === "rejected" && answer.reason_code && (
+            <span className="pc-answer-v">{REASON_LABELS[answer.reason_code]}</span>
+          )}
+          {answer.note && <span className="pc-answer-note">“{answer.note}”</span>}
         </div>
       )}
       {app.cv_label && <div className="pc-cv">{app.cv_label}</div>}

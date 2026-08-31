@@ -44,7 +44,7 @@ export default function ApplyPage({ postingId }) {
   async function submit() {
     setBusy(true);
     try {
-      await applyToPosting(postingId, { company: data?.posting?.org?.name });
+      await applyToPosting(postingId);
       setDone(true);
     } catch (e) {
       setErr(e.message);

@@ -657,8 +657,13 @@ ${text.slice(0, 12000)}`;
   // that order, and with the score in a try/catch, because a model outage
   // must never be the reason someone's application doesn't exist.
   r.post("/postings/:id/apply", requireAuth, llmLimit, async (req, res) => {
+    // The org name comes back with the posting rather than from the request
+    // body. It ends up on the candidate's own application card, so a wrong
+    // value is only ever self-inflicted — but there is no reason to ask the
+    // client for something the server is already holding.
     const { data: posting } = await supabase
-      .from("job_postings").select("*").eq("id", req.params.id).maybeSingle();
+      .from("job_postings").select("*, employer_orgs(name)")
+      .eq("id", req.params.id).maybeSingle();
     if (!posting || posting.status !== "open") {
       return res.status(404).json({ error: "This role isn't accepting applications." });
     }
@@ -683,7 +688,7 @@ ${text.slice(0, 12000)}`;
         user_id: req.user.id,
         job_id: posting.job_id,
         job_title: posting.title,
-        company: req.body?.company || null,
+        company: posting.employer_orgs?.name || null,
         location: posting.location,
         salary_min: posting.salary_min,
         salary_max: posting.salary_max,
