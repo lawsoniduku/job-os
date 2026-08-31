@@ -1518,6 +1518,79 @@ function genericEligibility(job, title, desc) {
 // Bump SIGNALS_VERSION whenever the extraction logic changes — a stored blob
 // from an older version is ignored and recomputed from the description, so a
 // logic change can never be silently served from stale precomputed data.
+// Version of the LLM eligibility inference contract (see api/inferEligibility.js).
+// Separate from SIGNALS_VERSION because the two move for different reasons:
+// bumping this one invalidates work that cost model calls to produce, so it
+// should change only when the prompt or the output shape actually changes.
+// v2 tightened the prompt: a company's headquarters is no longer treated as
+// evidence of a hiring restriction. v1 hard-excluded a role on "headquartered
+// in Dubai" at high confidence, which is a fact about an address, not about
+// who may apply.
+export const INFER_VERSION = 2;
+
+/**
+ * Map a stored inference onto a target country. Returns null when it says
+ * nothing useful about this target, so the caller keeps its existing answer.
+ *
+ * Lives here rather than beside the model call so that this file never has to
+ * import the HTTP client — search reads stored inferences on every request and
+ * has no business loading an LLM layer to do it.
+ *
+ * ONLY high/medium confidence is acted on. A "low" inference is still stored,
+ * because knowing where the model struggles is what tells us whether the
+ * prompt is working, but it is never shown as a verdict: an honest shrug beats
+ * a weak guess, and the whole point of this feature is verdicts users can
+ * trust.
+ */
+export function applyInference(infer, country, isAfrican) {
+  if (!infer || infer.v !== INFER_VERSION) return null;
+  if (infer.confidence === "low") return null;
+
+  // Which region labels count as "open to me" for each target.
+  const REGION_FOR = {
+    africa: ["africa", "emea", "worldwide"],
+    mena:   ["mena", "emea", "worldwide"],
+    europe: ["europe", "emea", "worldwide"],
+    latam:  ["latam", "worldwide"],
+    seasia: ["seasia", "apac", "worldwide"],
+  };
+
+  // AN INFERRED EXCLUSION IS NOT A STATED ONE. Hiding a role is irreversible
+  // from the user's side — they never learn it existed — so only a HIGH
+  // confidence inference is allowed to do it. At medium we surface the doubt
+  // and quote the evidence instead, and let them judge.
+  //
+  // This distinction is not academic. On the first live sample the model
+  // excluded two roles on "headquartered in Dubai", which is a fact about a
+  // company's address, not about who it will hire — the same sentence called
+  // it a "global group". Medium confidence is exactly where that belongs.
+  const negative = (reason) => infer.confidence === "high"
+    ? { eligible: false, confidence: "excluded", reason }
+    : { eligible: true, confidence: "possible", reason: `${reason} — worth confirming before you apply` };
+
+  // Positive inferred verdicts cap at "likely", never "certain". Certainty is
+  // reserved for something the posting stated outright and we matched literally.
+  if (infer.scope === "worldwide")
+    return { eligible: true, confidence: "likely", reason: `Open worldwide — "${infer.evidence}"` };
+
+  if (infer.scope === "country") {
+    const terms = COUNTRY_TERMS[country] || [];
+    const named = infer.countries.some((c) => terms.includes(c) || c === country);
+    return named
+      ? { eligible: true, confidence: "likely", reason: `Open to your country — "${infer.evidence}"` }
+      : negative(`Hiring looks tied to ${infer.countries[0]} — "${infer.evidence}"`);
+  }
+
+  if (infer.scope === "region") {
+    const mine = REGION_FOR[country] || (isAfrican ? REGION_FOR.africa : []);
+    return infer.regions.some((r) => mine.includes(r))
+      ? { eligible: true, confidence: "likely", reason: `Open to your region — "${infer.evidence}"` }
+      : negative(`Hiring looks limited to ${infer.regions[0]} — "${infer.evidence}"`);
+  }
+
+  return null;   // "unclear" — the model looked and could not tell either
+}
+
 // v2 adds onsiteRequired (physical-presence requirement stated in the body).
 // Stored v1 blobs are ignored until ingest/backfill_signals.js re-runs — the
 // lean payload switches itself off in the meantime, so search stays correct
@@ -1831,9 +1904,26 @@ export function checkEligibility(job, country) {
   if (lockAppliesTo(lock, country))
     return E("excluded", `Remote, but ${jurisdictionReason(lock)}`, false);
 
-  // Bare remote, nothing decisive found. Distinguish "we read the posting and
-  // it said nothing" from "we had nothing to read" — the second is a gap in
-  // our data, not a property of the job, and shouldn't look like a verdict.
+  // LAST RESORT — and the ONLY place an inferred verdict is consulted.
+  //
+  // Everything decisive has already returned above: hard exclusions, country
+  // ties, onsite requirements, jurisdiction locks, explicit location matches,
+  // the positive-evidence gate. What is left is the case where the posting
+  // genuinely never said, which measurement showed is the majority of the
+  // corpus and is not closable by reading for phrases that were never written.
+  //
+  // Placing the call HERE rather than earlier is the safety property: a wrong
+  // or hallucinated inference cannot resurrect a role the engine excluded,
+  // because the engine already returned. The worst case is a wrong verdict on
+  // a row that was going to be an unhelpful shrug regardless. See the contract
+  // at the top of api/inferEligibility.js.
+  const inferred = applyInference(sig.infer, country, isAfrican);
+  if (inferred) return inferred.eligible ? soften(inferred) : inferred;
+
+  // Nothing decisive, and either no inference or one too weak to show.
+  // Distinguish "we read the posting and it said nothing" from "we had nothing
+  // to read" — the second is a gap in our data, not a property of the job, and
+  // shouldn't look like a verdict.
   return sig._degraded
     ? E("possible", "Eligibility not yet verified for this listing")
     : E("possible", "Remote — region unconfirmed");
