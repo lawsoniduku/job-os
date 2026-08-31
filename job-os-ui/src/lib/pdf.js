@@ -12,6 +12,46 @@
  * ATS-friendly by construction: single column, real text, standard fonts.
  */
 
+/* ── Character safety ─────────────────────────────────────────────────────
+ * jsPDF's built-in fonts are WinAnsi-encoded. Anything outside that set is
+ * silently mangled — an arrow "→" came out as "!" in a real generated CV, and
+ * non-breaking hyphens vanished mid-word ("Product-focused" -> "Product
+ * focused"). The model is asked for plain ASCII, but a prompt is a request,
+ * not a constraint, so every string is transliterated on the way in.
+ *
+ * Order matters: named replacements first, then a final sweep that strips any
+ * remaining non-ASCII rather than letting jsPDF guess.
+ */
+// Written as escapes, not literal glyphs: several of these are invisible, and a
+// source file containing real zero-width characters is unreviewable (and trips
+// no-irregular-whitespace / no-misleading-character-class).
+const CHAR_MAP = [
+  [/[\u2018\u2019\u201A\u201B\u2032]/g, "'"],            // curly single quotes, prime
+  [/[\u201C\u201D\u201E\u201F\u2033]/g, '"'],            // curly double quotes
+  [/[\u2010\u2011\u2012\u2013\u2014\u2015]/g, '-'],      // hyphens, en/em dashes
+  [/[\u2192\u27A1\u2794]/g, '->'],                          // arrows - the "!" bug
+  [/\u2190/g, '<-'],
+  [/\u2026/g, '...'],                                        // ellipsis
+  [/[\u2022\u25CF\u25AA\u00B7]/g, '-'],                    // stray bullet glyphs
+  [/[\u00A0\u2007\u2008\u2009\u200A\u2002\u2003]/g, ' '], // nbsp / thin / en / em spaces
+  // Zero-width chars, each on its own so the joiner (200D) is never read as
+  // part of a combined sequence with its neighbours.
+  [/\u200B/g, ''], [/\u200C/g, ''], [/\u200D/g, ''], [/\uFEFF/g, ''],
+  [/\u2122/g, '(TM)'], [/\u00AE/g, '(R)'], [/\u00A9/g, '(C)'],
+  [/\u2264/g, '<='], [/\u2265/g, '>='], [/\u2260/g, '!='],
+  [/\u00D7/g, 'x'],
+];
+
+function ascii(input) {
+  let s = String(input ?? "");
+  for (const [re, to] of CHAR_MAP) s = s.replace(re, to);
+  // Anything still outside printable ASCII would be corrupted by the font, so
+  // drop it. Accented Latin letters are decomposed first so "José" keeps its
+  // letters ("Jose") instead of losing the character entirely.
+  s = s.normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
+  return s.replace(/[^\x20-\x7E\n]/g, "");
+}
+
 function loadScript(src) {
   return new Promise((resolve, reject) => {
     if (document.querySelector(`script[src="${src}"]`)) { resolve(); return; }
@@ -27,10 +67,29 @@ const PAGE_H = 842;
 const W = PAGE_W - M * 2;
 const BOTTOM = PAGE_H - M;
 
-export async function downloadCvPdf(cv, filename = "CV.pdf") {
+/** Deep-transliterate every string in the CV once, rather than at each draw call. */
+function sanitizeCv(cv) {
+  return {
+    name: ascii(cv?.name),
+    contact: ascii(cv?.contact),
+    summary: ascii(cv?.summary),
+    sections: (cv?.sections || []).map((s) => ({
+      heading: ascii(s?.heading),
+      entries: (s?.entries || []).map((e) => ({
+        title: ascii(e?.title),
+        org: ascii(e?.org),
+        dates: ascii(e?.dates),
+        bullets: (e?.bullets || []).map(ascii).filter(Boolean),
+      })),
+    })),
+  };
+}
+
+export async function downloadCvPdf(rawCv, filename = "CV.pdf") {
   await loadScript("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js");
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ unit: "pt", format: "a4" });
+  const cv = sanitizeCv(rawCv);
   let y = M;
 
   const breakIf = (needed) => { if (y + needed > BOTTOM) { doc.addPage(); y = M; } };
