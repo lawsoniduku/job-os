@@ -15,6 +15,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { aiSearch, aiRefine, aiClarify, aiChat, aiCvRewrite, verdictOf, fmtSalary } from "../lib/api";
 import { supabase } from "../lib/supabaseClient";
 import { track } from "../lib/track";
+import { recordApplyIntent } from "../lib/applyIntent";
 import { extractTextFromFile } from "../lib/extractText";
 import { downloadCvPdf, cvFilename } from "../lib/pdf";
 
@@ -346,6 +347,7 @@ export default function Copilot({ shared, active, initialQuery, onInitialConsume
       salary_min: job.salary_min,
       salary_max: job.salary_max,
       source: job.source,
+      role_cluster: job.role_cluster || null,
       verdict: v.key,
       verdict_reason: job.eligibility?.reason || null,
       status: "saved",
@@ -474,6 +476,7 @@ export default function Copilot({ shared, active, initialQuery, onInitialConsume
                     onLoadMore={loadMore}
                     onTailor={setTailorJob}
                     onReport={reportJob}
+                    user={user}
                     busy={busy}
                   />
                 )}
@@ -572,7 +575,7 @@ function TaxonomyCard({ cluster, variants }) {
 
 /* ── Results block ──────────────────────────────────────────────────────── */
 
-function ResultsBlock({ m, isLatest, onLoadMore, onTailor, onReport, busy }) {
+function ResultsBlock({ m, isLatest, onLoadMore, onTailor, onReport, user, busy }) {
   const hasFilters = m.activeFilters && Object.values(m.activeFilters).some(Boolean);
   return (
     <>
@@ -615,7 +618,7 @@ function ResultsBlock({ m, isLatest, onLoadMore, onTailor, onReport, busy }) {
       )}
 
       {m.jobs.map((job) => (
-        <JobCard key={job.id} job={job} onTailor={onTailor} onReport={onReport} />
+        <JobCard key={job.id} job={job} onTailor={onTailor} onReport={onReport} user={user} />
       ))}
 
       {isLatest && m.hasMore && (
@@ -631,7 +634,7 @@ function ResultsBlock({ m, isLatest, onLoadMore, onTailor, onReport, busy }) {
 
 /* ── Job card ───────────────────────────────────────────────────────────── */
 
-function JobCard({ job, onTailor, onReport }) {
+function JobCard({ job, onTailor, onReport, user }) {
   const [pop, setPop] = useState(false);
   const [matchPop, setMatchPop] = useState(false);
   const [reporting, setReporting] = useState(false);
@@ -743,7 +746,10 @@ function JobCard({ job, onTailor, onReport }) {
       <div className="jc-actions">
         <button className="btn primary" onClick={() => onTailor(job)}>Tailor & apply</button>
         {job.apply_url && (
+          /* No preventDefault: the link navigates natively and the record is
+             fire-and-forget, so nothing can delay or block the trip out. */
           <a className="btn" href={job.apply_url} target="_blank" rel="noreferrer"
+             onClick={() => recordApplyIntent({ user, job, source: "result_card" })}
              style={{ textDecoration: "none", display: "inline-flex", alignItems: "center" }}>
             View posting ↗
           </a>
@@ -856,8 +862,12 @@ function TailorModal({ job, shared, onSaveForLater, onClose }) {
       user_id: user.id, job_id: job.id,
       job_title: job.title, company: job.company, location: job.location,
       apply_url: job.apply_url, salary_min: job.salary_min, salary_max: job.salary_max,
-      source: job.source, verdict: v.key, verdict_reason: job.eligibility?.reason || null,
+      source: job.source, role_cluster: job.role_cluster || null,
+      verdict: v.key, verdict_reason: job.eligibility?.reason || null,
+      // A hand-confirmed "I applied" is the strongest answer the nudge could
+      // ever get, so record it in the same shape and skip asking later.
       status: "applied", applied_at: new Date().toISOString(),
+      apply_outcome: "applied", outcome_at: new Date().toISOString(),
       cv_label: `CV · ${job.company || job.title}`,
     }, { onConflict: "user_id,job_id" });
     if (e) showToast(`Couldn't record: ${e.message}`);
@@ -960,7 +970,9 @@ function TailorModal({ job, shared, onSaveForLater, onClose }) {
                 Download PDF
               </button>
               {job.apply_url && (
-                <a className="btn" href={job.apply_url} target="_blank" rel="noreferrer" style={{ textDecoration: "none" }}>
+                <a className="btn" href={job.apply_url} target="_blank" rel="noreferrer"
+                   onClick={() => recordApplyIntent({ user, job, source: "tailor_modal" })}
+                   style={{ textDecoration: "none" }}>
                   Open application ↗
                 </a>
               )}

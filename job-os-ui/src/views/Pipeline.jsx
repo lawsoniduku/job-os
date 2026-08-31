@@ -13,10 +13,14 @@ import { useState, useEffect, useCallback } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { aiInterviewCoach, fmtSalary, daysSince } from "../lib/api";
 import { track } from "../lib/track";
+import { openApply, resolveApplyIntent } from "../lib/applyIntent";
 
 const COLS = [
   { key: "saved",      label: "Saved",      statuses: ["saved", "shortlist", "interested", "cv_tailored"] },
-  { key: "applied",    label: "Applied",    statuses: ["applied"] },
+  // applied_intent sits here rather than in a column of its own: an
+  // unconfirmed application is a STATE of an application, not a stage of a
+  // search. The card renders as unconfirmed and asks in place.
+  { key: "applied",    label: "Applied",    statuses: ["applied", "applied_intent"] },
   { key: "in_process", label: "In process", statuses: ["assessment", "interview", "in_process"] },
   { key: "offer",      label: "Offer",      statuses: ["offer"] },
   { key: "closed",     label: "Closed",     statuses: ["rejected", "archived", "closed"] },
@@ -56,6 +60,17 @@ export default function Pipeline({ shared, active }) {
     if (error) return showToast(`Couldn't move it: ${error.message}`);
     track(user, "pipeline_advance", { from: colOf(app.status), to: next });
     showToast(next === "offer" ? "Moved to Offer 🎉" : `Moved to ${COLS.find((c) => c.key === colOf(next)).label}`);
+    load();
+  }
+
+  // In-place answer to the same question ReturnNudge asks. A user scanning
+  // their board is the other natural moment to confirm, so the card carries
+  // the control rather than making them wait to be asked.
+  async function confirmApplied(app) {
+    const { error } = await resolveApplyIntent(app, "applied");
+    if (error) return showToast(`Couldn't confirm: ${error.message}`);
+    track(user, "apply_confirmed", { job_id: app.job_id, via: "pipeline_card" });
+    showToast("Confirmed — follow-up reminders start from today");
     load();
   }
 
@@ -111,10 +126,12 @@ export default function Pipeline({ shared, active }) {
                   <AppCard
                     key={app.id}
                     app={app}
+                    user={user}
                     onAdvance={advance}
                     onClose={closeApp}
                     onRemove={remove}
                     onPrep={setPrepApp}
+                    onConfirm={confirmApplied}
                   />
                 ))}
               </div>
@@ -128,30 +145,40 @@ export default function Pipeline({ shared, active }) {
   );
 }
 
-function AppCard({ app, onAdvance, onClose, onRemove, onPrep }) {
+function AppCard({ app, user, onAdvance, onClose, onRemove, onPrep, onConfirm }) {
   const col = colOf(app.status);
   const days = daysSince(app.applied_at || app.created_at);
   const sal = fmtSalary(app.salary_min, app.salary_max);
   // Prep is available on ANY card that still links to a live job record —
   // users prepare before applying too, not only once "in process".
   const canPrep = !!app.job_id;
+  // We saw them click through but they've never told us what happened.
+  const unconfirmed = app.status === "applied_intent" && !app.apply_outcome;
+  const clickedDays = daysSince(app.apply_clicked_at);
 
   return (
-    <div className="p-card">
+    <div className={`p-card ${unconfirmed ? "unconfirmed" : ""}`}>
       <div className="pc-title">{app.job_title}</div>
       <div className="pc-co">{app.company || "—"}</div>
       <div className="pc-meta">
-        {col === "applied" && days !== null ? `Applied · day ${Math.max(days, 0) + 1}` :
+        {unconfirmed ? `Opened ${clickedDays === 0 ? "today" : `${clickedDays}d ago`}` :
+         col === "applied" && days !== null ? `Applied · day ${Math.max(days, 0) + 1}` :
          col === "saved" ? `Saved ${days === 0 ? "today" : `${days}d ago`}` :
          `Updated ${daysSince(app.updated_at) === 0 ? "today" : `${daysSince(app.updated_at)}d ago`}`}
         {sal ? ` · ${sal}` : ""}
       </div>
+      {unconfirmed && (
+        <div className="pc-confirm">
+          <span className="pc-unconf">Did you apply?</span>
+          <button onClick={() => onConfirm(app)}>Yes, I applied</button>
+        </div>
+      )}
       {app.cv_label && <div className="pc-cv">{app.cv_label}</div>}
       <div className="pc-actions">
         {NEXT[col] && <button onClick={() => onAdvance(app)}>Advance →</button>}
         {canPrep && <button onClick={() => onPrep(app)}>Prep interview</button>}
         {app.apply_url && (
-          <button onClick={() => window.open(app.apply_url, "_blank", "noopener")}>Open ↗</button>
+          <button onClick={() => openApply({ user, job: app, source: "pipeline_card" })}>Open ↗</button>
         )}
         {col !== "closed" ? (
           <button className="danger" onClick={() => onClose(app)}>Close</button>

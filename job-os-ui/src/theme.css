@@ -749,3 +749,194 @@ body {
 .cl-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 .cl-body { white-space: pre-wrap; font-size: 14px; line-height: 1.65; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; }
 .btn.sm { padding: 5px 12px; font-size: 12.5px; }
+
+/* ============================================================
+   Profile completeness — You tab
+   ------------------------------------------------------------
+   Rule #1 still holds: green means ELIGIBLE and nothing else.
+   The strength meter and the consent switch are ACCENT, never
+   --eligible, however tempting a green progress bar is.
+   ============================================================ */
+.strength {
+  border: 1px solid var(--border); border-radius: var(--r); background: var(--surface);
+  padding: 18px 20px; margin-bottom: 14px;
+}
+.strength.done { border-color: var(--accent); background: var(--accent-dim); }
+.strength-top { display: flex; align-items: flex-start; gap: 14px; }
+.st-label { font-size: 10.5px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); }
+.st-state { font-size: 15px; font-weight: 600; color: var(--text); margin-top: 3px; font-family: var(--display); }
+.st-pct {
+  margin-left: auto; font-family: var(--mono); font-size: 26px; font-weight: 600;
+  color: var(--accent); line-height: 1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums;
+}
+.st-pct span { font-size: 14px; margin-left: 1px; }
+
+.strength-bar {
+  height: 6px; border-radius: 6px; background: var(--border-soft);
+  margin-top: 13px; overflow: hidden;
+}
+.strength-fill {
+  height: 100%; border-radius: 6px; background: var(--accent);
+  transition: width 0.45s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.strength-next {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  margin-top: 15px; padding-top: 14px; border-top: 1px solid var(--border-soft);
+}
+.strength-next > div:first-child { min-width: 0; flex: 1; }
+.sn-what { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.sn-why { font-size: 12.5px; color: var(--text-2); margin-top: 2px; max-width: 560px; }
+.strength-foot { font-size: 11.5px; color: var(--text-3); margin-top: 11px; }
+
+/* The card the meter jumped to, briefly marked so the eye lands on it. */
+.studio-card { transition: border-color 0.3s ease, box-shadow 0.3s ease; }
+.studio-card.flash { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+
+/* The "does this look right?" state after a CV is parsed. */
+.studio-card.review { border-color: var(--accent); }
+
+/* ---------- Skill chips ---------- */
+.skill-row { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 4px; }
+.skill-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--border); border-radius: 20px; padding: 5px 11px;
+  font-size: 12px; color: var(--text-2); background: var(--raised);
+}
+.skill-chip.on { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+.skill-chip.sm { font-size: 11px; padding: 3px 9px; }
+.skill-chip .x {
+  background: none; border: none; cursor: pointer; color: inherit;
+  font-size: 14px; line-height: 1; padding: 0 0 0 2px; opacity: 0.65;
+}
+.skill-chip .x:hover { opacity: 1; }
+
+.chip-input-row { display: flex; gap: 8px; margin-top: 10px; max-width: 460px; }
+.chip-input-row .field { flex: 1; }
+
+.check-row { display: flex; align-items: center; gap: 9px; font-size: 13.5px; color: var(--text); cursor: pointer; }
+.check-row input { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; flex-shrink: 0; }
+
+/* ---------- Employer visibility (consent) ---------- */
+.studio-card.consent.on { border-color: var(--accent); }
+.consent-what {
+  background: var(--raised); border: 1px solid var(--border-soft); border-radius: var(--r-sm);
+  padding: 13px 16px; margin-bottom: 16px;
+}
+.cw-head { font-size: 11.5px; font-weight: 600; color: var(--text-2); }
+.consent-what ul { margin: 6px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.consent-what li { font-size: 12.5px; color: var(--text-3); line-height: 1.5; }
+
+.consent-row { display: flex; align-items: center; gap: 13px; flex-wrap: wrap; }
+.switch {
+  width: 42px; height: 24px; border-radius: 20px; border: 1px solid var(--border);
+  background: var(--raised); position: relative; cursor: pointer; flex-shrink: 0;
+  transition: background 0.2s ease, border-color 0.2s ease; padding: 0;
+}
+.switch .knob {
+  position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%;
+  background: var(--text-3); transition: transform 0.2s ease, background 0.2s ease;
+}
+.switch.on { background: var(--accent); border-color: var(--accent); }
+.switch.on .knob { transform: translateX(18px); background: var(--accent-contrast); }
+.switch:disabled { opacity: 0.6; cursor: default; }
+.cs-state { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.cs-sub { font-size: 12px; color: var(--text-3); margin-top: 1px; }
+
+/* ---------- Employer preview ---------- */
+.emp-preview { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border-soft); }
+.ep-eyebrow {
+  font-size: 10.5px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--text-3); margin-bottom: 9px;
+}
+.ep-card { border: 1px solid var(--border); border-radius: var(--r); background: var(--raised); padding: 16px 18px; }
+.ep-top { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.ep-name { font-size: 14px; font-weight: 600; color: var(--text); }
+.ep-head { font-size: 12.5px; color: var(--text-2); margin-top: 1px; }
+.ep-row {
+  display: flex; gap: 14px; padding: 9px 0; border-top: 1px solid var(--border-soft);
+  font-size: 12.5px; align-items: baseline;
+}
+.ep-k { flex: 0 0 92px; color: var(--text-3); font-size: 11.5px; font-weight: 600; }
+.ep-v { color: var(--text); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; }
+.ep-missing { color: var(--conditional); font-style: italic; }
+.ep-locked { color: var(--text-3); }
+.ep-tag {
+  font-family: var(--mono); font-size: 10px; color: var(--conditional);
+  background: var(--conditional-dim); border-radius: 5px; padding: 2px 7px;
+}
+.ep-tag.ok { color: var(--eligible); background: var(--eligible-dim); }  /* confirmed IS an eligibility claim */
+.ep-foot { font-size: 12px; color: var(--text-2); margin-top: 11px; line-height: 1.55; }
+
+@media (max-width: 640px) {
+  .ep-row { flex-direction: column; gap: 4px; }
+  .ep-k { flex: none; }
+}
+
+/* ============================================================
+   Apply capture — the return nudge and unconfirmed cards
+   ------------------------------------------------------------
+   The nudge is amber, not green: an unconfirmed application is
+   exactly the "conditional" state the palette already has a
+   colour for, and green stays reserved for ELIGIBLE.
+   ============================================================ */
+.nudge {
+  position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
+  z-index: 95; display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  background: var(--raised); border: 1px solid var(--conditional);
+  border-radius: 14px; padding: 14px 46px 14px 18px;
+  box-shadow: var(--shadow); max-width: min(720px, calc(100vw - 32px));
+  animation: rise 0.28s ease both;
+}
+.nudge-body { min-width: 0; flex: 1; }
+.nudge-q { font-size: 14px; font-weight: 600; color: var(--text); }
+.nudge-sub { font-size: 12px; color: var(--text-3); margin-top: 2px; }
+.nudge-acts { display: flex; gap: 7px; flex-wrap: wrap; flex-shrink: 0; }
+.nudge-reasons { display: flex; gap: 6px; flex-wrap: wrap; max-width: 420px; }
+.nudge-reasons .prompt-chip { font-size: 11.5px; padding: 5px 10px; }
+.nudge-x {
+  position: absolute; top: 8px; right: 10px; background: none; border: none;
+  color: var(--text-3); cursor: pointer; font-size: 13px; padding: 4px 6px; line-height: 1;
+}
+.nudge-x:hover { color: var(--text); }
+.btn.subtle { border-color: transparent; color: var(--text-3); }
+.btn.subtle:hover { border-color: var(--border); color: var(--text-2); }
+
+@media (max-width: 620px) {
+  .nudge { flex-direction: column; align-items: stretch; gap: 11px; bottom: 12px; }
+  .nudge-acts .btn { flex: 1; }
+}
+
+/* Pipeline card we saw click through but never heard back about. */
+.p-card.unconfirmed { border-color: var(--conditional); }
+.pc-confirm {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--border-soft);
+}
+.pc-unconf { font-size: 11px; color: var(--conditional); font-weight: 600; }
+.pc-confirm button {
+  font-size: 11px; font-weight: 600; color: var(--conditional); background: var(--conditional-dim);
+  border: none; border-radius: 6px; padding: 3px 9px; cursor: pointer;
+}
+.pc-confirm button:hover { filter: brightness(1.1); }
+
+/* Profile prompt on the Briefing page. */
+.bp-prompt {
+  position: relative; display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  border: 1px solid var(--border); border-radius: var(--r); background: var(--surface);
+  padding: 16px 18px 16px; margin-bottom: 24px; overflow: hidden;
+}
+.bp-bar { position: absolute; top: 0; left: 0; right: 0; height: 3px; background: var(--border-soft); }
+.bp-fill { height: 100%; background: var(--accent); transition: width 0.45s cubic-bezier(0.4, 0, 0.2, 1); }
+.bp-body { min-width: 0; flex: 1; }
+.bp-what { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.bp-why { font-size: 12.5px; color: var(--text-2); margin-top: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .nudge { animation: none; }
+  .bp-fill { transition: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .strength-fill, .studio-card, .switch, .switch .knob { transition: none; }
+}
