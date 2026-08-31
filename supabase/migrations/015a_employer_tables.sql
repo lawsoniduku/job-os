@@ -1,12 +1,12 @@
 -- ============================================================
--- 015a — EMPLOYER SIDE, PART 1 of 3: TABLES
+-- 015a - EMPLOYER SIDE, PART 1 of 3: TABLES
 -- ============================================================
 -- Run in Supabase Dashboard -> SQL Editor. Safe to re-run.
 -- RUN THIS FIRST, then 015b, then 015c. Each is independently re-runnable.
 --
 -- WHY THREE FILES. This started as one 394-line migration and failed on its
 -- first statement with 42P01 "relation public.employer_orgs does not exist"
--- — the error you get when the CREATE never ran but everything referencing
+-- - the error you get when the CREATE never ran but everything referencing
 -- it did, i.e. a partial paste. Three files small enough to paste whole are
 -- worth more than one file that documents itself beautifully and doesn't
 -- apply. Design commentary lives with the thing it explains.
@@ -14,7 +14,7 @@
 -- CONTEXT. 008 captured employer demand. 012 put consent and structured
 -- candidate data in place. 013 gave those columns a writer. 014 recorded
 -- what candidates actually do. This is the other side of the market:
---   post · screen · feedback · match
+--   post . screen . feedback . match
 --
 -- Honest note: at time of writing 1 profile is opted in to employer
 -- visibility and 3 employers are waitlisted. `match` is therefore built
@@ -23,9 +23,9 @@
 -- ============================================================
 
 
--- ── 1. ORGS AND MEMBERS ──────────────────────────────────────────────────
--- An employer account is an ORG, not a person. Hiring is a team act — the
--- recruiter who posts is rarely the manager who screens — and 008 already
+-- -- 1. ORGS AND MEMBERS --------------------------------------------------
+-- An employer account is an ORG, not a person. Hiring is a team act - the
+-- recruiter who posts is rarely the manager who screens - and 008 already
 -- keys demand on `company` rather than the individual who signed up.
 create table if not exists public.employer_orgs (
   id          uuid primary key default gen_random_uuid(),
@@ -56,15 +56,15 @@ create table if not exists public.employer_members (
 -- harmless: it is never opted in (visible_to_employers defaults false), so
 -- an employer can never appear in another employer's shortlist. Membership
 -- in employer_members is what makes an account an employer, and the two are
--- not mutually exclusive on purpose — a founder hiring their first engineer
+-- not mutually exclusive on purpose - a founder hiring their first engineer
 -- is plausibly both.
 
 
--- ── 2. POSTINGS ──────────────────────────────────────────────────────────
+-- -- 2. POSTINGS ----------------------------------------------------------
 -- Deliberately NOT just a row in `jobs`. Three reasons:
 --   1. A draft must not be searchable, and `jobs` has no concept of draft.
---   2. `jobs` is the ingest mirror — prune_stale.js deletes from it on
---      last_seen_at alone. A posting must outlive that (see 015c §3).
+--   2. `jobs` is the ingest mirror - prune_stale.js deletes from it on
+--      last_seen_at alone. A posting must outlive that (see 015c sec 3).
 --   3. Authorship. `jobs` rows have a `source`, not an owner. Employer
 --      writes need an org to authorise against.
 --
@@ -98,12 +98,12 @@ create table if not exists public.job_postings (
 );
 
 
--- ── 3. SUBMISSIONS (the screening queue) ─────────────────────────────────
+-- -- 3. SUBMISSIONS (the screening queue) ---------------------------------
 -- SEPARATE FROM `applications`, for exactly the reason 014 kept
 -- apply_outcome separate from status: these are two parties' records of the
 -- same event, and neither may silently rewrite the other's.
 --
--- `applications` is the CANDIDATE's board — they drag cards, archive
+-- `applications` is the CANDIDATE's board - they drag cards, archive
 -- things, change their mind. This table is the EMPLOYER's queue, and its
 -- `stage` is the employer's decision. If they were one row, a candidate
 -- archiving a card would erase a rejection, and an employer rejecting
@@ -146,7 +146,7 @@ create table if not exists public.posting_submissions (
 );
 
 
--- ── 4. FEEDBACK (the actual differentiator) ──────────────────────────────
+-- -- 4. FEEDBACK (the actual differentiator) ------------------------------
 -- Being ghosted is the default experience of applying for work, and it is
 -- worse for exactly the candidates this product serves.
 --
@@ -174,7 +174,7 @@ create table if not exists public.candidate_feedback (
 );
 
 
--- ── 5. INTRO REQUESTS (the match verb, and its consent checkpoint) ───────
+-- -- 5. INTRO REQUESTS (the match verb, and its consent checkpoint) -------
 -- Proactive outreach: the employer found someone who never applied. That
 -- person opted in to being VISIBLE, which is not the same as consenting to
 -- be contacted, so this table is the gap between the two.
@@ -182,7 +182,7 @@ create table if not exists public.candidate_feedback (
 -- Nothing here reveals identity. The employer sees an anonymous card and
 -- sends a request; the candidate decides. Contact details are released by
 -- the server only when status = 'accepted'. Storing it as a row rather than
--- sending an email directly is the point — it makes the candidate's answer
+-- sending an email directly is the point - it makes the candidate's answer
 -- the gate, and leaves evidence of what was asked.
 create table if not exists public.intro_requests (
   id           uuid primary key default gen_random_uuid(),
@@ -196,13 +196,13 @@ create table if not exists public.intro_requests (
   responded_at timestamptz,
   -- Re-asking after a decline is harassment with extra steps. Note that
   -- Postgres treats NULLs as distinct here, so this does NOT constrain
-  -- posting-less requests — api/employer.js queries for a prior row with
+  -- posting-less requests - api/employer.js queries for a prior row with
   -- .is("posting_id", null) and refuses there. Both layers are needed.
   unique (org_id, candidate_id, posting_id)
 );
 
 
--- ── VERIFY — must return 6 rows before you run 015b ──────────────────────
+-- -- VERIFY - must return 6 rows before you run 015b ----------------------
 select tablename
   from pg_tables
  where schemaname = 'public'

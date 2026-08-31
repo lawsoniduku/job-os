@@ -1,16 +1,16 @@
 -- ============================================================
--- 015b — EMPLOYER SIDE, PART 2 of 3: CONSTRAINTS + INDEXES
+-- 015b - EMPLOYER SIDE, PART 2 of 3: CONSTRAINTS + INDEXES
 -- ============================================================
 -- Run AFTER 015a. Safe to re-run.
 --
 -- If this errors with 42P01 "relation does not exist", 015a did not fully
--- apply — go back and check its verify query returns all 6 tables. Note
+-- apply - go back and check its verify query returns all 6 tables. Note
 -- that ALTER TABLE ... DROP CONSTRAINT IF EXISTS still fails if the TABLE
 -- is missing; the IF EXISTS covers the constraint, not the table.
 -- ============================================================
 
 
--- ── 1. MEMBER ROLES ──────────────────────────────────────────────────────
+-- -- 1. MEMBER ROLES ------------------------------------------------------
 alter table public.employer_members
   drop constraint if exists employer_members_role_check;
 alter table public.employer_members
@@ -20,7 +20,7 @@ create index if not exists employer_members_user_idx
   on public.employer_members(user_id);
 
 
--- ── 2. POSTING LIFECYCLE ─────────────────────────────────────────────────
+-- -- 2. POSTING LIFECYCLE -------------------------------------------------
 alter table public.job_postings
   drop constraint if exists job_postings_status_check;
 alter table public.job_postings
@@ -32,7 +32,7 @@ create index if not exists job_postings_status_idx on public.job_postings(status
 create index if not exists job_postings_job_idx    on public.job_postings(job_id);
 
 
--- ── 3. SUBMISSION STAGES ─────────────────────────────────────────────────
+-- -- 3. SUBMISSION STAGES -------------------------------------------------
 alter table public.posting_submissions
   drop constraint if exists posting_submissions_stage_check;
 alter table public.posting_submissions
@@ -52,7 +52,7 @@ create index if not exists posting_submissions_candidate_idx
   on public.posting_submissions(candidate_id, created_at desc);
 
 
--- ── 4. FEEDBACK VOCABULARY ───────────────────────────────────────────────
+-- -- 4. FEEDBACK VOCABULARY -----------------------------------------------
 alter table public.candidate_feedback
   drop constraint if exists candidate_feedback_decision_check;
 alter table public.candidate_feedback
@@ -85,7 +85,7 @@ create index if not exists candidate_feedback_posting_idx
   on public.candidate_feedback(posting_id, created_at desc);
 
 
--- ── 5. INTRO STATUS ──────────────────────────────────────────────────────
+-- -- 5. INTRO STATUS ------------------------------------------------------
 alter table public.intro_requests
   drop constraint if exists intro_requests_status_check;
 alter table public.intro_requests
@@ -98,7 +98,7 @@ create index if not exists intro_requests_org_idx
   on public.intro_requests(org_id, created_at desc);
 
 
--- ── VERIFY — must return 7 rows before you run 015c ──────────────────────
+-- -- VERIFY - must return 7 rows before you run 015c ----------------------
 select conname
   from pg_constraint
  where conname in ('employer_members_role_check','job_postings_status_check',
