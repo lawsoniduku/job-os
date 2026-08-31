@@ -15,8 +15,14 @@ name: Backfill eligibility signals
 #     automatically falls back to the safe full-description path until
 #     coverage recovers, so there's no rush — but it stays slow until you do)
 #
-# Safe to re-run and safe to interrupt: it pages by "signals still missing",
-# so a cancelled run just resumes where it stopped.
+# A PLAIN RUN IS ENOUGH after a version bump: the script treats a stale row
+# exactly like a missing one. It did not always — it matched only NULL rows,
+# so a post-bump run found nothing and reported success. You do NOT need the
+# "all" toggle below for that case any more.
+#
+# Safe to re-run and safe to interrupt: it pages by "missing or stale", so a
+# cancelled run just resumes where it stopped. It also carries any stored LLM
+# eligibility inference across, so it never destroys work that cost model calls.
 
 on:
   workflow_dispatch:
@@ -26,7 +32,7 @@ on:
         required: false
         default: "32"
       all:
-        description: "Re-stamp EVERY row, not just missing ones (use after a SIGNALS_VERSION bump)"
+        description: "Force re-stamp EVERY row (rarely needed — a plain run already covers missing AND stale)"
         required: false
         default: "false"
 

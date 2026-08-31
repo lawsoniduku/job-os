@@ -16,9 +16,16 @@
  * Only touches elig_signals. Labels, regions and descriptions are left alone,
  * so it can't undo anything reclassify.js decided.
  *
+ * WHAT COUNTS AS "NEEDS BACKFILL": a row with no signals, OR one stamped with
+ * an older SIGNALS_VERSION. Both are equally unusable to signalsFor(), so both
+ * are picked up by a plain run. This used to match only NULL rows, which meant
+ * that after a version bump — the script's most common trigger — it matched
+ * nothing, wrote nothing, and printed a success line. If you are reading this
+ * because coverage is stuck at 0%, that was the bug, and it is fixed.
+ *
  * USAGE:
- *   node --env-file=.env ingest/backfill_signals.js
- *   node --env-file=.env ingest/backfill_signals.js --all        (re-stamp every row)
+ *   node --env-file=.env ingest/backfill_signals.js               (missing + stale)
+ *   node --env-file=.env ingest/backfill_signals.js --all         (re-stamp every row)
  *   node --env-file=.env ingest/backfill_signals.js --concurrency 16
  */
 
@@ -40,10 +47,18 @@ const CONCURRENCY = ci > -1 && args[ci + 1] ? parseInt(args[ci + 1], 10) || 8 : 
 const PAGE = 500;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// The "still needs work" predicate, in PostgREST's or() syntax: no blob at
+// all, or a blob stamped with a version that is no longer current. Both are
+// equally useless to signalsFor(), which is the point — this is the one place
+// that decides what the script considers unfinished, so the paging query and
+// both progress counts read it from here rather than restating it.
+const STALE_OR_MISSING =
+  `elig_signals.is.null,elig_signals->>v.is.null,elig_signals->>v.neq.${SIGNALS_VERSION}`;
+
 async function fetchPage() {
   for (let a = 1; a <= 5; a++) {
-    // Always pull the OLDEST-id rows still missing signals. Because we write
-    // signals as we go, the "still missing" set shrinks every pass — no
+    // Always pull the OLDEST-id rows that still need work. Because we stamp
+    // the current version as we go, the pending set shrinks every pass — no
     // offset bookkeeping, and a crash just resumes where it left off.
     let q = supabase.from("jobs")
       // elig_signals is selected so writeOne can carry the LLM inference
@@ -51,7 +66,13 @@ async function fetchPage() {
       // deletes work that cost model calls to produce.
       .select("id, title, location, description, eligibility_region, elig_signals")
       .order("id").limit(PAGE);
-    if (!ALL) q = q.is("elig_signals", null);
+    // "Still needs signals" means MISSING **or** STALE. After a
+    // SIGNALS_VERSION bump every row is non-null but out of date, and
+    // signalsFor() ignores a stale blob exactly as it ignores a null one —
+    // so a null-only predicate made this whole script a silent no-op on its
+    // single most common trigger. It matched nothing, wrote nothing, and
+    // reported success.
+    if (!ALL) q = q.or(STALE_OR_MISSING);
     const { data, error } = await q;
     if (!error) return data || [];
     console.log(`  ⚠️  fetch failed (${a}/5): ${error.message}`);
@@ -85,8 +106,8 @@ async function run() {
   console.log(`\n🧬 BACKFILL elig_signals (v${SIGNALS_VERSION}) — concurrency ${CONCURRENCY}${ALL ? " — ALL rows" : ""}\n`);
   const { count: total } = await supabase.from("jobs").select("*", { count: "exact", head: true });
   const { count: missing } = await supabase.from("jobs")
-    .select("*", { count: "exact", head: true }).is("elig_signals", null);
-  console.log(`   total rows: ${total} · missing signals: ${missing}\n`);
+    .select("*", { count: "exact", head: true }).or(STALE_OR_MISSING);
+  console.log(`   total rows: ${total} · needing backfill (missing or stale): ${missing}\n`);
 
   let done = 0, failed = 0;
   const started = Date.now();
@@ -118,10 +139,10 @@ async function run() {
   }
 
   const { count: stillMissing } = await supabase.from("jobs")
-    .select("*", { count: "exact", head: true }).is("elig_signals", null);
+    .select("*", { count: "exact", head: true }).or(STALE_OR_MISSING);
   const covered = total > 0 ? (1 - (stillMissing || 0) / total) * 100 : 0;
   console.log(`\n✅ written ${done} · failed ${failed}`);
-  console.log(`   coverage: ${covered.toFixed(1)}% (${stillMissing} rows still missing)`);
+  console.log(`   coverage: ${covered.toFixed(1)}% (${stillMissing} rows still pending)`);
   console.log(covered >= 95
     ? `   search will switch to the lean payload within 10 minutes (no redeploy needed).\n`
     : `   below the 95% threshold — search stays on the full-description path. Re-run to finish.\n`);
