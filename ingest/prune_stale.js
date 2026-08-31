@@ -42,20 +42,33 @@ const DAYS = i > -1 && args[i + 1] ? parseInt(args[i + 1], 10) || 28 : 28;
 const cutoff = new Date(Date.now() - DAYS * 864e5).toISOString();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// THE STALENESS FILTER — every query below goes through this, so the rule
+// is stated in exactly one place.
+//
+// source='employer' is excluded because those rows are OUR OWN postings
+// (migration 015 §2), and nothing refreshes their last_seen_at: there is no
+// feed to re-confirm them from. Without this they would be deleted 28 days
+// after publishing — silently removing the one category of listing on this
+// table we know for certain is real, while its job_postings row went on
+// claiming to be open. A posting leaves search when its owner pauses or
+// closes it, which deletes the mirror deliberately; see the status handler
+// in api/employer.js.
+const stale = (q) => q.lt("last_seen_at", cutoff).neq("source", "employer");
+
 async function run() {
   console.log(`\n🧹 PRUNE STALE${dryRun ? " (DRY RUN)" : ""} — not re-seen in ${DAYS} days (before ${cutoff.slice(0, 10)})`);
 
   const { count: total } = await supabase.from("jobs").select("*", { count: "exact", head: true });
-  const { count: doomed } = await supabase.from("jobs")
-    .select("*", { count: "exact", head: true }).lt("last_seen_at", cutoff);
+  const { count: doomed } = await stale(
+    supabase.from("jobs").select("*", { count: "exact", head: true }));
   console.log(`   total rows: ${total}`);
   console.log(`   to delete:  ${doomed}  (${((doomed / total) * 100).toFixed(1)}%)`);
 
   // Show what's going, oldest first — a sanity check that we're not about to
   // delete something that should still be live.
-  const { data: sample } = await supabase.from("jobs")
-    .select("title, company, source, last_seen_at")
-    .lt("last_seen_at", cutoff).order("last_seen_at", { ascending: true }).limit(12);
+  const { data: sample } = await stale(
+    supabase.from("jobs").select("title, company, source, last_seen_at"))
+    .order("last_seen_at", { ascending: true }).limit(12);
   console.log(`\n   oldest examples:`);
   for (const r of sample || []) {
     console.log(`     ${(r.last_seen_at || "").slice(0, 10)}  ${(r.title || "").slice(0, 44).padEnd(46)} @ ${(r.company || "").slice(0, 22)} [${r.source}]`);
@@ -63,8 +76,8 @@ async function run() {
 
   // Which sources lose the most — a source losing everything usually means
   // that connector stopped running, not that its jobs all closed.
-  const { data: srcRows } = await supabase.from("jobs")
-    .select("source").lt("last_seen_at", cutoff).limit(10000);
+  const { data: srcRows } = await stale(
+    supabase.from("jobs").select("source")).limit(10000);
   const bySrc = {};
   for (const r of srcRows || []) bySrc[r.source] = (bySrc[r.source] || 0) + 1;
   console.log(`\n   by source:`);
@@ -76,8 +89,8 @@ async function run() {
   // Delete in id batches so one huge statement can't time out mid-flight.
   let deleted = 0, failed = 0;
   while (true) {
-    const { data: batch, error } = await supabase.from("jobs")
-      .select("id").lt("last_seen_at", cutoff).limit(500);
+    const { data: batch, error } = await stale(
+      supabase.from("jobs").select("id")).limit(500);
     if (error) { console.log(`   ❌ fetch: ${error.message}`); break; }
     if (!batch || batch.length === 0) break;
     const ids = batch.map((r) => r.id);

@@ -13,6 +13,7 @@ import Pipeline from "./views/Pipeline";
 import Studio from "./views/Studio";
 import You from "./views/You";
 import ReturnNudge from "./ReturnNudge";
+import EmployerInbox from "./EmployerInbox";
 
 const NAV = [
   { key: "copilot", label: "Copilot", icon: <path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.6 8.6 0 0 1-3.8-.9L3 20l1-4.9A8.4 8.4 0 1 1 21 11.5Z" /> },
@@ -135,6 +136,10 @@ export default function App() {
           employer's site onto any tab, and the question belongs to the
           session rather than to a screen. */}
       {user && <ReturnNudge user={user} showToast={showToast} />}
+      {/* Same reasoning as ReturnNudge: an intro request or a rejection is
+          addressed to the person, not to a screen, so it belongs to the
+          session and follows them across tabs. */}
+      {user && <EmployerInbox user={user} showToast={showToast} />}
       <div className={`toast ${toast ? "show" : ""}`} role="status">
         <span className="t-dot" />{toast}
       </div>

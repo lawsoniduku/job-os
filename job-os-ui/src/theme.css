@@ -948,3 +948,64 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .strength-fill, .studio-card, .switch, .switch .knob { transition: none; }
 }
+
+/* ============================================================
+   EMPLOYER INBOX — intro requests and feedback, candidate side.
+
+   Top-right rather than bottom-centre because ReturnNudge already owns
+   the bottom of the screen, and these two must never fight: the nudge
+   asks about a job you just left, this tells you an employer answered.
+   Seeing both at once is a normal Tuesday, not an edge case.
+   ============================================================ */
+.inbox-stack {
+  position: fixed; top: 18px; right: 18px; z-index: 96;
+  display: flex; flex-direction: column; gap: 10px;
+  width: min(370px, calc(100vw - 32px));
+  max-height: calc(100vh - 36px); overflow-y: auto;
+}
+.inbox-card {
+  background: var(--raised); border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--r); padding: 15px 17px;
+  box-shadow: var(--shadow); animation: rise 0.28s ease both;
+}
+.inbox-card.intro { border-left-color: var(--accent); }
+.inbox-card.fb-rejected { border-left-color: var(--conditional); }
+.inbox-card.fb-advanced, .inbox-card.fb-hired { border-left-color: var(--eligible); }
+
+.inbox-eyebrow {
+  font-size: 10.5px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--text-3); margin-bottom: 7px;
+}
+.inbox-body { font-size: 13.5px; line-height: 1.55; color: var(--text); margin: 0; }
+.inbox-body b { font-weight: 600; }
+.inbox-note {
+  font-size: 12.5px; line-height: 1.6; color: var(--text-2);
+  margin: 9px 0 0; padding: 9px 11px;
+  background: var(--canvas); border-radius: var(--r-sm);
+}
+.inbox-fine { font-size: 11.5px; line-height: 1.55; color: var(--text-3); margin: 9px 0 0; }
+.inbox-actions { display: flex; gap: 7px; margin-top: 13px; flex-wrap: wrap; }
+
+@media (max-width: 600px) {
+  .inbox-stack { top: 12px; right: 12px; left: 12px; width: auto; }
+}
+
+/* Secondary line under the employer waitlist heading, now that posting a
+   role is the primary action and the form is the assisted path. */
+.lp-emp-note { font-size: 12.5px; color: var(--text-3); line-height: 1.55; margin: -4px 0 4px; }
+.lp-emp-copy .lp-btn-primary { margin-top: 18px; display: inline-flex; text-decoration: none; }
+
+/* The employer's answer, kept on the Pipeline card after the notification
+   in EmployerInbox has been dismissed. Muted rather than loud: this is a
+   record you can go back to, not something demanding attention twice. */
+.pc-answer {
+  margin-top: 9px; padding: 8px 10px; border-radius: var(--r-sm);
+  background: var(--canvas); border-left: 3px solid var(--border);
+  display: flex; flex-direction: column; gap: 3px;
+}
+.pc-answer.a-rejected { border-left-color: var(--conditional); }
+.pc-answer.a-advanced, .pc-answer.a-hired { border-left-color: var(--eligible); }
+.pc-answer-k { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-3); }
+.pc-answer-v { font-size: 12px; color: var(--text-2); line-height: 1.45; }
+.pc-answer-note { font-size: 11.5px; color: var(--text-3); line-height: 1.5; font-style: italic; }

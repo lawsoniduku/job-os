@@ -1,0 +1,346 @@
+/* ============================================================
+   employer.css — the hiring console.
+
+   Uses the same tokens as theme.css (--canvas, --surface, --border,
+   --accent, --text-*) so light/dark and the palette come for free. Only
+   the layout and the components that don't exist on the candidate side
+   are defined here.
+   ============================================================ */
+
+.emp-app {
+  display: grid;
+  grid-template-columns: 264px 1fr;
+  min-height: 100vh;
+  background: var(--canvas);
+  color: var(--text);
+  font-family: var(--sans);
+}
+
+/* ── rail ───────────────────────────────────────────────── */
+.emp-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px 16px;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.emp-wordmark {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--text);
+  text-decoration: none;
+}
+.emp-wordmark .dot {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: var(--accent); flex: none;
+}
+.emp-badge {
+  font-family: var(--sans);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent);
+  background: var(--accent-dim);
+  padding: 2px 7px;
+  border-radius: 20px;
+}
+
+.emp-org { padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--canvas); }
+.emp-org-name { font-weight: 600; font-size: 13px; }
+.emp-org-sub { font-size: 11px; color: var(--text-3); margin-top: 2px; }
+.emp-verified { color: var(--eligible); font-weight: 600; }
+
+.emp-new { width: 100%; }
+
+.emp-postings { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; margin: 0 -4px; padding: 0 4px; }
+.emp-rail-empty { font-size: 12px; color: var(--text-3); line-height: 1.5; padding: 6px 2px; }
+
+.emp-posting-item {
+  text-align: left;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+  padding: 9px 11px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.emp-posting-item:hover { background: var(--canvas); }
+.emp-posting-item.active { background: var(--accent-dim); border-color: var(--accent); }
+.emp-pi-title { font-size: 13px; font-weight: 500; color: var(--text); line-height: 1.3; }
+.emp-pi-meta { display: flex; flex-wrap: wrap; gap: 8px; font-size: 11px; color: var(--text-3); margin-top: 4px; }
+.emp-awaiting { color: var(--conditional); font-weight: 600; }
+
+.emp-status {
+  text-transform: uppercase;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--border-soft);
+  color: var(--text-2);
+}
+.emp-status.s-open { background: var(--eligible-dim); color: var(--eligible); }
+.emp-status.s-draft { background: var(--border-soft); color: var(--text-3); }
+.emp-status.s-paused { background: var(--conditional-dim); color: var(--conditional); }
+.emp-status.s-closed { background: var(--border-soft); color: var(--text-3); }
+
+.emp-rail-foot { border-top: 1px solid var(--border); padding-top: 12px; }
+.emp-user { font-size: 11px; color: var(--text-3); margin-bottom: 8px; overflow: hidden; text-overflow: ellipsis; }
+
+/* ── main ───────────────────────────────────────────────── */
+.emp-main { padding: 28px 32px 60px; max-width: 980px; }
+
+.emp-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+.emp-head h1 { font-family: var(--display); font-size: 25px; font-weight: 700; margin: 0; letter-spacing: -0.02em; }
+.emp-head-meta { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; font-size: 12px; color: var(--text-3); margin-top: 7px; }
+.emp-head-actions { display: flex; gap: 8px; flex: none; }
+
+.emp-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 18px; }
+.emp-tabs button {
+  border: none; background: transparent; cursor: pointer;
+  padding: 9px 14px; font-size: 13px; font-weight: 500; color: var(--text-3);
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.emp-tabs button:hover { color: var(--text); }
+.emp-tabs button.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+
+.emp-loading, .emp-error { padding: 34px 0; color: var(--text-3); font-size: 13px; }
+.emp-error { color: var(--ineligible); display: flex; gap: 12px; align-items: center; }
+
+.emp-empty { padding: 44px 0; max-width: 560px; }
+.emp-empty h2 { font-family: var(--display); font-size: 19px; margin: 0 0 9px; font-weight: 650; }
+.emp-empty p { color: var(--text-2); line-height: 1.62; font-size: 13.5px; margin: 0 0 14px; }
+.emp-why-empty { color: var(--text-2); font-size: 13px; line-height: 1.62; padding-left: 18px; margin: 0; }
+.emp-why-empty li { margin-bottom: 7px; }
+
+/* ── queue ──────────────────────────────────────────────── */
+.emp-queue-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 14px; flex-wrap: wrap; }
+.emp-filters { display: flex; gap: 6px; flex-wrap: wrap; }
+.emp-queue-hint { font-size: 11px; color: var(--text-3); display: flex; align-items: center; gap: 4px; }
+.emp-queue-hint kbd {
+  font-family: var(--mono); font-size: 10px;
+  border: 1px solid var(--border); border-bottom-width: 2px;
+  border-radius: 4px; padding: 1px 5px; color: var(--text-2); background: var(--surface);
+}
+
+.emp-nudge {
+  background: var(--conditional-dim);
+  border: 1px solid var(--conditional);
+  color: var(--conditional);
+  border-radius: var(--r-sm);
+  padding: 9px 13px;
+  font-size: 12.5px;
+  margin-bottom: 14px;
+}
+
+.emp-bulk {
+  position: sticky; top: 0; z-index: 10;
+  display: flex; align-items: center; gap: 9px;
+  background: var(--raised); border: 1px solid var(--accent);
+  border-radius: var(--r-sm); padding: 9px 13px; margin-bottom: 12px;
+  font-size: 12.5px; box-shadow: var(--shadow);
+}
+.emp-bulk span:first-child { font-weight: 600; margin-right: auto; }
+
+.emp-list { display: flex; flex-direction: column; gap: 10px; }
+
+.emp-card {
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--surface);
+  padding: 14px 16px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.emp-card.focused { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+.emp-card.selected { background: var(--accent-dim); }
+
+.emp-card-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.emp-card-spacer { flex: 1; }
+.emp-ref { font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--text); }
+
+.emp-score {
+  font-family: var(--mono); font-size: 12px; font-weight: 700;
+  padding: 2px 8px; border-radius: 20px;
+}
+.emp-score.hi { background: var(--eligible-dim); color: var(--eligible); }
+.emp-score.mid { background: var(--conditional-dim); color: var(--conditional); }
+.emp-score.lo { background: var(--border-soft); color: var(--text-3); }
+.emp-score.none { background: transparent; color: var(--text-3); border: 1px dashed var(--border); }
+
+.emp-stage { font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-3); }
+.emp-stage.st-rejected { color: var(--ineligible); }
+.emp-stage.st-shortlisted, .emp-stage.st-hired { color: var(--eligible); }
+
+.emp-reason { font-size: 13px; color: var(--text-2); line-height: 1.55; margin: 9px 0 0; }
+
+.emp-facts { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 11px; }
+.emp-fact { display: flex; flex-direction: column; gap: 1px; }
+.emp-fact-k { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-3); }
+.emp-fact-v { font-size: 12.5px; color: var(--text); font-weight: 500; }
+.emp-fact-v em { font-style: normal; color: var(--text-3); font-weight: 400; font-size: 11px; }
+
+.emp-skills { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin-top: 11px; }
+.emp-skills-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-3); margin-right: 3px; }
+.emp-more { font-size: 11px; color: var(--text-3); }
+
+.emp-sent { margin-top: 11px; font-size: 12px; padding: 7px 11px; border-radius: var(--r-sm); background: var(--canvas); color: var(--text-2); }
+.emp-sent.d-rejected { border-left: 3px solid var(--ineligible); }
+.emp-sent.d-advanced, .emp-sent.d-hired { border-left: 3px solid var(--eligible); }
+.emp-seen { color: var(--text-3); margin-left: 6px; }
+
+.emp-cv-toggle { background: none; border: none; color: var(--accent); font-size: 12px; cursor: pointer; padding: 9px 0 0; font-weight: 500; }
+.emp-cv {
+  margin-top: 10px; padding: 13px; background: var(--canvas);
+  border: 1px solid var(--border); border-radius: var(--r-sm);
+  font-family: var(--mono); font-size: 11.5px; line-height: 1.62;
+  white-space: pre-wrap; max-height: 420px; overflow-y: auto; color: var(--text-2);
+}
+
+.emp-chip {
+  font-size: 11px; padding: 2px 9px; border-radius: 20px;
+  background: var(--border-soft); color: var(--text-2);
+}
+.emp-chip.ok { background: var(--eligible-dim); color: var(--eligible); font-weight: 600; }
+
+/* ── editor / forms ─────────────────────────────────────── */
+.emp-editor { max-width: 720px; }
+.emp-form { display: flex; flex-direction: column; gap: 15px; }
+.emp-row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; }
+.emp-row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 13px; }
+
+.emp-paste {
+  border: 1px dashed var(--border); border-radius: var(--r);
+  padding: 16px; margin-bottom: 22px; background: var(--surface);
+}
+.emp-paste h3 { margin: 0 0 5px; font-size: 14px; font-family: var(--display); }
+.emp-paste p { margin: 0 0 11px; font-size: 12.5px; color: var(--text-3); }
+.emp-paste textarea { width: 100%; }
+.emp-paste-actions { display: flex; gap: 8px; margin-top: 10px; }
+
+.emp-elig { border-left: 3px solid var(--accent); padding-left: 13px; }
+.emp-form-actions { display: flex; gap: 9px; justify-content: flex-end; padding-top: 6px; }
+
+.emp-app input[type="text"], .emp-app input[type="number"], .emp-app input:not([type]),
+.emp-app textarea, .emp-app select,
+.emp-gate input, .emp-gate textarea, .emp-gate select {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--canvas);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 13px;
+  padding: 9px 11px;
+}
+.emp-app textarea, .emp-gate textarea { resize: vertical; line-height: 1.6; }
+.emp-app input:focus, .emp-app textarea:focus, .emp-app select:focus,
+.emp-gate input:focus, .emp-gate textarea:focus {
+  outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim);
+}
+.field-label em { font-style: normal; color: var(--text-3); font-weight: 400; text-transform: none; letter-spacing: 0; }
+
+/* ── modal ──────────────────────────────────────────────── */
+.emp-modal-backdrop {
+  position: fixed; inset: 0; z-index: 100;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+}
+.emp-modal {
+  background: var(--raised); border: 1px solid var(--border);
+  border-radius: var(--r); padding: 22px; width: min(520px, 100%);
+  box-shadow: var(--shadow); max-height: 90vh; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 13px;
+}
+.emp-modal h3 { margin: 0; font-family: var(--display); font-size: 17px; font-weight: 650; }
+.emp-modal-sub { margin: 0; font-size: 12.5px; color: var(--text-2); line-height: 1.6; }
+.emp-modal-actions { display: flex; gap: 9px; justify-content: flex-end; }
+
+.emp-reasons { display: flex; flex-wrap: wrap; gap: 7px; }
+.emp-reason-opt {
+  border: 1px solid var(--border); border-radius: 20px;
+  background: transparent; color: var(--text-2);
+  padding: 6px 13px; font-size: 12.5px; cursor: pointer; transition: all 0.15s ease;
+}
+.emp-reason-opt:hover { border-color: var(--accent); color: var(--text); }
+.emp-reason-opt.active { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); font-weight: 600; }
+.emp-reason-preview {
+  font-size: 12.5px; color: var(--text-2); background: var(--canvas);
+  border-left: 3px solid var(--accent); padding: 9px 12px; border-radius: var(--r-sm);
+}
+
+.btn.danger { border-color: var(--ineligible); color: var(--ineligible); }
+.btn.danger:hover { background: var(--ineligible); color: #fff; }
+.btn.ghost { border-color: transparent; }
+.btn.lg { padding: 10px 20px; font-size: 13.5px; }
+
+/* ── gate / setup ───────────────────────────────────────── */
+.emp-gate {
+  min-height: 100vh; display: flex; align-items: center; justify-content: center;
+  background: var(--canvas); color: var(--text); font-family: var(--sans); padding: 24px;
+}
+.emp-gate-card {
+  width: min(480px, 100%);
+  display: flex; flex-direction: column; gap: 14px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r); padding: 30px;
+}
+.emp-gate-card h1 { font-family: var(--display); font-size: 24px; font-weight: 700; margin: 4px 0 0; letter-spacing: -0.02em; line-height: 1.25; }
+.emp-gate-card > p { margin: 0; color: var(--text-2); font-size: 13.5px; line-height: 1.62; }
+.emp-alt { font-size: 12.5px; color: var(--text-3); text-decoration: none; text-align: center; }
+.emp-alt:hover { color: var(--accent); }
+
+/* ── apply page ─────────────────────────────────────────── */
+.apply-page {
+  min-height: 100vh; background: var(--canvas); color: var(--text);
+  font-family: var(--sans); padding: 24px; display: flex;
+  flex-direction: column; align-items: center; gap: 26px;
+}
+.apply-role, .apply-done {
+  width: min(660px, 100%);
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r); padding: 30px;
+}
+.apply-org { display: flex; align-items: center; gap: 9px; font-size: 13px; font-weight: 600; color: var(--text-2); }
+.apply-role h1 { font-family: var(--display); font-size: 26px; font-weight: 700; margin: 9px 0 0; letter-spacing: -0.02em; }
+.apply-meta { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12.5px; color: var(--text-3); margin-top: 9px; }
+.apply-elig {
+  margin-top: 18px; padding: 12px 14px; border-radius: var(--r-sm);
+  background: var(--canvas); border-left: 3px solid var(--accent);
+  font-size: 12.5px; line-height: 1.6; color: var(--text-2);
+}
+.apply-elig-ok { color: var(--eligible); font-weight: 600; }
+.apply-elig-warn { color: var(--conditional); font-weight: 600; }
+.apply-desc { margin-top: 20px; font-size: 13.5px; line-height: 1.7; color: var(--text-2); white-space: pre-wrap; }
+.apply-actions { margin-top: 26px; padding-top: 20px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 9px; align-items: flex-start; }
+
+.apply-done { text-align: center; }
+.apply-tick {
+  width: 46px; height: 46px; border-radius: 50%; margin: 0 auto 14px;
+  background: var(--eligible-dim); color: var(--eligible);
+  display: flex; align-items: center; justify-content: center; font-size: 22px; font-weight: 700;
+}
+.apply-done h1 { font-family: var(--display); font-size: 22px; margin: 0 0 10px; }
+.apply-done p { color: var(--text-2); font-size: 13.5px; line-height: 1.65; margin: 0 0 20px; }
+
+/* ── narrow ─────────────────────────────────────────────── */
+@media (max-width: 860px) {
+  .emp-app { grid-template-columns: 1fr; }
+  .emp-rail { position: static; height: auto; border-right: none; border-bottom: 1px solid var(--border); }
+  .emp-postings { max-height: 220px; }
+  .emp-main { padding: 20px 16px 50px; }
+  .emp-row-2, .emp-row-3 { grid-template-columns: 1fr; }
+  .emp-queue-hint { display: none; }
+}

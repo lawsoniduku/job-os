@@ -216,10 +216,18 @@ function EmployerWaitlist() {
 
   return (
     <div className="lp-emp-inner">
+      {/* "Coming soon" was true until the console shipped. Leaving it up
+          after the fact would be the one kind of copy this product can't
+          afford: a claim about itself that isn't so. */}
       <div className="lp-emp-copy">
         <div className="lp-section-label">For employers</div>
-        <h2>Hire pre-verified African talent.</h2>
-        <p className="lp-sub">Describe who you need in plain English. Get candidates already checked for your role. Coming soon — join the waitlist.</p>
+        <h2>Hire people who can actually take the job.</h2>
+        <p className="lp-sub">
+          Post a role and tell us which countries you can legally employ in. Applicants
+          arrive already filtered to that, scored against your description, and every
+          one of them hears back from you in a click.
+        </p>
+        <a className="lp-btn-primary" href="/employer">Post a role — free</a>
       </div>
       <div className="lp-emp-form">
         {done ? (
@@ -230,13 +238,14 @@ function EmployerWaitlist() {
           </div>
         ) : (
           <>
-            <h3>Join the waitlist</h3>
+            <h3>Or have us set it up with you</h3>
+            <p className="lp-emp-note">Leave your details and we'll walk you through your first posting.</p>
             <input className="lp-field" type="email" placeholder="Work email" value={email} onChange={(e) => setEmail(e.target.value)} />
             <input className="lp-field" placeholder="Company (optional)" value={company} onChange={(e) => setCompany(e.target.value)} />
             <input className="lp-field" placeholder="Roles you're hiring (optional)" value={roles} onChange={(e) => setRoles(e.target.value)} />
             {err && <p className="lp-emp-err">{err}</p>}
             <button className="lp-btn-primary" style={{ width: "100%", justifyContent: "center" }} onClick={submit} disabled={busy}>
-              {busy ? "Joining…" : "Request early access"}
+              {busy ? "Sending…" : "Have someone call me"}
             </button>
           </>
         )}

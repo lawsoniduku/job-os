@@ -8,7 +8,9 @@
     "dev": "node --watch api/server.js",
     "ingest": "node ingest/pipeline.js",
     "enrich": "node enrich.js",
-    "pipeline:full": "node ingest/pipeline.js && node enrich.js"
+    "pipeline:full": "node ingest/pipeline.js && node enrich.js",
+    "verify:employer": "node --env-file=.env ingest/verify_employer.js",
+    "test:employer": "node --env-file=.env ingest/test_employer_loop.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.108.0",

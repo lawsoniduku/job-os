@@ -33,6 +33,8 @@ import {
   SIGNALS_VERSION,
 } from "./roleIntelligence.js";
 import { generateJSON, generateText, isLLMHealthy, llmConfig, llmState } from "../lib/llm.js";
+import { makeRequireAuth, makeRequireEmployer, makeOptionalAuth } from "./auth.js";
+import { employerRouter } from "./employer.js";
 
 // Friendly message for when a structured call comes back empty.
 function llmFailMessage(fallback = "The model returned an unreadable response. Please try again.") {
@@ -448,10 +450,17 @@ Return ONLY JSON of shape: {"rankings":[{"i":0,"score":87,"reason":"..."}]}`;
 // typing, it just happens when they upload.
 //
 // THIS ENDPOINT WRITES NOTHING. It returns the extraction and the browser
-// persists it under the user's own RLS policy. The server holds the ANON key
-// (.env.example), so a write here would either be blocked by RLS or — if it
-// trusted a user_id from the body — would let any caller overwrite any
-// profile. See migration 013 §5.
+// persists it under the user's own RLS policy.
+//
+// CORRECTION (015). This comment used to justify that with "the server holds
+// the ANON key (.env.example), so a write here would be blocked by RLS".
+// That is true of .env.example and FALSE of the deployed .env, whose
+// SUPABASE_KEY decodes to role=service_role. There is no RLS backstop on
+// this process. Writing nothing is still the right call, but the reason is
+// now the stronger one: this route is unauthenticated, so a user_id in the
+// body would be an unverified claim, and with service_role behind it that
+// claim would let any caller overwrite any profile. See migration 013 §5,
+// and api/auth.js for the rule every route added after this one follows.
 //
 // Everything returned is a CLAIM PARSED FROM A DOCUMENT, never a verified
 // fact. The UI shows it back for confirmation before it counts.
@@ -1205,6 +1214,24 @@ app.get("/digest/unsubscribe", async (req, res) => {
     res.status(500).send("Could not unsubscribe right now. Try again shortly.");
   }
 });
+
+// ============================================================
+// EMPLOYER SIDE — post · screen · feedback · match
+// ============================================================
+// Mounted last so the routes above keep their existing paths, and kept in
+// its own module because it is the first part of this API that has a
+// concept of "who is asking". Everything it exposes is authenticated; see
+// api/auth.js for why that could not be skipped.
+app.use(
+  employerRouter({
+    supabase,
+    requireAuth: makeRequireAuth(supabase),
+    requireEmployer: makeRequireEmployer(supabase),
+    optionalAuth: makeOptionalAuth(supabase),
+    searchLimit,
+    llmLimit,
+  })
+);
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
