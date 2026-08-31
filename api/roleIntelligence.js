@@ -1106,8 +1106,66 @@ const WORLDWIDE_DESC_STRONG = [
 ];
 
 const EMEA_POSITIVE = ["emea", "europe middle east africa", "europe, middle east, and africa", "europe, middle east & africa"];
-const AMBIGUOUS_REMOTE = ["remote", "fully remote", "100% remote", "remote first", "remote-first", "work from home", "wfh", "distributed team", "async"];
-const ONSITE_SIGNALS = ["on-site", "onsite", "on site", "in-office", "in office", "hybrid", "must relocate", "relocation required", "in-person"];
+// ── PHYSICAL-PRESENCE REQUIREMENT ────────────────────────────────────────
+// A role that needs you in a building is not open to a remote candidate on
+// another continent, however the location field is tagged. Postings state
+// this in the BODY constantly ("hybrid — 2 days/week in the office") while
+// the location field still says "Remote", which is exactly how a Taiwan
+// hybrid role reached a Nigerian user's screen as "region unconfirmed".
+//
+// PRECISION OVER RECALL. The earlier constant here listed bare "hybrid",
+// "onsite" and "in-person" and was never wired into anything — which was
+// lucky, because bare terms fire on "hybrid cloud architecture", "on-site
+// data centre" and "in-person interview", none of which say where you live.
+// Every phrase below names the WORKING ARRANGEMENT, not a technology, a
+// facility, or a step in the hiring process.
+const ONSITE_REQUIREMENT = [
+  // working arrangement stated outright
+  "hybrid work", "hybrid working", "hybrid role", "hybrid position", "hybrid schedule",
+  "hybrid model", "hybrid setup", "hybrid arrangement", "hybrid basis",
+  "on-site position", "onsite position", "on-site role", "onsite role",
+  "on-site presence", "onsite presence", "in-office presence",
+  "this is an on-site", "this is an onsite", "must work on-site", "must work onsite",
+  // office attendance, the most common phrasing by far
+  "days in the office", "days a week in the office", "days per week in the office",
+  "days in office", "days a week in office", "days per week in office",
+  "days a week onsite", "days per week onsite", "days a week on-site", "days per week on-site",
+  "work from our office", "based out of our office", "report to the office",
+  "commute to the office", "in the office each week", "in the office every week",
+  // relocation
+  "must relocate", "relocation required", "relocation is required",
+  "willing to relocate", "required to relocate",
+];
+
+// Negations that INVERT a phrase above. "No relocation required" contains
+// "relocation required", and "this is not a hybrid role" contains "hybrid
+// role" — word-boundary matching alone would read both backwards and exclude
+// the very roles that are saying they are fully remote.
+const ONSITE_NEGATORS = [
+  "no relocation", "without relocation", "relocation not required",
+  "relocation is not required", "no need to relocate", "not required to relocate",
+  "not a hybrid", "no hybrid", "not hybrid", "rather than hybrid", "instead of hybrid",
+  "no on-site", "no onsite", "not an on-site", "not an onsite",
+  "no office", "without an office", "no physical office", "not required to be in the office",
+];
+
+/**
+ * True when the text requires physical presence AND does not immediately
+ * negate it. Scans a window around each hit rather than the whole document,
+ * because a posting can legitimately say "no relocation required" in the
+ * benefits and "hybrid work" about a different, co-located team.
+ */
+function requiresOnsite(text = "") {
+  for (const phrase of ONSITE_REQUIREMENT) {
+    const re = phraseRe(phrase);
+    const m = re.exec(text);
+    if (!m) continue;
+    const window = text.slice(Math.max(0, m.index - 45), m.index + phrase.length + 25);
+    if (ONSITE_NEGATORS.some((n) => window.includes(n))) continue;
+    return phrase;
+  }
+  return null;
+}
 
 // Concrete non-African geographies. If one of these appears in the LOCATION field
 // of a job and the text gives no worldwide/Africa signal, the role is almost
@@ -1132,6 +1190,32 @@ const FOREIGN_GEO = [
   "bulgaria", "romania", "serbia", "ukraine", "greece", "turkey", "hungary",
   "czech", "austria", "belgium", "denmark", "norway", "finland", "new zealand",
   "argentina", "colombia", "chile", "peru", "pakistan", "bangladesh", "thailand",
+  // Cities that reached users as "region unconfirmed" because the list held
+  // the country but not the city an employer actually writes in a title
+  // ("C# Developer - Tainan"). Deliberately major-city only: every entry here
+  // excludes a role outright, so a name that doubles as a common word or a
+  // surname would do real damage. Own-country cities are matched BEFORE this
+  // list (see 1d), so adding one never hides a role from a local candidate.
+  "tainan", "taipei", "kaohsiung", "hsinchu", "osaka", "kyoto", "yokohama",
+  "busan", "incheon", "ho chi minh", "hanoi", "bangkok", "kuala lumpur",
+  "jakarta", "manila", "cebu", "karachi", "lahore", "islamabad", "dhaka",
+  "colombo", "kathmandu", "ahmedabad", "noida", "gurgaon", "gurugram", "chennai",
+  "kolkata", "tel aviv", "jerusalem", "haifa", "riyadh", "jeddah", "doha",
+  "kuwait city", "manama", "muscat", "amman", "beirut", "istanbul", "ankara",
+  "krakow", "kraków", "wroclaw", "wrocław", "gdansk", "gdańsk", "poznan",
+  "prague", "brno", "budapest", "bucharest", "cluj", "sofia", "belgrade",
+  "zagreb", "ljubljana", "bratislava", "vilnius", "riga", "tallinn", "kyiv",
+  "kiev", "helsinki", "oslo", "copenhagen", "gothenburg", "malmo", "zurich",
+  "geneva", "vienna", "brussels", "antwerp", "rotterdam", "utrecht", "eindhoven",
+  "hamburg", "frankfurt", "cologne", "stuttgart", "dusseldorf", "düsseldorf",
+  "lyon", "marseille", "toulouse", "nice", "bordeaux", "milan", "turin",
+  "naples", "florence", "bologna", "valencia", "seville", "malaga", "porto",
+  "leeds", "liverpool", "sheffield", "newcastle", "cardiff", "belfast", "cork",
+  "galway", "calgary", "edmonton", "winnipeg", "quebec city", "halifax",
+  "perth", "adelaide", "canberra", "auckland", "wellington", "christchurch",
+  "sao paulo", "são paulo", "rio de janeiro", "brasilia", "belo horizonte",
+  "buenos aires", "santiago", "bogota", "bogotá", "medellin", "medellín",
+  "lima", "guadalajara", "monterrey", "montevideo", "san jose costa rica",
   // US states (locations like "Portland, Oregon" / "Pittsburgh, PA")
   "alabama", "alaska", "arizona", "arkansas", "california", "colorado", "connecticut",
   "delaware", "florida", "georgia", "hawaii", "idaho", "illinois", "indiana", "iowa",
@@ -1434,7 +1518,11 @@ function genericEligibility(job, title, desc) {
 // Bump SIGNALS_VERSION whenever the extraction logic changes — a stored blob
 // from an older version is ignored and recomputed from the description, so a
 // logic change can never be silently served from stale precomputed data.
-export const SIGNALS_VERSION = 1;
+// v2 adds onsiteRequired (physical-presence requirement stated in the body).
+// Stored v1 blobs are ignored until ingest/backfill_signals.js re-runs — the
+// lean payload switches itself off in the meantime, so search stays correct
+// and merely gets slower. See .github/workflows/backfill-signals.yml.
+export const SIGNALS_VERSION = 2;
 
 const NON_EN_DESC = [
   "estamos","nossa","nosso","você","trabalho","empresa","vaga","vagas","sobre",
@@ -1499,6 +1587,9 @@ export function extractEligibilitySignals(job = {}) {
     worldwideDesc: hasAny(desc, WORLDWIDE_DESC_STRONG),
     descMentionsForeign: hasAny(desc, FOREIGN_COUNTRIES),
     insuranceLicensing: hasAny(desc, INSURANCE_LICENSING_SIGNAL),
+    // The phrase itself, not a boolean — the verdict quotes it back so the
+    // user can see exactly what we read and judge whether we read it right.
+    onsiteRequired: requiresOnsite(`${title} ${desc}`),
     jurisdiction: lock ? { country: lock.country, marker: lock.marker } : null,
     tzFriction: timezoneFriction(title, desc) === "warn",
     // genericEligibility (guest path) needs these two as well.
@@ -1587,6 +1678,32 @@ export function checkEligibility(job, country) {
     return verdict;
   };
 
+  /**
+   * Physical-presence requirement found in the body, applied to verdicts that
+   * are otherwise positive.
+   *
+   * DOWNGRADES RATHER THAN EXCLUDES here, deliberately. When the LOCATION
+   * field explicitly says worldwide (or names the user's own country), the
+   * posting is making two contradictory claims and we cannot know which is
+   * stale — aggregators generate the location tag, humans write the body. So
+   * we surface the conflict and quote the phrase instead of silently hiding
+   * the role. Same precedent as insuranceLicensing below.
+   *
+   * The bare-"Remote" path is different and DOES exclude: there the body is
+   * the only evidence there is, and it says be in an office.
+   */
+  const softenForOnsite = (verdict) => {
+    if (!sig.onsiteRequired || !verdict.eligible) return verdict;
+    if (verdict.confidence === "certain" || verdict.confidence === "likely") {
+      return E("possible", `${verdict.reason} — but the posting asks for physical presence ("${sig.onsiteRequired}"); confirm it can be done fully remotely`);
+    }
+    return verdict;
+  };
+
+  // Both adjustments, in the order they read: timezone first (it's about
+  // hours), then presence (it's about place).
+  const soften = (verdict) => softenForOnsite(softenForTimezone(verdict));
+
   // 0. Verified US-residency-gated recruiting funnel — see comment at
   // US_RESIDENCY_GATED_COMPANIES above. The gate lives in the application
   // form, not this text, so no phrase check below would ever catch it.
@@ -1607,7 +1724,19 @@ export function checkEligibility(job, country) {
   if ((loc.match(/[^\x00-\x7F]/g) || []).length > 3)
     return E("excluded", "Region-specific (non-Latin location)", false);
 
-  // 1d. Explicit restriction in TITLE or BODY overrides any generic "Anywhere" tag.
+  // 1d. A place named in the TITLE overrides any generic "Anywhere" tag — but
+  // WHOSE place it is decides the direction.
+  //
+  // This check used to be country-blind: any recognised geography in the title
+  // excluded the row. So an Indian user was shown no "Data Analyst - Mumbai",
+  // and a British user no "- London" — their own capital, hidden from them by
+  // the eligibility engine. A title naming where the user actually lives is
+  // the STRONGEST positive signal available, not a restriction, so it is
+  // tested first and returns certain.
+  const ownGeo = country === "africa" ? AFRICA_TERMS
+    : REGION_POSITIVE[country] || COUNTRY_TERMS[country] || [];
+  const ownHit = ownGeo.find((t) => hasPhrase(title, t));
+  if (ownHit) return soften(E("certain", `Title names your location ("${ownHit}")`));
   if (hasAny(title, FOREIGN_GEO)) return E("excluded", "Title names a specific location", false);
   // Bracketed ISO code in the title — "Online Data Analyst - Bengali (IN)".
   // Runs on job.title RAW, because the uppercase requirement is what stops
@@ -1641,21 +1770,21 @@ export function checkEligibility(job, country) {
   // 2. Explicit target in LOCATION field → certain.
   const locField = ` ${loc} ${region} `;
   if (country === "africa") {
-    if (hasAny(locField, AFRICA_TERMS)) return softenForTimezone(E("certain", "Location mentions Africa"));
+    if (hasAny(locField, AFRICA_TERMS)) return soften(E("certain", "Location mentions Africa"));
   } else if (REGION_POSITIVE[country]) {
-    if (hasAny(locField, REGION_POSITIVE[country])) return softenForTimezone(E("certain", `Location mentions ${country}`));
+    if (hasAny(locField, REGION_POSITIVE[country])) return soften(E("certain", `Location mentions ${country}`));
   } else {
     for (const label of COUNTRY_TERMS[country] || []) {
-      if (hasPhrase(locField, label)) return softenForTimezone(E("certain", `Location mentions ${label}`));
+      if (hasPhrase(locField, label)) return soften(E("certain", `Location mentions ${label}`));
     }
   }
 
   // 3. Worldwide/anywhere in LOCATION → certain.
-  if (hasAny(loc, WORLDWIDE_LOCATION)) return softenForTimezone(E("certain", "Open worldwide / anywhere"));
+  if (hasAny(loc, WORLDWIDE_LOCATION)) return soften(E("certain", "Open worldwide / anywhere"));
 
   // 4. EMEA in location → likely for Africa and MENA targets.
   if ((isAfrican || country === "mena") && hasAny(loc, EMEA_POSITIVE))
-    return softenForTimezone(E("likely", "EMEA region"));
+    return soften(E("likely", "EMEA region"));
 
   // 5. POSITIVE-EVIDENCE GATE — universal for all country targets.
   //    Nothing matched above → no positive signal this role is open to target.
@@ -1664,6 +1793,15 @@ export function checkEligibility(job, country) {
   const bare = !l || ["remote","remote,","anywhere","n/a","-","not specified",
                       "remote worldwide","fully remote","global"].includes(l);
   if (!bare) return E("excluded", `Location tied to ${job.location}`, false);
+
+  // The location field says nothing but "Remote", so the body is the only
+  // evidence there is — and it asks for someone in a building. This is the
+  // case that put a Taiwan hybrid role ("hybrid work — remote 2 days/week",
+  // location tagged "Remote") in front of a Nigerian user as merely "region
+  // unconfirmed". Unlike the soften path above there is no contradicting
+  // signal to weigh it against, so it excludes.
+  if (sig.onsiteRequired)
+    return E("excluded", `Remote listing, but the role requires physical presence ("${sig.onsiteRequired}")`, false);
 
   // Bare "Remote": read description for positive signal or country tie.
   // A strong worldwide phrase in the body ("work from anywhere", "open to
@@ -1679,7 +1817,7 @@ export function checkEligibility(job, country) {
     // so it downgrades rather than excludes.
     if (sig.insuranceLicensing)
       return E("possible", "JD says \"open to anyone\", but role requires a US insurance license — confirm eligibility before applying");
-    return softenForTimezone(E("certain", "JD: open to anyone, anywhere"));
+    return soften(E("certain", "JD: open to anyone, anywhere"));
   }
   if (sig.descMentionsForeign) return E("excluded", "Remote, but body ties it to a specific country", false);
 
