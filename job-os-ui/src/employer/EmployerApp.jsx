@@ -14,6 +14,7 @@ import { useTheme } from "../lib/useTheme";
 import AuthModal from "../AuthModal";
 import { getMe, createOrg, listPostings, updatePosting } from "../lib/employerApi";
 import PostingEditor from "./PostingEditor";
+import JDComposer from "./JDComposer";
 import ScreenQueue from "./ScreenQueue";
 import MatchList from "./MatchList";
 import "./employer.css";
@@ -134,9 +135,26 @@ export default function EmployerApp() {
       </nav>
 
       <main className="emp-main">
-        {editing && (
+        {/* Describing the role is the default way in; the form is the
+            escape hatch, reachable from inside the composer and used
+            automatically when the model is unavailable. Editing an
+            existing posting always goes to the form — someone fixing a
+            typo does not want to be interviewed about it again. */}
+        {editing === "new" && (
+          <JDComposer
+            onCancel={(mode) => setEditing(mode === "manual" ? "form" : null)}
+            onSaved={async (p) => {
+              setEditing(null);
+              await refreshPostings();
+              setSelectedId(p.id);
+              showToast(p.status === "open" ? "Live — it's in candidate search now." : "Saved as a draft.");
+            }}
+          />
+        )}
+
+        {editing && editing !== "new" && (
           <PostingEditor
-            posting={editing === "new" ? null : editing}
+            posting={editing === "form" ? null : editing}
             onCancel={() => setEditing(null)}
             onSaved={async (p) => {
               setEditing(null);

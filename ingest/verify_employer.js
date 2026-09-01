@@ -51,8 +51,33 @@ let pass = 0, fail = 0;
 const ok = (m) => { pass++; console.log(`   ✅ ${m}`); };
 const no = (m) => { fail++; console.log(`   ❌ ${m}`); };
 
+// Postgres codes that mean "the constraint did its job".
+const REJECTION_CODES = new Set([
+  "23514",  // check_violation
+  "23502",  // not_null_violation
+  "23503",  // foreign_key_violation
+  "23505",  // unique_violation
+]);
+// ...and the ones that mean the column isn't there at all.
+const MISSING_CODES = new Set(["42703", "PGRST204", "PGRST205"]);
+
+/**
+ * Asserts that a write was refused BY A CONSTRAINT, not by the column being
+ * absent. Without this distinction an unapplied migration reports as a
+ * clean pass: every insert errors, and "it errored" looks like "it was
+ * correctly rejected". That is the same false-positive this whole script
+ * exists to avoid, and it caught me writing it a second time.
+ */
+function assertRejected(result, label) {
+  const code = result.error?.code;
+  if (!result.error) return no(`${label} — the write was ACCEPTED`);
+  if (MISSING_CODES.has(code)) return no(`${label} — column missing (${code}), migration not applied`);
+  if (REJECTION_CODES.has(code)) return ok(label);
+  return no(`${label} — refused for an unexpected reason: ${code} ${result.error.message}`);
+}
+
 async function run() {
-  console.log("\n🔎 VERIFY EMPLOYER SCHEMA (015a · 015b · 015c)\n");
+  console.log("\n🔎 VERIFY EMPLOYER SCHEMA (015a · 015b · 015c · 016)\n");
 
   /* ── 015a: tables reachable ─────────────────────────────── */
   console.log("015a — tables");
@@ -86,8 +111,7 @@ async function run() {
   try {
     const bad = await supabase.from("job_postings")
       .insert({ org_id: org.id, title: "__probe__", status: "not_a_status" });
-    bad.error ? ok("job_postings rejects an unknown status")
-              : no("job_postings ACCEPTED an unknown status — 015b §2 missing");
+    assertRejected(bad, "job_postings rejects an unknown status");
 
     const good = await supabase.from("job_postings")
       .insert({ org_id: org.id, title: "__probe__" }).select().single();
@@ -105,16 +129,51 @@ async function run() {
         candidate_id: "00000000-0000-0000-0000-000000000001",
         decision: "rejected", reason_code: "not_a_fit",
       });
-      banned.error ? ok("candidate_feedback rejects 'not_a_fit'")
-                   : no("candidate_feedback ACCEPTED 'not_a_fit' — 015b §4 missing");
+      assertRejected(banned, "candidate_feedback rejects 'not_a_fit'");
 
       const badScore = await supabase.from("posting_submissions").insert({
         posting_id: posting.id, org_id: org.id,
         candidate_id: "00000000-0000-0000-0000-000000000001",
         match_score: 250,
       });
-      badScore.error ? ok("posting_submissions rejects a score above 100")
-                     : no("posting_submissions ACCEPTED score=250 — 015b §3 missing");
+      assertRejected(badScore, "posting_submissions rejects a score above 100");
+    }
+
+    /* ── 016: drafting + upload columns ─────────────────────── */
+    console.log("\n016 — drafting and bulk upload");
+    if (posting) {
+      // The load-bearing change: an uploaded CV has no account, so
+      // candidate_id must accept null for source='upload' and must NOT
+      // for source='platform'.
+      const upload = await supabase.from("posting_submissions").insert({
+        posting_id: posting.id, org_id: org.id, candidate_id: null,
+        source: "upload", cv_text: "probe", cv_filename: "probe.pdf", score_status: "pending",
+      }).select().maybeSingle();
+      upload.error
+        ? no(`an uploaded CV with no account was rejected: ${upload.error.message}`)
+        : ok("an uploaded CV can exist without an account");
+
+      const orphan = await supabase.from("posting_submissions").insert({
+        posting_id: posting.id, org_id: org.id, candidate_id: null, source: "platform",
+      });
+      assertRejected(orphan, "a PLATFORM submission still requires a real account");
+
+      const badStatus = await supabase.from("posting_submissions").insert({
+        posting_id: posting.id, org_id: org.id, candidate_id: null,
+        source: "upload", score_status: "nonsense",
+      });
+      assertRejected(badStatus, "score_status rejects an unknown value");
+
+      const brief = await supabase.from("job_postings")
+        .update({ draft_brief: { brief: "probe" }, jd_source: "drafted", jd_approved_at: new Date().toISOString() })
+        .eq("id", posting.id).select().maybeSingle();
+      brief.data?.jd_source === "drafted"
+        ? ok("job_postings records how the JD was authored")
+        : no(`draft_brief/jd_source not writable: ${brief.error?.message || "unexpected shape"}`);
+
+      const badSource = await supabase.from("job_postings")
+        .update({ jd_source: "telepathy" }).eq("id", posting.id);
+      assertRejected(badSource, "jd_source rejects an unknown value");
     }
 
     /* ── 015c: RLS closes the client out ──────────────────── */

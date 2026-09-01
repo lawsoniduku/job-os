@@ -344,3 +344,93 @@
   .emp-row-2, .emp-row-3 { grid-template-columns: 1fr; }
   .emp-queue-hint { display: none; }
 }
+
+/* ============================================================
+   AI DRAFTING + BULK UPLOAD (016)
+   ============================================================ */
+
+/* -- step rail --------------------------------------------- */
+.emp-steps { display: flex; gap: 14px; margin-top: 9px; flex-wrap: wrap; }
+.emp-step { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-3); }
+.emp-step-n {
+  width: 18px; height: 18px; border-radius: 50%;
+  border: 1px solid var(--border); display: flex; align-items: center;
+  justify-content: center; font-size: 10px; font-weight: 700;
+}
+.emp-step.active { color: var(--accent); font-weight: 600; }
+.emp-step.active .emp-step-n { border-color: var(--accent); background: var(--accent-dim); color: var(--accent); }
+.emp-step.done { color: var(--eligible); }
+.emp-step.done .emp-step-n { border-color: var(--eligible); color: var(--eligible); }
+
+/* -- composer ---------------------------------------------- */
+.emp-compose { max-width: 720px; display: flex; flex-direction: column; gap: 14px; }
+.emp-compose h3 { margin: 0; font-family: var(--display); font-size: 18px; font-weight: 650; }
+.emp-compose-sub { margin: -6px 0 0; font-size: 13px; color: var(--text-2); line-height: 1.6; }
+.emp-compose textarea { width: 100%; }
+.emp-compose-actions { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; }
+
+.emp-q {
+  border: 1px solid var(--border); border-radius: var(--r);
+  padding: 15px 16px; background: var(--surface);
+  display: flex; flex-direction: column; gap: 9px;
+}
+.emp-q-text { font-size: 14px; font-weight: 600; color: var(--text); }
+.emp-q-why { margin: -4px 0 0; font-size: 12px; color: var(--text-3); line-height: 1.55; }
+.emp-q-suggestions { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.emp-draft-facts {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px; padding: 14px 16px; background: var(--canvas);
+  border: 1px solid var(--border); border-radius: var(--r);
+}
+.emp-df { display: flex; flex-direction: column; gap: 2px; }
+.emp-df-k { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-3); }
+.emp-df-v { font-size: 13px; font-weight: 500; color: var(--text); }
+.emp-df-v.muted { color: var(--text-3); font-weight: 400; font-style: italic; }
+.emp-df-note { font-size: 10.5px; color: var(--text-3); line-height: 1.4; }
+
+/* -- upload + progress -------------------------------------- */
+.emp-queue { position: relative; }
+.emp-queue.dragging::after {
+  content: "Drop CVs to add them to this role";
+  position: fixed; inset: 0; z-index: 80;
+  background: var(--accent-dim); border: 3px dashed var(--accent);
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--display); font-size: 20px; font-weight: 650; color: var(--accent);
+  pointer-events: none;
+}
+
+.emp-queue-tools { display: flex; gap: 8px; }
+.emp-drophint { margin-left: 10px; color: var(--text-3); }
+
+.emp-progress {
+  display: flex; flex-direction: column; gap: 7px;
+  font-size: 12.5px; color: var(--text-2);
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-sm); padding: 11px 13px; margin-bottom: 12px;
+}
+.emp-progress-bar { height: 4px; background: var(--border-soft); border-radius: 4px; overflow: hidden; }
+.emp-progress-bar > span { display: block; height: 100%; background: var(--accent); transition: width 0.3s ease; }
+.emp-progress-bar.indeterminate > span { width: 40%; animation: emp-slide 1.4s ease-in-out infinite; }
+@keyframes emp-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
+}
+
+.emp-warn {
+  font-size: 12.5px; line-height: 1.55; color: var(--conditional);
+  background: var(--conditional-dim); border-radius: var(--r-sm); padding: 10px 12px;
+}
+
+/* -- card additions ----------------------------------------- */
+.emp-summary { font-size: 13.5px; color: var(--text); line-height: 1.6; margin: 10px 0 0; }
+.emp-summary + .emp-reason { margin-top: 6px; font-size: 12.5px; color: var(--text-3); }
+
+.emp-chip.src-upload { background: var(--border-soft); color: var(--text-3); }
+.emp-chip.src-platform { background: var(--accent-dim); color: var(--accent); font-weight: 600; }
+
+.emp-score.pending {
+  background: var(--accent-dim); color: var(--accent);
+  font-size: 10.5px; font-weight: 600; letter-spacing: 0.03em;
+}
+.emp-cv-name { color: var(--text-3); font-weight: 400; }
