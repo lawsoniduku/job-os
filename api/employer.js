@@ -34,6 +34,36 @@ export const FEEDBACK_REASONS = [
 
 const STAGES = ["new", "screening", "shortlisted", "interview", "offer", "hired", "rejected", "withdrawn"];
 
+/**
+ * Turns a Supabase write failure into a response that names its own cause.
+ *
+ * WHY THIS EXISTS. "Couldn't create the account - try again" was the message
+ * a misconfigured deploy showed, and it is wrong twice over: trying again
+ * cannot help, and it points at the account rather than at the server's
+ * credentials. The real error was an RLS refusal, because the API was
+ * running with an anon key against tables that are deliberately closed to
+ * the client (migration 015 sec 1).
+ *
+ * 42501 is Postgres for insufficient privilege, which is what an RLS
+ * violation surfaces as. It is always a configuration fault, never
+ * something the person clicking the button did, so it gets its own message
+ * and its own code for the frontend to act on. Everything else keeps the
+ * generic wording.
+ *
+ * The underlying error is logged either way: a 503 with no server-side
+ * trace is how an afternoon disappears.
+ */
+function dbFail(res, error, fallback) {
+  console.error(`[employer] ${error?.code || "?"} ${error?.message || error}`);
+  if (error?.code === "42501" || /row-level security/i.test(error?.message || "")) {
+    return res.status(500).json({
+      error: "The server isn't permitted to write employer data. Its SUPABASE_KEY needs to be the service_role key.",
+      code: "server_key_misconfigured",
+    });
+  }
+  return res.status(503).json({ error: fallback });
+}
+
 export function employerRouter({ supabase, requireAuth, requireEmployer, optionalAuth, searchLimit, llmLimit }) {
   const r = Router();
 
@@ -77,7 +107,7 @@ export function employerRouter({ supabase, requireAuth, requireEmployer, optiona
       .select()
       .single();
 
-    if (error) return res.status(503).json({ error: "Couldn't create the account — try again." });
+    if (error) return dbFail(res, error, "Couldn't create the account — try again.");
 
     const { error: memberErr } = await supabase
       .from("employer_members")
@@ -85,7 +115,7 @@ export function employerRouter({ supabase, requireAuth, requireEmployer, optiona
 
     if (memberErr) {
       await supabase.from("employer_orgs").delete().eq("id", org.id);
-      return res.status(503).json({ error: "Couldn't create the account — try again." });
+      return dbFail(res, memberErr, "Couldn't create the account — try again.");
     }
 
     res.status(201).json({ org: { ...org, membership_role: "owner" } });
@@ -166,7 +196,7 @@ ${text.slice(0, 12000)}`;
       .select()
       .single();
 
-    if (error) return res.status(503).json({ error: "Couldn't save the posting — try again." });
+    if (error) return dbFail(res, error, "Couldn't save the posting — try again.");
     res.status(201).json({ posting: { ...data, department } });
   });
 
@@ -419,7 +449,7 @@ ${text.slice(0, 12000)}`;
 
     const { data: inserted, error } = await supabase
       .from("candidate_feedback").insert(rows).select("id, submission_id");
-    if (error) return res.status(503).json({ error: "Couldn't record the feedback." });
+    if (error) return dbFail(res, error, "Couldn't record the feedback.");
 
     // Keep the queue honest: a decision communicated is a decision made.
     const stage = decision === "rejected" ? "rejected" : decision === "hired" ? "hired" : "shortlisted";
@@ -718,7 +748,7 @@ ${text.slice(0, 12000)}`;
       }, { onConflict: "posting_id,candidate_id" })
       .select().single();
 
-    if (error) return res.status(503).json({ error: "Couldn't submit your application — try again." });
+    if (error) return dbFail(res, error, "Couldn't submit your application — try again.");
 
     // Best-effort ranking. Never awaited into the response path's failure
     // modes: if this throws, the applicant is simply unscored and sorts
