@@ -18,6 +18,7 @@
 import { Router } from "express";
 import { classifyJob, extractEligibilitySignals, SIGNALS_VERSION } from "./roleIntelligence.js";
 import { generateJSON, isLLMHealthy } from "../lib/llm.js";
+import { draftJD, runScoringQueue } from "./ats.js";
 
 // Where a candidate lands when they click Apply on an employer posting.
 // This is written into jobs.apply_url, so it must be the PUBLIC origin of
@@ -33,6 +34,36 @@ export const FEEDBACK_REASONS = [
 ];
 
 const STAGES = ["new", "screening", "shortlisted", "interview", "offer", "hired", "rejected", "withdrawn"];
+
+/**
+ * Turns a Supabase write failure into a response that names its own cause.
+ *
+ * WHY THIS EXISTS. "Couldn't create the account - try again" was the message
+ * a misconfigured deploy showed, and it is wrong twice over: trying again
+ * cannot help, and it points at the account rather than at the server's
+ * credentials. The real error was an RLS refusal, because the API was
+ * running with an anon key against tables that are deliberately closed to
+ * the client (migration 015 sec 1).
+ *
+ * 42501 is Postgres for insufficient privilege, which is what an RLS
+ * violation surfaces as. It is always a configuration fault, never
+ * something the person clicking the button did, so it gets its own message
+ * and its own code for the frontend to act on. Everything else keeps the
+ * generic wording.
+ *
+ * The underlying error is logged either way: a 503 with no server-side
+ * trace is how an afternoon disappears.
+ */
+function dbFail(res, error, fallback) {
+  console.error(`[employer] ${error?.code || "?"} ${error?.message || error}`);
+  if (error?.code === "42501" || /row-level security/i.test(error?.message || "")) {
+    return res.status(500).json({
+      error: "The server isn't permitted to write employer data. Its SUPABASE_KEY needs to be the service_role key.",
+      code: "server_key_misconfigured",
+    });
+  }
+  return res.status(503).json({ error: fallback });
+}
 
 export function employerRouter({ supabase, requireAuth, requireEmployer, optionalAuth, searchLimit, llmLimit }) {
   const r = Router();
@@ -77,7 +108,7 @@ export function employerRouter({ supabase, requireAuth, requireEmployer, optiona
       .select()
       .single();
 
-    if (error) return res.status(503).json({ error: "Couldn't create the account — try again." });
+    if (error) return dbFail(res, error, "Couldn't create the account — try again.");
 
     const { error: memberErr } = await supabase
       .from("employer_members")
@@ -85,7 +116,7 @@ export function employerRouter({ supabase, requireAuth, requireEmployer, optiona
 
     if (memberErr) {
       await supabase.from("employer_orgs").delete().eq("id", org.id);
-      return res.status(503).json({ error: "Couldn't create the account — try again." });
+      return dbFail(res, memberErr, "Couldn't create the account — try again.");
     }
 
     res.status(201).json({ org: { ...org, membership_role: "owner" } });
@@ -137,6 +168,30 @@ ${text.slice(0, 12000)}`;
     }
   });
 
+  // Plain language in; either a posting or the few questions we refuse to
+  // answer on the recruiter's behalf. Stateless: the client holds the brief
+  // and the answers so far and sends both back, which keeps a half-finished
+  // draft from needing a row it might never become.
+  r.post("/employer/postings/draft", requireAuth, requireEmployer, llmLimit, async (req, res) => {
+    const { brief, answers } = req.body || {};
+    if (!brief?.trim() || brief.trim().length < 12) {
+      return res.status(400).json({ error: "Tell us a bit more about the role first." });
+    }
+    try {
+      const out = await draftJD({
+        brief: brief.slice(0, 6000),
+        answers: answers && typeof answers === "object" ? answers : {},
+        orgName: req.org?.name,
+      });
+      res.json(out);
+    } catch (e) {
+      if (e.code === "llm_offline") {
+        return res.status(503).json({ error: "AI is offline - you can still write the posting yourself.", code: "llm_offline" });
+      }
+      res.status(502).json({ error: "Couldn't draft that - try rephrasing, or write it yourself." });
+    }
+  });
+
   r.post("/employer/postings", requireAuth, requireEmployer, searchLimit, async (req, res) => {
     const b = req.body || {};
     if (!b.title?.trim()) return res.status(400).json({ error: "A job title is required." });
@@ -162,11 +217,18 @@ ${text.slice(0, 12000)}`;
         role_cluster,
         status: "draft",
         created_by: req.user.id,
+        // Kept so the JD can be redrafted later without interviewing the
+        // recruiter again (016 sec 3). jd_approved_at is stamped here
+        // because reaching this endpoint means a human saw the draft and
+        // pressed a button - that is what the column records.
+        draft_brief: b.draft_brief && typeof b.draft_brief === "object" ? b.draft_brief : {},
+        jd_source: ["written", "pasted", "drafted"].includes(b.jd_source) ? b.jd_source : "written",
+        jd_approved_at: new Date().toISOString(),
       })
       .select()
       .single();
 
-    if (error) return res.status(503).json({ error: "Couldn't save the posting — try again." });
+    if (error) return dbFail(res, error, "Couldn't save the posting — try again.");
     res.status(201).json({ posting: { ...data, department } });
   });
 
@@ -291,15 +353,101 @@ ${text.slice(0, 12000)}`;
      SCREEN — the ranked queue
      ══════════════════════════════════════════════════════════════════ */
 
+  // Bulk CV upload. Text arrives already extracted - the browser does that
+  // with lib/extractText.js, which handles PDF/DOCX/TXT and means the API
+  // needs no document parsing and never holds the original file.
+  //
+  // THESE PEOPLE ARE NOT PLATFORM CANDIDATES. They never signed up here,
+  // never consented to anything, and nothing in this route adds them to the
+  // pool other employers can search. They are one recruiter's private
+  // shortlist for one posting (016 sec 1).
+  r.post("/employer/postings/:id/candidates", requireAuth, requireEmployer, searchLimit, async (req, res) => {
+    const { data: posting } = await supabase
+      .from("job_postings").select("id, org_id")
+      .eq("id", req.params.id).eq("org_id", req.orgId).maybeSingle();
+    if (!posting) return res.status(404).json({ error: "Posting not found." });
+
+    const incoming = Array.isArray(req.body?.candidates) ? req.body.candidates : [];
+    if (!incoming.length) return res.status(400).json({ error: "No CVs to upload." });
+    if (incoming.length > 50) {
+      return res.status(400).json({ error: "50 CVs at a time is the limit - split the batch." });
+    }
+
+    // Same CV twice is a real accident (a folder dragged in twice), and it
+    // would double-charge the model and show the recruiter a phantom
+    // second applicant. Deduped on the text itself, not the filename,
+    // because the same CV often arrives under two names.
+    const { data: existing } = await supabase
+      .from("posting_submissions").select("cv_text, cv_filename")
+      .eq("posting_id", posting.id).eq("source", "upload");
+    const seen = new Set((existing || []).map((e) => fingerprint(e.cv_text)));
+
+    const rows = [];
+    let skipped = 0;
+    for (const c of incoming) {
+      const text = String(c?.text || "").trim();
+      if (text.length < 80) { skipped++; continue; }   // an empty or unreadable file
+      const fp = fingerprint(text);
+      if (seen.has(fp)) { skipped++; continue; }
+      seen.add(fp);
+      rows.push({
+        posting_id: posting.id,
+        org_id: req.orgId,
+        candidate_id: null,
+        source: "upload",
+        cv_text: text.slice(0, 50000),
+        cv_filename: String(c?.filename || "").slice(0, 260) || null,
+        uploaded_by: req.user.id,
+        stage: "new",
+        score_status: "pending",
+      });
+    }
+
+    if (!rows.length) {
+      return res.status(400).json({
+        error: skipped ? "Those were already uploaded, or the text couldn't be read." : "No usable CVs.",
+        skipped,
+      });
+    }
+
+    const { data: inserted, error } = await supabase
+      .from("posting_submissions").insert(rows).select("id");
+    if (error) return dbFail(res, error, "Couldn't save those CVs - try again.");
+
+    // Responds immediately; scoring drains in the background at a pace the
+    // free tier tolerates. The UI watches score_status rather than waiting.
+    runScoringQueue(supabase, posting.id).catch(() => {});
+
+    res.status(201).json({ added: inserted.length, skipped, scoring: true });
+  });
+
+  // Full CV text for ONE submission. Split out because the queue used to
+  // return every applicant's whole CV, which is a few KB each and turns a
+  // fifty-candidate posting into a multi-megabyte response on a mobile
+  // connection - for text that is only read one at a time.
+  r.get("/employer/submissions/:id/cv", requireAuth, requireEmployer, async (req, res) => {
+    const { data, error } = await supabase
+      .from("posting_submissions").select("id, cv_text, cv_filename")
+      .eq("id", req.params.id).eq("org_id", req.orgId).maybeSingle();
+    if (error) return res.status(503).json({ error: "Couldn't load the CV." });
+    if (!data) return res.status(404).json({ error: "Applicant not found." });
+    res.json({ cv_text: data.cv_text, cv_filename: data.cv_filename });
+  });
+
   r.get("/employer/postings/:id/submissions", requireAuth, requireEmployer, async (req, res) => {
     const { data: posting } = await supabase
       .from("job_postings").select("id, title")
       .eq("id", req.params.id).eq("org_id", req.orgId).maybeSingle();
     if (!posting) return res.status(404).json({ error: "Posting not found." });
 
+    // cv_text is deliberately NOT selected - see GET /employer/submissions/
+    // :id/cv. Everything the queue renders comes from the summary and the
+    // structured fields; the document itself is fetched on demand.
     const { data: subs, error } = await supabase
       .from("posting_submissions")
-      .select("*")
+      .select("id, candidate_id, source, applicant_name, applicant_email, cv_filename, " +
+              "cv_skills, cv_years, country, availability, summary, match_score, match_reason, " +
+              "score_status, stage, created_at, decided_at")
       .eq("posting_id", req.params.id)
       .eq("org_id", req.orgId)
       .order("match_score", { ascending: false, nullsFirst: false })
@@ -323,17 +471,36 @@ ${text.slice(0, 12000)}`;
 
     res.json({
       posting,
+      // So the UI can say "scoring 12 of 30" and stop polling when it hits
+      // zero, rather than guessing from whether any score is still null.
+      scoring: {
+        outstanding: (subs || []).filter((s) => s.score_status === "pending" || s.score_status === "scoring").length,
+        failed: (subs || []).filter((s) => s.score_status === "failed").length,
+        total: (subs || []).length,
+      },
       submissions: (subs || []).map((s) => ({
         // The screening queue is identity-light on purpose. An employer
         // decides on evidence — CV, skills, eligibility, availability —
         // and a name is not evidence. It is released with the intro, or
         // when the candidate is advanced; see §candidate_reveal below.
         id: s.id,
-        candidate_ref: shortRef(s.candidate_id),
-        candidate_id: s.stage === "new" || s.stage === "screening" || s.stage === "rejected"
-          ? undefined
-          : s.candidate_id,
-        cv_text: s.cv_text,
+        source: s.source,
+        // An uploaded CV carries the name the recruiter already has on
+        // file, so hiding it would be theatre. Anonymity protects PLATFORM
+        // candidates, who opted into a product rather than handing this
+        // company their CV directly.
+        candidate_ref: s.source === "upload"
+          ? (s.applicant_name || s.cv_filename || "Uploaded CV")
+          : `Candidate ${shortRef(s.candidate_id)}`,
+        applicant_name: s.source === "upload" ? s.applicant_name : undefined,
+        applicant_email: s.source === "upload" ? s.applicant_email : undefined,
+        cv_filename: s.cv_filename,
+        candidate_id: s.source === "platform" &&
+          !(s.stage === "new" || s.stage === "screening" || s.stage === "rejected")
+          ? s.candidate_id
+          : undefined,
+        summary: s.summary,
+        score_status: s.score_status,
         cv_skills: s.cv_skills,
         cv_years: s.cv_years,
         country: s.country,
@@ -395,14 +562,22 @@ ${text.slice(0, 12000)}`;
     // Re-read the submissions under the org filter. This is what stops a
     // caller sending feedback on another company's applicants by guessing
     // ids: anything not belonging to req.orgId simply isn't returned.
-    const { data: subs, error: readErr } = await supabase
+    const { data: allSubs, error: readErr } = await supabase
       .from("posting_submissions")
-      .select("id, posting_id, candidate_id")
+      .select("id, posting_id, candidate_id, source")
       .eq("org_id", req.orgId)
       .in("id", ids);
 
     if (readErr) return res.status(503).json({ error: "Couldn't load those applicants." });
-    if (!subs?.length) return res.status(404).json({ error: "No matching applicants." });
+    if (!allSubs?.length) return res.status(404).json({ error: "No matching applicants." });
+
+    // Uploaded CVs have no account here, so there is nowhere to deliver
+    // feedback to. Their STAGE still moves - the recruiter's queue must
+    // stay accurate - but no feedback row is written, and the response says
+    // how many were skipped so the UI can tell the truth about it rather
+    // than implying thirty people were notified when eleven were.
+    const subs = allSubs.filter((s) => s.source !== "upload" && s.candidate_id);
+    const uncontactable = allSubs.length - subs.length;
 
     const now = new Date().toISOString();
     const rows = subs.map((s) => ({
@@ -417,19 +592,31 @@ ${text.slice(0, 12000)}`;
       sent_at: hold ? null : now,
     }));
 
-    const { data: inserted, error } = await supabase
-      .from("candidate_feedback").insert(rows).select("id, submission_id");
-    if (error) return res.status(503).json({ error: "Couldn't record the feedback." });
+    let inserted = [];
+    if (rows.length) {
+      const { data, error } = await supabase
+        .from("candidate_feedback").insert(rows).select("id, submission_id");
+      if (error) return dbFail(res, error, "Couldn't record the feedback.");
+      inserted = data || [];
+    }
 
     // Keep the queue honest: a decision communicated is a decision made.
+    // Applies to uploaded CVs too — their stage is the recruiter's own
+    // record, and it should move whether or not anyone could be told.
     const stage = decision === "rejected" ? "rejected" : decision === "hired" ? "hired" : "shortlisted";
     await supabase
       .from("posting_submissions")
       .update({ stage, decided_at: now, decided_by: req.user.id })
       .eq("org_id", req.orgId)
-      .in("id", subs.map((s) => s.id));
+      .in("id", allSubs.map((s) => s.id));
 
-    res.status(201).json({ sent: hold ? 0 : inserted.length, recorded: inserted.length, held: !!hold });
+    res.status(201).json({
+      sent: hold ? 0 : inserted.length,
+      recorded: inserted.length,
+      held: !!hold,
+      uncontactable,
+      moved: allSubs.length,
+    });
   });
 
   /* ══════════════════════════════════════════════════════════════════
@@ -715,15 +902,18 @@ ${text.slice(0, 12000)}`;
         country: profile?.country || null,
         availability: profile?.availability || null,
         stage: "new",
+        source: "platform",
+        // Queued rather than scored inline, through the same paced worker
+        // the bulk upload uses. One applicant and thirty are then the same
+        // code path, and an applying candidate never waits on the model to
+        // find out whether their application went through.
+        score_status: "pending",
       }, { onConflict: "posting_id,candidate_id" })
       .select().single();
 
-    if (error) return res.status(503).json({ error: "Couldn't submit your application — try again." });
+    if (error) return dbFail(res, error, "Couldn't submit your application — try again.");
 
-    // Best-effort ranking. Never awaited into the response path's failure
-    // modes: if this throws, the applicant is simply unscored and sorts
-    // last, which the queue renders as "not scored" rather than "0".
-    scoreSubmission(supabase, submission, posting, cvText).catch(() => {});
+    runScoringQueue(supabase, posting.id).catch(() => {});
 
     res.status(201).json({ submitted: true, submission_id: submission.id });
   });
@@ -787,30 +977,17 @@ async function mirrorToJobs(supabase, posting, org, existingJobId) {
 
 // One LLM pass, mirroring what the candidate side already does for cv-match,
 // so both sides of the marketplace are reading the same kind of assessment.
-async function scoreSubmission(supabase, submission, posting, cvText) {
-  if (!(await isLLMHealthy())) return;
-
-  const prompt = `Score how well this CV matches the role. Judge only on evidence present in the CV. Do not reward confident writing, and do not penalise a CV for being plainly formatted.
-
-Return JSON: { "score": 0-100, "reason": "one sentence, max 25 words, naming the single strongest and single weakest point" }
-
-ROLE: ${posting.title}
-${posting.description ? posting.description.slice(0, 4000) : ""}
-
-CV:
-${cvText.slice(0, 8000)}`;
-
-  const out = await generateJSON(prompt, { maxTokens: 200 });
-  const score = Number(out?.score);
-  if (!Number.isFinite(score)) return;
-
-  await supabase
-    .from("posting_submissions")
-    .update({
-      match_score: Math.max(0, Math.min(100, Math.round(score))),
-      match_reason: typeof out.reason === "string" ? out.reason.slice(0, 300) : null,
-    })
-    .eq("id", submission.id);
+// A stable, short handle so an anonymous candidate can be referred to
+// ("candidate 7f3a") without ever showing a name. Not a security boundary -
+// the real protection is that identity columns are never selected.
+function fingerprint(text = "") {
+  // Cheap content hash for spotting the same CV uploaded twice. Normalises
+  // whitespace first, because the same document exported twice differs in
+  // spacing far more often than in words.
+  const norm = String(text).toLowerCase().replace(/\s+/g, " ").trim();
+  let h = 0;
+  for (let i = 0; i < norm.length; i++) h = (Math.imul(31, h) + norm.charCodeAt(i)) | 0;
+  return `${norm.length}:${h}`;
 }
 
 // A stable, non-reversible-looking handle for an anonymous candidate card.

@@ -82,8 +82,53 @@ export const getPosting = (id) => call(`/employer/postings/${id}`);
 export const createPosting = (posting) => call("/employer/postings", { method: "POST", body: posting });
 export const updatePosting = (id, patch) => call(`/employer/postings/${id}`, { method: "PATCH", body: patch });
 
+/**
+ * One turn of the drafting conversation. Stateless — the caller keeps the
+ * brief and every answer so far and sends both back, so an abandoned draft
+ * never leaves a half-built posting behind.
+ *
+ * Resolves to either { ready: false, questions, partial } or
+ * { ready: true, jd }.
+ */
+export const draftPosting = ({ brief, answers }) =>
+  call("/employer/postings/draft", { method: "POST", body: { brief, answers }, timeoutMs: 90000, attempts: 2 });
+
 /* ── screen ───────────────────────────────────────────────── */
 export const listSubmissions = (postingId) => call(`/employer/postings/${postingId}/submissions`);
+
+// The CV text for one applicant. Separate from the queue because the queue
+// carries fifty summaries, not fifty documents.
+export const getSubmissionCv = (id) => call(`/employer/submissions/${id}/cv`, { timeoutMs: 45000 });
+
+/**
+ * Bulk CV upload. Text is extracted in the BROWSER (lib/extractText.js) so
+ * the API never handles a file and needs no document parser.
+ *
+ * Sent in chunks because fifty CVs is comfortably past what a request body
+ * should carry on a mobile connection, and because a partial failure should
+ * cost one chunk rather than the whole drop.
+ */
+export async function uploadCandidates(postingId, candidates, onProgress) {
+  const CHUNK = 10;
+  let added = 0, skipped = 0;
+  for (let i = 0; i < candidates.length; i += CHUNK) {
+    const slice = candidates.slice(i, i + CHUNK);
+    try {
+      const r = await call(`/employer/postings/${postingId}/candidates`, {
+        method: "POST", body: { candidates: slice }, timeoutMs: 60000, attempts: 2,
+      });
+      added += r.added || 0;
+      skipped += r.skipped || 0;
+    } catch (e) {
+      // A chunk that is entirely duplicates comes back 400; that is a
+      // skip, not a failure, and must not abort the rest of the drop.
+      if (e.status === 400) skipped += slice.length;
+      else throw e;
+    }
+    onProgress?.(Math.min(i + CHUNK, candidates.length), candidates.length);
+  }
+  return { added, skipped };
+}
 export const setStage = (id, stage) => call(`/employer/submissions/${id}`, { method: "PATCH", body: { stage } });
 
 /* ── feedback ─────────────────────────────────────────────── */

@@ -129,6 +129,61 @@ async function run() {
     ? ok("a brand-new org is NOT verified")
     : no("a new org came back verified — verification must be a human step");
 
+  /* ── drafting (016) ──────────────────────────────────────── */
+  console.log("\ndrafting");
+  const BRIEF = "We need a senior backend engineer for our payments team in Lagos. Remote is fine. They must have run Postgres at scale and ideally have fintech experience.";
+
+  const turn1 = await call("/employer/postings/draft", {
+    token: employer.token, method: "POST", body: { brief: BRIEF },
+  });
+  turn1.data?.ready === false
+    ? ok("plain language comes back with questions, not a finished posting")
+    : no(`first turn returned ready=${turn1.data?.ready} (${turn1.status})`);
+
+  const qIds = (turn1.data?.questions || []).map((q) => q.id);
+  qIds.includes("eligible_countries")
+    ? ok("it always asks which countries you can employ in")
+    : no(`eligibility was not asked - it would have been guessed. asked: ${qIds.join(", ")}`);
+  qIds.includes("compensation")
+    ? ok("it always asks for salary rather than inventing one")
+    : no(`salary was not asked. asked: ${qIds.join(", ")}`);
+
+  const answers = {};
+  for (const q of turn1.data.questions) {
+    answers[q.id] = q.id === "eligible_countries" ? "Nigeria, Kenya"
+      : q.id === "compensation" ? "60000 to 90000 USD"
+      : (q.suggestions?.[0] || "Yes");
+  }
+
+  const turn2 = await call("/employer/postings/draft", {
+    token: employer.token, method: "POST", body: { brief: BRIEF, answers },
+  });
+  // The termination guarantee: answering once must produce a draft, never
+  // a fresh set of questions. This regressed once and would have looped.
+  turn2.data?.ready === true
+    ? ok("answering the questions produces a draft - the flow terminates")
+    : no(`SECOND TURN ASKED AGAIN: ${JSON.stringify(turn2.data?.questions?.map((q) => q.id))}`);
+
+  const draft = turn2.data?.jd || {};
+  draft.title
+    ? ok(`drafted a title: "${draft.title}"`)
+    : no("no title - the posting would classify as Other and appear in no search");
+  draft.role_cluster && draft.role_cluster !== "Other"
+    ? ok(`classified as '${draft.role_cluster}'`)
+    : no(`classified as '${draft.role_cluster}' - it would surface in no relevant search`);
+  draft.salary_min > 0
+    ? ok(`salary read from the answer (${draft.salary_min}-${draft.salary_max})`)
+    : no(`salary came back as ${draft.salary_min}-${draft.salary_max}`);
+  (draft.eligible_countries || []).includes("nigeria")
+    ? ok("eligibility taken from the answer, not invented")
+    : no(`eligible_countries = ${JSON.stringify(draft.eligible_countries)}`);
+  draft.description?.includes("WHAT YOU'LL DO")
+    ? ok("responsibilities were drafted, not left blank")
+    : no("the posting has no responsibilities section");
+  !/competitive|fast-paced|rockstar|ninja/i.test(draft.description || "")
+    ? ok("no filler language in the drafted posting")
+    : no("the draft contains filler the prompt forbids");
+
   /* ── post ────────────────────────────────────────────────── */
   console.log("\npost");
   const postRes = await call("/employer/postings", {
@@ -218,9 +273,14 @@ async function run() {
     sub.country === "nigeria" && sub.availability === "2_weeks"
       ? ok("profile snapshotted at submit time (country, availability)")
       : no(`snapshot wrong: country='${sub.country}' availability='${sub.availability}'`);
-    sub.cv_text?.includes("Ada Probe")
-      ? ok("the CV travelled with the application")
-      : no("no CV on the submission — nothing to screen");
+    // The CV travelled with the application, but is fetched separately -
+    // the queue carries summaries, not documents (016). Asserting on
+    // sub.cv_text here is what this check used to do, and it started
+    // failing the moment that became true.
+    const applicantCv = await call(`/employer/submissions/${sub.id}/cv`, { token: employer.token });
+    applicantCv.data?.cv_text?.includes("Ada Probe")
+      ? ok("the CV travelled with the application and is fetchable")
+      : no(`no CV behind the submission - nothing to screen (${applicantCv.status})`);
   }
 
   // The authorisation check that matters most.
@@ -234,6 +294,88 @@ async function run() {
     ? ok("an unauthenticated request cannot read the queue")
     : no(`SECURITY: anonymous request got ${noToken.status} on the employer queue`);
 
+  /* ── bulk upload + ranking (016) ─────────────────────────── */
+  console.log("\nbulk upload");
+  const CVS = [
+    { filename: "strong.pdf", text: "Tomi Adeyemi. Senior Backend Engineer, 8 years. Python, Django, PostgreSQL at scale, Redis, Kafka, Docker, Kubernetes. Led the payments ledger rewrite at a Lagos fintech processing 2M transactions daily. Owned Postgres partitioning and query tuning. Mentored four engineers. Lagos, Nigeria. tomi@example.test" },
+    { filename: "weak.pdf", text: "Chidi Okonkwo. Graphic designer, 4 years. Adobe Photoshop, Illustrator, InDesign, Figma. Brand identity work for small retail clients. Built social campaigns and print collateral. Certificate in visual communication. Abuja, Nigeria." },
+    { filename: "middling.pdf", text: "Ama Mensah. Backend developer, 3 years. Node.js, Express, MongoDB, some PostgreSQL. Built REST APIs for an e-commerce platform. Familiar with Docker. Interested in moving into fintech. Accra, Ghana." },
+  ];
+
+  const up = await call(`/employer/postings/${postingId}/candidates`, {
+    token: employer.token, method: "POST", body: { candidates: CVS },
+  });
+  up.status === 201 && up.data.added === 3
+    ? ok("3 CVs uploaded")
+    : no(`upload returned ${up.status} ${JSON.stringify(up.data).slice(0, 120)}`);
+
+  // The same batch again must not create six candidates.
+  const dupe = await call(`/employer/postings/${postingId}/candidates`, {
+    token: employer.token, method: "POST", body: { candidates: CVS },
+  });
+  (dupe.status === 400 || dupe.data.added === 0)
+    ? ok("re-uploading the same CVs adds nobody")
+    : no(`duplicate upload added ${dupe.data.added} — the same person would appear twice`);
+
+  // Scoring is paced and asynchronous. Poll rather than assume, with a
+  // ceiling so a stuck queue fails the test instead of hanging it.
+  let queueState = null;
+  for (let i = 0; i < 40; i++) {
+    const q = await call(`/employer/postings/${postingId}/submissions`, { token: employer.token });
+    queueState = q.data;
+    if (!queueState?.scoring?.outstanding) break;
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+
+  queueState?.scoring?.outstanding === 0
+    ? ok(`ranking finished for all ${queueState.scoring.total}`)
+    : no(`${queueState?.scoring?.outstanding} still unranked after 2 minutes`);
+
+  const uploads = (queueState?.submissions || []).filter((s) => s.source === "upload");
+  uploads.length === 3
+    ? ok("uploaded CVs sit in the same queue as platform applicants")
+    : no(`expected 3 uploads in the queue, found ${uploads.length}`);
+
+  const scored = uploads.filter((s) => s.match_score != null);
+  scored.length === 3
+    ? ok("all three were scored")
+    : no(`${scored.length} of 3 scored — the rest: ${uploads.map((u) => u.score_status).join(", ")}`);
+
+  const withSummary = uploads.filter((s) => s.summary);
+  withSummary.length === 3
+    ? ok("each has a short summary to read instead of the CV")
+    : no(`${withSummary.length} of 3 have a summary`);
+
+  // The ranking has to be RIGHT, not merely present. A backend engineer
+  // with Postgres at scale must outrank a graphic designer for a backend
+  // role, or the feature is decoration.
+  const byFile = Object.fromEntries(uploads.map((u) => [u.cv_filename, u]));
+  const strong = byFile["strong.pdf"]?.match_score;
+  const weak = byFile["weak.pdf"]?.match_score;
+  const mid = byFile["middling.pdf"]?.match_score;
+  console.log(`         scores: strong=${strong} middling=${mid} weak=${weak}`);
+  strong > weak
+    ? ok(`the matching engineer outranks the graphic designer (${strong} vs ${weak})`)
+    : no(`RANKING IS WRONG: designer ${weak} >= engineer ${strong}`);
+  strong > mid
+    ? ok(`the senior outranks the junior (${strong} vs ${mid})`)
+    : no(`ranking questionable: junior ${mid} >= senior ${strong}`);
+
+  // Names are read from the CV, because the recruiter already has them.
+  byFile["strong.pdf"]?.candidate_ref?.includes("Tomi")
+    ? ok("an uploaded CV shows the name, not an anonymous ref")
+    : no(`uploaded card showed '${byFile["strong.pdf"]?.candidate_ref}' instead of the name`);
+
+  // ...but the CV text is no longer shipped with the list.
+  byFile["strong.pdf"]?.cv_text === undefined
+    ? ok("the queue no longer ships full CV text for every applicant")
+    : no("the queue is still shipping full CVs — that's megabytes on a mobile connection");
+
+  const cvOne = await call(`/employer/submissions/${byFile["strong.pdf"].id}/cv`, { token: employer.token });
+  cvOne.data?.cv_text?.includes("Tomi Adeyemi")
+    ? ok("the CV is fetchable on demand")
+    : no(`fetching one CV returned ${cvOne.status}`);
+
   /* ── feedback ────────────────────────────────────────────── */
   console.log("\nfeedback");
   const reasonless = await call("/employer/feedback", {
@@ -244,13 +386,32 @@ async function run() {
     ? ok("a rejection with no reason is refused by the API")
     : no(`reasonless rejection returned ${reasonless.status} — the core promise is unenforced`);
 
+  // A MIXED batch - one platform applicant and one uploaded CV - which is
+  // the realistic case and the one where it would be easy to lie about how
+  // many people were notified.
+  const uploadToReject = byFile["weak.pdf"];
   const fb = await call("/employer/feedback", {
     token: employer.token, method: "POST",
-    body: { submission_ids: [sub.id], decision: "rejected", reason_code: "missing_skill", note: "Strong on Python; we needed Kafka in production." },
+    body: {
+      submission_ids: [sub.id, uploadToReject.id],
+      decision: "rejected", reason_code: "missing_skill",
+      note: "Strong on Python; we needed Kafka in production.",
+    },
   });
   fb.status === 201 && fb.data.sent === 1
-    ? ok("rejected with a reason, and sent")
-    : no(`feedback returned ${fb.status} ${JSON.stringify(fb.data).slice(0, 80)}`);
+    ? ok("only the person with an account was notified")
+    : no(`feedback returned ${fb.status} sent=${fb.data?.sent} (expected 1)`);
+  fb.data?.uncontactable === 1
+    ? ok("the uploaded CV is reported as uncontactable rather than counted as notified")
+    : no(`uncontactable=${fb.data?.uncontactable}, expected 1 - the UI would overstate who was told`);
+  fb.data?.moved === 2
+    ? ok("both moved to rejected in the recruiter's queue")
+    : no(`moved=${fb.data?.moved}, expected 2 - the queue would be out of date`);
+
+  const { data: fbRows } = await admin.from("candidate_feedback").select("candidate_id");
+  (fbRows || []).every((f) => f.candidate_id)
+    ? ok("no feedback row was written for an accountless candidate")
+    : no("a feedback row exists with no candidate to deliver it to");
 
   /* ── the candidate actually hears back ───────────────────── */
   console.log("\nthe loop closes");

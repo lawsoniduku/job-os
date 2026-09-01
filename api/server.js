@@ -56,6 +56,38 @@ const llmLimit = rateLimit({ windowMs: 60_000, max: 12, standardHeaders: true, l
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
+// ── WHICH KEY ARE WE HOLDING? ────────────────────────────────────────────
+// Logged at boot because getting this wrong produces a failure that looks
+// like anything except its cause. The employer endpoints read and write
+// tables that are closed to the client by design (migration 015 sec 1), so
+// with an anon key every one of them fails on RLS — and the user sees
+// "Couldn't create the account", which sounds transient and isn't.
+//
+// This happened: the deployed API ran with the anon key while local dev ran
+// with service_role, so the whole employer side worked on a laptop and
+// failed silently in production. Two lines at startup would have named it.
+//
+// Note the asymmetry: anon is WRONG for this server, but service_role is
+// not a licence to relax — it bypasses RLS entirely, which is why every
+// employer query filters on a JWT-derived org id itself. See api/auth.js.
+const SUPABASE_KEY_ROLE = (() => {
+  try {
+    // Legacy Supabase keys are JWTs carrying a role claim. Newer
+    // publishable/secret keys are not, and we simply can't tell.
+    return JSON.parse(Buffer.from(process.env.SUPABASE_KEY.split(".")[1], "base64").toString()).role || null;
+  } catch {
+    return null;
+  }
+})();
+if (SUPABASE_KEY_ROLE === "anon") {
+  console.warn(
+    "\n⚠️  SUPABASE_KEY is an ANON key. Employer endpoints WILL fail on RLS.\n" +
+    "   Set SUPABASE_KEY to the service_role key (Supabase -> Settings -> API).\n"
+  );
+} else if (SUPABASE_KEY_ROLE) {
+  console.log(`🔑 Supabase key role: ${SUPABASE_KEY_ROLE}`);
+}
+
 // Columns fetched per search candidate.
 //
 // `description` is deliberately ABSENT: it averaged ~2.6 KB/row and was the
