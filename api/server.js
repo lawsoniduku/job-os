@@ -27,13 +27,13 @@ import { createClient } from "@supabase/supabase-js";
 import {
   parseIntent,
   scoreJobLocally,
-  getAliasesForCluster,
   ROLE_TAXONOMY,
   LOCATION_INTELLIGENCE,
   SIGNALS_VERSION,
 } from "./roleIntelligence.js";
 import { generateJSON, generateText, isLLMHealthy, llmConfig, llmState } from "../lib/llm.js";
 import { makeRequireAuth, makeRequireEmployer, makeOptionalAuth } from "./auth.js";
+import { fetchCandidates, rankCandidates, sanitizeFilters } from "./searchCandidates.js";
 import { employerRouter } from "./employer.js";
 
 // Friendly message for when a structured call comes back empty.
@@ -108,54 +108,6 @@ const JOB_COLUMNS_FULL =
   "id, title, company, location, description, apply_url, remote, source, ats_source, " +
   "role_cluster, department, seniority, posted_at, created_at, salary_min, " +
   "salary_max, employment_type, remote_type, eligibility_region";
-
-// PostgREST .or()/.ilike() treat , . ( ) * : as structural. Strip them from
-// any value we interpolate so a query like "a),b" can't rewrite the filter.
-function safeFilterValue(s = "") {
-  return s.replace(/[,().*:%\\]/g, " ").replace(/\s+/g, " ").trim();
-}
-
-// ── Alias set for retrieval ──────────────────────────────────────────────
-// Retrieval used to take only the FIRST 10 aliases, while the UI told the
-// user "<N> variants … I searched all of them". 35 of 36 clusters have more
-// than 10 aliases (Software Engineering has 58), so that claim was false and
-// the long tail was only reachable via the stored role_cluster — which is
-// exactly the label we know is often wrong.
-//
-// The fix isn't just "raise the cap". Because these are `ilike %alias%`
-// substring filters, a SHORTER alias already subsumes every longer one that
-// contains it — "software engineer" matches "senior software engineer" too.
-// So we keep only the minimal covering set: sort short-to-long, drop any
-// alias that contains one we've already kept. That widens real coverage
-// while shrinking the number of filters in the URL.
-// 55 fully covers every cluster — the largest minimal set is Software
-// Engineering at 51 — so "I searched all of them" in the UI is now literally
-// true for all 36 clusters (verified; it was false for 35 of them before).
-// At ~35 chars per filter that's under 2KB of query string, well inside
-// PostgREST's limits.
-const MAX_ALIAS_FILTERS = 55;
-// How many rows we deeply score per search.
-//
-// This is a LATENCY vs RECALL trade, and the binding constraint is bytes on
-// the wire, not CPU. Measured: scoring is ~1.6ms/job (1000 jobs = 1.6s), but
-// fetching those 1000 rows moves ~2.2 MB of description text and took
-// 4.6-13.3s depending on the link. Raising this to 1000 took end-to-end
-// search from ~7s to ~15s, which is a worse user experience than the recall
-// was worth.
-//
-// 600 keeps most of the recall gain over the old 500 while cutting the
-// payload ~40%. The real fix is architectural — stop shipping full
-// descriptions to score them (precompute the eligibility signals at ingest,
-// the way eligibility_region already is) — but that's a bigger change than
-// a constant.
-const EVAL_LIMIT = 600;
-function minimalAliasSet(aliases = []) {
-  const sorted = [...new Set(aliases.map((a) => a.toLowerCase().trim()).filter(Boolean))]
-    .sort((a, b) => a.length - b.length);
-  const kept = [];
-  for (const a of sorted) if (!kept.some((k) => a.includes(k))) kept.push(a);
-  return kept;
-}
 
 // ── Reported-dead suppression ────────────────────────────────────────────
 // job_reports was write-only: the UI said "✓ Thanks — flagged for review"
@@ -268,6 +220,21 @@ async function suppressedJobIds() {
   return _suppress.loading;
 }
 
+async function searchPool(intent) {
+  const [lean, hasLiveness, suppressed] = await Promise.all([
+    useLeanColumns(), livenessAvailable(), suppressedJobIds(),
+  ]);
+  return fetchCandidates({ db: supabase, intent, lean, hasLiveness, suppressed,
+    columns: lean ? JOB_COLUMNS_LEAN : JOB_COLUMNS_FULL });
+}
+
+function publicIntent(intent, filters = {}) {
+  return { cluster: intent.cluster, locationCountry: intent.locationCountry,
+    remoteOnly: intent.remoteOnly, seniority: intent.seniority,
+    keywords: intent.keywords, rawQuery: intent.rawQuery,
+    variants: intent.matchedAliases || [], filters };
+}
+
 app.get("/health", async (_req, res) => {
   const ok = await isLLMHealthy();
   res.json({ status: "ok", service: "job-copilot-v3.1", model: llmConfig.model, ollama: ok ? "connected" : "offline" });
@@ -280,7 +247,7 @@ app.get("/ai/search", searchLimit, async (req, res) => {
   try {
     const { q, limit: limitParam = "20", offset: offsetParam = "0", country: profileCountry } = req.query;
     if (!q) return res.status(400).json({ error: "Missing query" });
-    const limit = Math.min(parseInt(limitParam) || 20, 50);
+    const limit = Math.max(1, Math.min(parseInt(limitParam) || 20, 50));
     const offset = Math.max(parseInt(offsetParam) || 0, 0);
 
     const intent = parseIntent(q);
@@ -301,91 +268,12 @@ app.get("/ai/search", searchLimit, async (req, res) => {
 
     console.log(`🔍 "${q}" -> cluster=${intent.cluster} country=${intent.locationCountry} remote=${intent.remoteOnly}`);
 
-    // --- retrieval: prefer cluster, fall back to safe keyword ilike ---
-    // NO count at all. An exact count over a 55-way ILIKE OR cost ~1.3s per
-    // search, and the planner-estimated alternative returned numbers off by
-    // two orders of magnitude — worse than useless for a figure that was only
-    // ever a diagnostic. The UI shows `evaluated` (rows actually checked),
-    // which is both free and the honest number.
-    const lean = await useLeanColumns();
-    let dbQuery = supabase.from("jobs")
-      .select(lean ? JOB_COLUMNS_LEAN : JOB_COLUMNS_FULL);
-    if (intent.cluster) {
-      const aliases = minimalAliasSet(getAliasesForCluster(intent.cluster))
-        .map(safeFilterValue).filter(Boolean).slice(0, MAX_ALIAS_FILTERS);
-      const titleFilters = aliases.map((a) => `title.ilike.%${a}%`).join(",");
-      dbQuery = dbQuery.or(`role_cluster.eq.${safeFilterValue(intent.cluster)},${titleFilters}`);
-    } else if (intent.keywords.length > 0) {
-      const kw = safeFilterValue(intent.keywords[0]);
-      if (kw) dbQuery = dbQuery.ilike("title", `%${kw}%`); // value is parameterized -> safe
-    }
-
-    // FRESHNESS GATE — hard 28-day cutoff on last_seen_at, NOT posted_at.
-    // posted_at is a frozen historical fact set once at first import; a listing
-    // that's still open 40 days after it was posted would wrongly vanish forever.
-    // last_seen_at is re-stamped by the ingest pipeline every time a job is
-    // reconfirmed present in its source feed, so it actually tracks "is this
-    // still a live listing" — which is what this gate is supposed to mean.
-    // (Previously posted_at-based: every jobhive row silently disappeared from
-    // search 28 days after its one-time bulk import, because nothing ever
-    // touched posted_at on re-seen rows. See import_jobhive.js's touch pass.)
-    const cutoff = new Date(Date.now() - 28 * 24 * 60 * 60 * 1000).toISOString();
-    dbQuery = dbQuery.or(`last_seen_at.is.null,last_seen_at.gte.${cutoff}`);
-
-    // LIVENESS GATE — drop listings the link checker proved are gone (404/410,
-    // or a page that says the role is closed). 'unknown' and never-checked
-    // stay visible on purpose: a bot-block or timeout is not evidence of
-    // death, and hiding real jobs over it would be its own trust failure.
-    // See ingest/check_links.js and migration 010.
-    if (await livenessAvailable()) {
-      dbQuery = dbQuery.or("link_status.is.null,link_status.neq.dead");
-    }
-
-    // Eligibility region pre-filter for African country searches.
-    // Cuts US/UK/EU-only jobs from the pool before the engine sees them.
-    if (intent.locationCountry && intent.locationCountry !== "worldwide") {
-      const country = intent.locationCountry.toLowerCase();
-      const AFRICAN_COUNTRIES = ["nigeria","kenya","ghana","ethiopia","south africa","egypt",
-        "tanzania","uganda","cameroon","senegal","rwanda","ivory coast","zimbabwe","zambia","africa"];
-      if (AFRICAN_COUNTRIES.includes(country)) {
-        dbQuery = dbQuery.in("eligibility_region", ["Nigeria","Africa","Global","Remote","EMEA","Unknown"]);
-      } else {
-        dbQuery = dbQuery.in("eligibility_region", ["Global","Remote","Unknown"]);
-      }
-    }
-
-    // Order by recency BEFORE the limit.
-    dbQuery = dbQuery.order("posted_at", { ascending: false, nullsFirst: false });
-
-    // Raised from 500. Every single query used to hit exactly 500 — the cap
-    // was always binding, so for a large cluster we were ranking only the
-    // newest ~6% of the matching pool and a strong match posted 5 weeks ago
-    // (still live) could never appear. Scoring is pure in-process JS; the
-    // real cost is transferring descriptions, so this is a balance rather
-    // than "remove the cap".
-    const { data: rawJobsAll, error } = await dbQuery.limit(EVAL_LIMIT);
-    if (error) return res.status(500).json({ error: error.message });
-    if (!rawJobsAll?.length) return res.json({ query: q, total: 0, data: [], message: "No jobs found. Try a broader query." });
-
-    // Honour user reports (see suppressedJobIds above).
-    const suppressed = await suppressedJobIds();
-    const rawJobs = suppressed.size ? rawJobsAll.filter((j) => !suppressed.has(j.id)) : rawJobsAll;
-
-    // --- local scoring + hard eligibility gate ---
-    const scored = rawJobs.map((job) => {
-      const r = scoreJobLocally(job, intent);
-      return { ...job, score: r.score, eligibility: r.eligibility, offTarget: r.offTarget, match_breakdown: r.breakdown };
-    });
-    // drop geo-restricted AND cross-department mismatches (e.g. "Support Engineer"
-    // surfacing in a Customer Support search because of a stale stored label).
-    const eligible = scored.filter((j) => j.eligibility.eligible !== false && !j.offTarget);
-    const excludedCount = scored.length - eligible.length;
-    // Tie-break equal scores by recency — a backstop on top of the scorer's
-    // own (small, deliberate) freshness weighting, so two jobs that land on
-    // the exact same rounded score never show the older one first.
-    const postedTs = (j) => new Date(j.posted_at || j.created_at || 0).getTime();
-    eligible.sort((a, b) => b.score - a.score || postedTs(b) - postedTs(a));
-    console.log(`✅ eligible=${eligible.length} ❌ excluded=${excludedCount}`);
+    const rawJobs = await searchPool(intent);
+    const ranked = rankCandidates(rawJobs, intent);
+    const eligible = ranked.results;
+    const excludedCount = ranked.excluded;
+    const postedTs = (j) => Date.parse(j.posted_at) || 0;
+    console.log(`✅ matches=${eligible.length} ❌ excluded=${excludedCount}`);
 
     // --- optional ONE-SHOT batched LLM re-rank of the top slice ---
     // OFF by default: the local scorer already ranks well, and an LLM round-trip
@@ -409,30 +297,18 @@ app.get("/ai/search", searchLimit, async (req, res) => {
 
     const locPart = intent.locationCountry ? ` open to ${intent.locationCountry} candidates`
       : intent.remoteOnly ? " that are remote" : "";
-    const filteredPart = excludedCount > 0 ? ` (${excludedCount} geo-restricted filtered out)` : "";
+    const filteredPart = excludedCount > 0 ? ` (${excludedCount} excluded by eligibility or role)` : "";
     const summary = totalAvailable === 0
       ? `No results for "${q}". Try broader terms.`
       : `Found ${totalAvailable} ${intent.cluster || "matching"} role${totalAvailable !== 1 ? "s" : ""}${locPart}${filteredPart}.`;
 
     res.json({
       query: q,
-      intent: {
-        cluster: intent.cluster,
-        locationCountry: intent.locationCountry,
-        remoteOnly: intent.remoteOnly,
-        seniority: intent.seniority,
-        variants: (intent.matchedAliases || []).slice(0, 12),
-      },
+      intent: publicIntent(intent),
       total: totalAvailable, offset, limit, has_more: hasMore,
       excluded_count: excludedCount, summary, data: results,
-      // evaluated = how many listings we actually eligibility-checked. The UI
-      // used to compute this as total + excluded, which always came to
-      // exactly the row cap — a hardcoded constant presented as evidence of
-      // thoroughness. This is the real figure, and excluded + eligible sums
-      // to it exactly, so every number on the card reconciles.
-      // (There is deliberately no `scanned` pool size: an exact count cost
-      // ~1.3s per search and the planner's estimate was off by 100x.)
-      evaluated: scored.length,
+      evaluated: ranked.evaluated,
+      duplicate_count: ranked.duplicates,
     });
   } catch (err) { console.error(err); res.status(500).json({ error: err.message }); }
 });
@@ -971,8 +847,10 @@ Instructions:
 // ============================================================
 app.post("/ai/refine", searchLimit, async (req, res) => {
   try {
-    const { refinement, activeIntent, jobIds = [] } = req.body;
-    if (!refinement) return res.status(400).json({ error: "Missing refinement" });
+    const { refinement = "", activeIntent, limit: limitParam = 20, offset: offsetParam = 0 } = req.body;
+    const limit = Math.max(1, Math.min(parseInt(limitParam) || 20, 50));
+    const offset = Math.max(0, parseInt(offsetParam) || 0);
+    if (typeof refinement !== "string") return res.status(400).json({ error: "Invalid refinement" });
     if (!activeIntent?.cluster && !activeIntent?.keywords?.length) {
       return res.status(400).json({ error: "No active search to refine — run a search first." });
     }
@@ -1018,11 +896,12 @@ app.post("/ai/refine", searchLimit, async (req, res) => {
 
     const isDeterministic = salFloor || seniorityFilter || sourceFilter || maxAgeDays || employmentFilter;
 
-    if (!isDeterministic) {
+    if (!isDeterministic && r) {
       // ── LLM fallback: turn the refinement into a new search query ──
       // Merge the refinement with what we know about the active search.
       const mergedQuery = [
-        activeIntent.cluster || activeIntent.keywords?.join(" ") || "",
+        activeIntent.rawQuery || activeIntent.cluster || activeIntent.keywords?.join(" ") || "",
+        activeIntent.remoteOnly ? "remote" : "",
         activeIntent.locationCountry || "",
         refinement,
       ].filter(Boolean).join(" ");
@@ -1034,58 +913,23 @@ app.post("/ai/refine", searchLimit, async (req, res) => {
       });
     }
 
-    // ── Re-fetch + filter ──────────────────────────────────
-    // Rebuild the same DB query the search endpoint uses, on top of the
-    // PREVIOUS intent — this is what makes refinement conversational:
-    // the cluster and country from the original search carry over.
-    const baseQ = activeIntent.cluster || activeIntent.keywords?.join(" ") || "";
+    // Preserve the original role and cumulative filters across turns/pages.
+    const baseQ = activeIntent.rawQuery || activeIntent.cluster || activeIntent.keywords?.join(" ") || "";
     const intent = parseIntent(baseQ);
     if (activeIntent.locationCountry) intent.locationCountry = activeIntent.locationCountry;
     if (activeIntent.remoteOnly) intent.remoteOnly = true;
-    // Let the explicit refinement override seniority.
-    if (seniorityFilter) intent.seniority = seniorityFilter;
-
-    // Same lean/full payload switch as /ai/search — refine re-runs the same
-    // scoring, so it benefits from not fetching descriptions too.
-    let dbQuery = supabase.from("jobs")
-      .select((await useLeanColumns()) ? JOB_COLUMNS_LEAN : JOB_COLUMNS_FULL);
-    if (intent.cluster) {
-      const aliases = minimalAliasSet(getAliasesForCluster(intent.cluster))
-        .map(safeFilterValue).filter(Boolean).slice(0, MAX_ALIAS_FILTERS);
-      const titleFilters = aliases.map((a) => `title.ilike.%${a}%`).join(",");
-      dbQuery = dbQuery.or(`role_cluster.eq.${safeFilterValue(intent.cluster)},${titleFilters}`);
-    } else if (intent.keywords?.length) {
-      const kw = safeFilterValue(intent.keywords[0]);
-      if (kw) dbQuery = dbQuery.ilike("title", `%${kw}%`);
-    }
-
-    if (maxAgeDays) {
-      const since = new Date(Date.now() - maxAgeDays * 86400000).toISOString();
-      dbQuery = dbQuery.gte("posted_at", since);
-    }
-    if (sourceFilter) dbQuery = dbQuery.ilike("source", `%${sourceFilter}%`);
-    if (employmentFilter) dbQuery = dbQuery.eq("employment_type", employmentFilter);
-
-    dbQuery = dbQuery.order("posted_at", { ascending: false, nullsFirst: false });
-    const { data: rawJobs, error } = await dbQuery.limit(500);
-    if (error) return res.status(500).json({ error: error.message });
-
-    const scored = (rawJobs || []).map((job) => {
-      const r2 = scoreJobLocally(job, intent);
-      return { ...job, score: r2.score, eligibility: r2.eligibility, offTarget: r2.offTarget };
+    const previous = sanitizeFilters(activeIntent.filters);
+    const filters = sanitizeFilters({
+      salFloor: salFloor ?? previous.salFloor,
+      seniorityFilter: seniorityFilter ?? previous.seniorityFilter,
+      sourceFilter: sourceFilter ?? previous.sourceFilter,
+      maxAgeDays: maxAgeDays ?? previous.maxAgeDays,
+      employmentFilter: employmentFilter ?? previous.employmentFilter,
     });
-
-    let eligible = scored.filter((j) => j.eligibility.eligible !== false && !j.offTarget);
-
-    // Apply salary floor client-friendly — salary_min or salary_max must reach floor.
-    if (salFloor) {
-      eligible = eligible.filter((j) =>
-        (j.salary_max && j.salary_max >= salFloor) || (j.salary_min && j.salary_min >= salFloor)
-      );
-    }
-
-    eligible.sort((a, b) => b.score - a.score);
-    const results = eligible.slice(0, 20).map((j) => ({ ...j, match_reason: j.eligibility.reason }));
+    ({ salFloor, seniorityFilter, sourceFilter, maxAgeDays, employmentFilter } = filters);
+    if (seniorityFilter) intent.seniority = seniorityFilter;
+    const ranked = rankCandidates(await searchPool(intent), intent, filters);
+    const results = ranked.results.slice(offset, offset + limit);
 
     // Human-readable description of what changed.
     const parts = [];
@@ -1099,10 +943,12 @@ app.post("/ai/refine", searchLimit, async (req, res) => {
     res.json({
       type: "refined",
       description,
-      total: eligible.length,
-      excluded_count: scored.length - eligible.length,
-      data: results,
-      filters: { salFloor, seniorityFilter, sourceFilter, maxAgeDays, employmentFilter },
+      total: ranked.results.length, offset, limit,
+      has_more: offset + limit < ranked.results.length,
+      evaluated: ranked.evaluated,
+      excluded_count: ranked.excluded,
+      duplicate_count: ranked.duplicates,
+      data: results, filters, intent: publicIntent(intent, filters),
     });
   } catch (err) {
     console.error("/ai/refine error:", err);

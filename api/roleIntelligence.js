@@ -2071,17 +2071,23 @@ export function scoreJobLocally(job, intent) {
   // "(BI)" or "(SRE)" that break substring matches against stored aliases.
   // "Business Intelligence (BI) Analyst" → "Business Intelligence Analyst"
   const titleNorm = title.replace(/\s*\([^)]{1,8}\)\s*/g, " ").replace(/\s+/g, " ");
-  const titleAliasHit = intent.matchedAliases?.some((a) => hasPhrase(titleNorm, a));
+  // VA/PA also mean US states, and EA can name an employer. Only treat these
+  // abbreviations as assistant roles at the start of a role title, after
+  // ordinary seniority/work-arrangement modifiers. Long aliases still work
+  // anywhere, including inverted titles such as "Assistant, Executive".
+  const assistantAcronym = /^\s*(?:(?:senior|sr\.?|junior|jr\.?|remote|bilingual|experienced|part.time|full.time)\s+)*(?:va|ea|pa)\b/i.test(job.title || "");
+  const assistantShort = new Set(["va", "ea", "pa"]);
+  const titleAliasHit = intent.matchedAliases?.some((a) =>
+    (!assistantShort.has(a) || assistantAcronym) && hasPhrase(titleNorm, a));
   const descAliasHit = intent.matchedAliases?.some((a) => hasPhrase(desc, a));
-  const titleCluster = detectCluster(job.title || "").cluster; // what the TITLE really is
+  const titleDetection = detectCluster(assistantAcronym ? job.title || "" : (job.title || "").replace(/\b(va|ea|pa)\b/gi, " "));
+  // A skill mention (4 points) is not evidence that this is the requested role.
+  const titleCluster = titleDetection.score >= 30 ? titleDetection.cluster : null;
 
   // Does the title contain the user's ACTUAL search phrase (not just a sibling
   // alias in the same cluster)? "data analyst" search -> "Data Analyst" title is
   // a bullseye; "Product Analyst" is same-cluster but NOT what they asked for.
-  const queryPhrase = (intent.rawQuery || "")
-    .toLowerCase()
-    .replace(/\b(jobs?|roles?|positions?|open|to|me|remote|that|are|for|in|the|a|an)\b/g, " ")
-    .replace(/\s+/g, " ").trim();
+  const queryPhrase = (intent.keywords || []).join(" ");
   const exactTitleHit = queryPhrase.length >= 4 && hasPhrase(title, queryPhrase);
 
   // BUDGET: role fit 0-50 · eligibility 0-35 · freshness/salary -12..+15.
@@ -2103,15 +2109,14 @@ export function scoreJobLocally(job, intent) {
     roleScore = hasSignal ? 24 : 6;
   }
 
-  // offTarget: the title clearly belongs to a DIFFERENT department than the query
-  // (e.g. "Support Engineer" -> Engineering vs a Customer Support search). The
-  // server hard-drops these, so stale DB labels can't keep them in results even
-  // before a re-classify. Sibling clusters in the same department are NOT dropped.
-  const offTarget =
-    !titleAliasHit && titleCluster && intent.cluster &&
-    titleCluster !== intent.cluster &&
-    CLUSTER_DEPARTMENT[titleCluster] && CLUSTER_DEPARTMENT[intent.cluster] &&
-    CLUSTER_DEPARTMENT[titleCluster] !== CLUSTER_DEPARTMENT[intent.cluster];
+  // Relevance is a gate, independent of geography, freshness and salary.
+  // Stored labels and descriptions can mention other roles (e.g. who this
+  // person reports to), so neither can admit an unrelated title. Same-department
+  // roles and unknown titles also need positive evidence, not just no conflict.
+  const roleMatch = intent.cluster
+    ? titleCluster === intent.cluster || (titleAliasHit && !titleCluster)
+    : (intent.keywords || []).length > 0 && intent.keywords.every((k) => hasPhrase(titleNorm, k));
+  const offTarget = !roleMatch;
 
   // query keyword overlap on the TITLE (rewards on-target titles)
   let kwTitle = 0;

@@ -18,6 +18,7 @@ jobs:
           node-version: 22
       - run: npm run test:eligibility
       - run: npm run test:jobhive
+      - run: npm run test:search
       - run: npm ci --ignore-scripts --no-audit --no-fund
         working-directory: job-os-ui
       - run: npm run build
