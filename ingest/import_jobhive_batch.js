@@ -4,7 +4,7 @@
  * Runs import_jobhive.js against a CURATED list of sources, one after another,
  * so you don't have to copy-paste 30+ commands by hand. This is for ONE-TIME
  * (or occasional) bulk backfills — NOT a daily cron. The daily cron
- * (.github/workflows/jobhive-import.yml) stays limited to the 6 small, proven
+ * (.github/workflows/jobhive-import.yml) stays limited to the 5 small, proven
  * sources on purpose; downloading hundreds of MB to several GB every single
  * day would waste bandwidth on data that barely changes upstream.
  *
@@ -107,6 +107,7 @@ async function main() {
   const bad = results.filter((r) => r.code !== 0);
   console.log(`   ✅ succeeded: ${ok.map((r) => r.ats).join(", ") || "none"}`);
   if (bad.length) {
+    process.exitCode = 1;
     console.log(`   ⚠️  had errors: ${bad.map((r) => r.ats).join(", ")}`);
     console.log(`   Re-run just the failed ones:`);
     for (const r of bad) console.log(`     node --env-file=.env ingest/import_jobhive.js ${r.ats}`);

@@ -13,15 +13,28 @@
 // the query string — stripping the whole query collapses every job to one URL
 // and dedup nukes them all. So we keep identity-ish params (id, job, jobid,
 // gh_jid, lever id, etc.) and drop only known tracking params.
-const KEEP_PARAMS = /^(id|jobid|job_id|job|jid|gh_jid|lever|posting|pid|p|ref_id)$/i;
+// Preserve unknown parameters: identity can live in nested redirects such as
+// YC's continue=...application?signup_job_id=93354. An allow-list collapsed
+// all of those application URLs to one /authenticate URL.
+const TRACKING_PARAMS = /^(utm_.*|fbclid|gclid|dclid|msclkid|mc_cid|mc_eid)$/i;
 export function canonicalUrl(url = "") {
-  let s = String(url).replace(/#.*$/, "").replace(/\/+$/, "").trim();
+  let s = String(url).trim().replace(/#.*$/, "");
+  try {
+    const parsed = new URL(s);
+    for (const key of [...parsed.searchParams.keys()]) {
+      if (TRACKING_PARAMS.test(key)) parsed.searchParams.delete(key);
+    }
+    parsed.searchParams.sort();
+    parsed.pathname = parsed.pathname.replace(/\/+$/, "") || "/";
+    return parsed.toString(); // URL normalizes host; path/IDs remain case-sensitive.
+  } catch { /* preserve the existing permissive fallback for non-URL input */ }
+  s = s.replace(/\/+$/, "");
   const qIdx = s.indexOf("?");
   if (qIdx === -1) return s.toLowerCase();
   const base = s.slice(0, qIdx);
   const params = s.slice(qIdx + 1).split("&").filter(Boolean);
   const kept = params
-    .filter((kv) => KEEP_PARAMS.test(kv.split("=")[0]))
+    .filter((kv) => !TRACKING_PARAMS.test(kv.split("=")[0]))
     .sort(); // stable order so param ordering can't create false uniques
   return (kept.length ? `${base}?${kept.join("&")}` : base).toLowerCase();
 }

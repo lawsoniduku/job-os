@@ -6,6 +6,8 @@
  * - Honest match scoring: location eligibility is MANDATORY, not a bonus
  */
 
+import { extractHiringScopes, scopeAllows } from "./hiringScope.js";
+
 export const ROLE_TAXONOMY = [
   {
     cluster: "People Analytics",
@@ -1102,7 +1104,6 @@ const WORLDWIDE_DESC_STRONG = [
   "candidates from any country", "no matter where you are", "anywhere in the world",
   "work from anywhere", "remote (work from anywhere)", "work from anywhere)",
   "fully remote worldwide", "remote worldwide", "globally remote", "remote, anywhere",
-  "open to candidates in africa", "candidates based in africa", "across africa", "open to nigeria",
 ];
 
 const EMEA_POSITIVE = ["emea", "europe middle east africa", "europe, middle east, and africa", "europe, middle east & africa"];
@@ -1595,7 +1596,8 @@ export function applyInference(infer, country, isAfrican) {
 // Stored v1 blobs are ignored until ingest/backfill_signals.js re-runs — the
 // lean payload switches itself off in the meantime, so search stays correct
 // and merely gets slower. See .github/workflows/backfill-signals.yml.
-export const SIGNALS_VERSION = 2;
+// v3 separates country/region hiring scope from worldwide evidence.
+export const SIGNALS_VERSION = 3;
 
 const NON_EN_DESC = [
   "estamos","nossa","nosso","você","trabalho","empresa","vaga","vagas","sobre",
@@ -1653,6 +1655,8 @@ export function extractEligibilitySignals(job = {}) {
   return {
     v: SIGNALS_VERSION,
     hardExclusion,
+    hiringScopes: extractHiringScopes(`${title} ${desc}`, COUNTRY_TERMS),
+    descriptionMissing: !desc.trim(),
     nonEnglishMarkers: hasAny(titleDesc, NON_ENGLISH_MARKERS),
     nonEnglishLocal: nonEnHits >= 3 || diacRatio > 0.015,
     restricted: hasAny(titleDesc, RESTRICTION_PHRASES),
@@ -1686,7 +1690,7 @@ export function extractEligibilitySignals(job = {}) {
  */
 function signalsFor(job) {
   const s = job?.elig_signals;
-  if (s && s.v === SIGNALS_VERSION) return s;
+  if (s && s.v === SIGNALS_VERSION) return { ...s, _degraded: !!s.descriptionMissing };
   const computed = extractEligibilitySignals(job);
   const desc = job?.description;
   if (typeof desc !== "string" || desc.length === 0) computed._degraded = true;
@@ -1775,7 +1779,13 @@ export function checkEligibility(job, country) {
 
   // Both adjustments, in the order they read: timezone first (it's about
   // hours), then presence (it's about place).
-  const soften = (verdict) => softenForOnsite(softenForTimezone(verdict));
+  const soften = (verdict) => {
+    if (unmatchedInvitation && verdict.eligible)
+      return E("possible", `Posting names other hiring locations — confirm your country is accepted`);
+    if (sig._degraded && verdict.eligible)
+      return E("possible", "Eligibility not yet verified for this listing — posting details are missing");
+    return softenForOnsite(softenForTimezone(verdict));
+  };
 
   // 0. Verified US-residency-gated recruiting funnel — see comment at
   // US_RESIDENCY_GATED_COMPANIES above. The gate lives in the application
@@ -1797,6 +1807,17 @@ export function checkEligibility(job, country) {
   if ((loc.match(/[^\x00-\x7F]/g) || []).length > 3)
     return E("excluded", "Region-specific (non-Latin location)", false);
 
+  // Explicit candidate requirements outrank board-provided worldwide tags
+  // and a matching city in the title. A country-scoped invitation is never
+  // evidence of worldwide hiring.
+  const scopes = sig.hiringScopes || [];
+  const incompatibleScope = scopes.find((scope) => scope.required && !scopeAllows(scope.targets, country));
+  if (incompatibleScope)
+    return E("excluded", `Hiring location requirement: "${incompatibleScope.evidence}"`, false);
+  const matchingScope = scopes.find((scope) => scopeAllows(scope.targets, country));
+  const matchesScope = !!matchingScope;
+  const unmatchedInvitation = scopes.length > 0 && !matchesScope;
+
   // 1d. A place named in the TITLE overrides any generic "Anywhere" tag — but
   // WHOSE place it is decides the direction.
   //
@@ -1809,8 +1830,7 @@ export function checkEligibility(job, country) {
   const ownGeo = country === "africa" ? AFRICA_TERMS
     : REGION_POSITIVE[country] || COUNTRY_TERMS[country] || [];
   const ownHit = ownGeo.find((t) => hasPhrase(title, t));
-  if (ownHit) return soften(E("certain", `Title names your location ("${ownHit}")`));
-  if (hasAny(title, FOREIGN_GEO)) return E("excluded", "Title names a specific location", false);
+  if (!ownHit && hasAny(title, FOREIGN_GEO)) return E("excluded", "Title names a specific location", false);
   // Bracketed ISO code in the title — "Online Data Analyst - Bengali (IN)".
   // Runs on job.title RAW, because the uppercase requirement is what stops
   // "(in)" in ordinary prose from matching. Boards that use this convention
@@ -1840,8 +1860,11 @@ export function checkEligibility(job, country) {
     return E("excluded", `Body ties the role to ${tiedCountry}`, false);
   }
 
+  // Do not let a matching title bypass restrictions stated in the body.
+  if (ownHit) return soften(E("certain", `Title names your location ("${ownHit}")`));
+
   // 2. Explicit target in LOCATION field → certain.
-  const locField = ` ${loc} ${region} `;
+  const locField = ` ${loc} `;
   if (country === "africa") {
     if (hasAny(locField, AFRICA_TERMS)) return soften(E("certain", "Location mentions Africa"));
   } else if (REGION_POSITIVE[country]) {
@@ -1875,6 +1898,9 @@ export function checkEligibility(job, country) {
   // signal to weigh it against, so it excludes.
   if (sig.onsiteRequired)
     return E("excluded", `Remote listing, but the role requires physical presence ("${sig.onsiteRequired}")`, false);
+
+  if (matchesScope)
+    return soften(E("certain", `Hiring location matches your country — "${matchingScope.evidence}"`));
 
   // Bare "Remote": read description for positive signal or country tie.
   // A strong worldwide phrase in the body ("work from anywhere", "open to
@@ -2006,18 +2032,12 @@ export function scoreJobLocally(job, intent) {
   let eligibility = { eligible: true, confidence: "possible", reason: "" };
   if (intent.locationCountry) {
     eligibility = checkEligibility(job, intent.locationCountry);
-  } else if (intent.remoteOnly) {
-    const all = ` ${(job.location || "").toLowerCase()} ${desc} `;
-    if (isUsResidencyGatedCompany(job.company)) eligibility = { eligible: false, confidence: "excluded", reason: "Application requires US residency (verified)" };
-    else if (hasAny(all, HARD_EXCLUSIONS)) eligibility = { eligible: false, confidence: "excluded", reason: "Geographically restricted" };
-    else if (job.remote || hasPhrase(all, "remote")) eligibility = { eligible: true, confidence: "likely", reason: "Remote role" };
-    else eligibility = genericEligibility(job, title, desc);
   } else {
-    // NO country, NO remote in the query (e.g. a guest typing "copywriting
-    // jobs for me"). This path previously did ZERO checking — a Stripe·US
-    // on-site job sailed through as Conditional. Never skip eligibility:
-    // the default audience is Africa-first.
+    // Without the user's country, remote is a working arrangement, not an
+    // eligibility decision. Do not label guests "likely eligible".
     eligibility = genericEligibility(job, title, desc);
+    if (eligibility.eligible)
+      eligibility = { eligible: true, confidence: "possible", reason: "Set your country in You → to check location eligibility" };
   }
 
   // STEP 1b: REMOTE ENFORCEMENT — "remote X open to Nigeria" must not surface

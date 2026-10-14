@@ -126,8 +126,8 @@ export default function Briefing({ shared, active }) {
       <h1>Good {daypart()}, {name}</h1>
       <p className="sub">
         {matches === null ? "Checking for new matches…" :
-         feedSource === "profile" ? `Latest eligible matches for your preferred roles: ${feedLabel}` :
-         feedSource === "search" ? `Latest eligible matches for “${feedLabel}”` :
+         feedSource === "profile" ? `Latest matches for your preferred roles: ${feedLabel}` :
+         feedSource === "search" ? `Latest matches for “${feedLabel}”` :
          "Set your preferred roles in You (or run one search) and your briefing comes alive."}
       </p>
 
@@ -151,7 +151,7 @@ export default function Briefing({ shared, active }) {
       <div className="block">
         <div className="block-head">
           <h2>New for you</h2>
-          {total > 0 && <span className="bcount">top 5 of {total} eligible</span>}
+          {total > 0 && <span className="bcount">top 5 of {total} matches</span>}
         </div>
         {matches === null && <div className="thinking"><span /><span /><span /></div>}
         {matches?.length === 0 && (
@@ -207,7 +207,7 @@ export default function Briefing({ shared, active }) {
           <div className="insight-card">
             <div className="i-eyebrow">One insight</div>
             <p>
-              Right now there are <b>{total}</b> live roles you're verified eligible for on this feed alone.
+              Right now there are <b>{total}</b> matches, including roles with unconfirmed eligibility on this feed alone.
               Candidates who apply within 48 hours of a posting get the majority of replies — check this page daily.
             </p>
           </div>

@@ -18,7 +18,7 @@
  * hallucination can resurrect a role the engine deliberately excluded.
  */
 
-import { checkEligibility, applyInference, INFER_VERSION } from "../api/roleIntelligence.js";
+import { checkEligibility, applyInference, INFER_VERSION, SIGNALS_VERSION } from "../api/roleIntelligence.js";
 
 let pass = 0, fail = 0;
 const t = (name, cond, detail) => {
@@ -26,7 +26,7 @@ const t = (name, cond, detail) => {
   console.log(`  ${cond ? "✅" : "❌"} ${name}`);
   if (!cond && detail) console.log(`       ${detail}`);
 };
-const J = (title, location, description = "") =>
+const J = (title, location, description = "Analyse data and build reports.") =>
   ({ title, location, description, company: "acme", elig_signals: null });
 const verdict = (job, country) => checkEligibility(job, country);
 const I = (o) => ({ v: INFER_VERSION, countries: [], regions: [], evidence: "stated in the posting", confidence: "high", ...o });
@@ -84,7 +84,7 @@ t("APAC does not",                !applyInference(I({ scope:"region", regions:["
 
 console.log("\n🔒 PRECEDENCE — the engine always wins (the safety property)");
 const withInfer = (extra) => ({ title:"Analyst", location:"Remote", description:"",
-  elig_signals: { v: 2, infer: I({ scope:"worldwide" }), ...extra } });
+  elig_signals: { v: SIGNALS_VERSION, infer: I({ scope:"worldwide" }), ...extra } });
 t("hard exclusion beats an inferred 'worldwide'",  !checkEligibility(withInfer({ hardExclusion:"us citizens only" }), "nigeria").eligible);
 t("a country tie beats it",                        !checkEligibility(withInfer({ tiedCountries:["germany"] }), "nigeria").eligible);
 t("an onsite requirement beats it",                !checkEligibility(withInfer({ onsiteRequired:"hybrid work" }), "nigeria").eligible);
