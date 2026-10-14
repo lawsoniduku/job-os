@@ -622,8 +622,8 @@ function ResultsBlock({ m, isLatest, onLoadMore, onTailor, onReport, user, busy 
       ) : (
         <div className="scan-card" role="group" aria-label="Eligibility scan">
           <div className="scan-item" aria-label={`${m.scanned.toLocaleString()} listings scanned`}><div className="num" aria-hidden="true">{m.scanned.toLocaleString()}</div><div className="lbl">listings scanned across all role names</div></div>
-          <div className="scan-item excluded" aria-label={`${m.excluded.toLocaleString()} excluded — region-locked or restricted`}><div className="num" aria-hidden="true">{m.excluded.toLocaleString()}</div><div className="lbl">excluded — region-locked or restricted</div></div>
-          <div className="scan-item eligible" aria-label={`${m.total.toLocaleString()} roles you are actually eligible for`}><div className="num" aria-hidden="true">{m.total.toLocaleString()}</div><div className="lbl">you are actually eligible for</div></div>
+          <div className="scan-item excluded" aria-label={`${m.excluded.toLocaleString()} excluded — eligibility or role mismatch`}><div className="num" aria-hidden="true">{m.excluded.toLocaleString()}</div><div className="lbl">excluded — eligibility or role mismatch</div></div>
+          <div className="scan-item eligible" aria-label={`${m.total.toLocaleString()} matches, including unconfirmed eligibility`}><div className="num" aria-hidden="true">{m.total.toLocaleString()}</div><div className="lbl">matches — check eligibility below</div></div>
         </div>
       )}
 
@@ -639,7 +639,7 @@ function ResultsBlock({ m, isLatest, onLoadMore, onTailor, onReport, user, busy 
 
       {m.total === 0 && (
         <div className="ai-text" style={{ marginTop: 10 }}>
-          No eligible roles match those filters right now. Loosen a constraint — new listings arrive daily.
+          No roles match those filters right now. Loosen a constraint — new listings arrive daily.
         </div>
       )}
 

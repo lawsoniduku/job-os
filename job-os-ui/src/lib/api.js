@@ -101,11 +101,7 @@ export function aiInterviewCoach({ jobId, cvText, mode = "questions" }) {
 }
 
 /* ── Shared helpers (unchanged) ────────────────────────────── */
-export function verdictOf(job) {
-  const c = job?.eligibility?.confidence;
-  if (c === "possible") return { key: "conditional", label: "Conditional" };
-  return { key: "eligible", label: "Eligible" };
-}
+export { verdictOf } from "./eligibility.js";
 
 export function fmtSalary(min, max) {
   if (!min && !max) return null;
