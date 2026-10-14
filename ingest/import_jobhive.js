@@ -53,6 +53,7 @@
  */
 
 import dotenv from "dotenv";
+import { createJobhiveWriter } from "./core/jobhiveWriter.js";
 import { createClient } from "@supabase/supabase-js";
 import { parse } from "csv-parse";
 import { Readable } from "node:stream";
@@ -60,10 +61,9 @@ import { normalizeJob } from "./core/normalize.js";
 import { tagJob } from "./core/tag.js";
 import { looksEnglishJob } from "./core/language.js";
 import { canonicalUrl, contentKey } from "./core/dedup.js";
+import { rowToRaw, fastReject, JOBHIVE_KEEP_REGIONS as KEEP_REGIONS } from "./core/jobhive.js";
 
 dotenv.config();
-
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
 // ── config ────────────────────────────────────────────────────
 const BASE = "https://storage.stapply.ai/jobhive/v1";
@@ -74,12 +74,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // Which eligibility regions we KEEP. A Nigerian candidate can pursue explicitly
 // African roles, globally-open remote, and generic remote. Everything else
 // (US-only, EU-only, in-office elsewhere) is dropped.
-const KEEP_REGIONS = new Set(["Africa", "Nigeria", "Global", "Remote"]);
+// Shared with offline tests; includes EMEA, which the search engine accepts for Africa.
 
 // ── args ──────────────────────────────────────────────────────
 const args = process.argv.slice(2);
 const ats = args[0];
 const dryRun = args.includes("--dry-run");
+const supabase = dryRun ? null : createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 const limitIdx = args.indexOf("--limit");
 const keepLimit = limitIdx > -1 ? parseInt(args[limitIdx + 1], 10) : Infinity;
 // One-off repair mode: overwrite existing rows (matched by apply_url) instead
@@ -88,6 +89,7 @@ const keepLimit = limitIdx > -1 ? parseInt(args[limitIdx + 1], 10) : Infinity;
 // in our DB — so fixing already-imported rows requires re-reading the source
 // and actually updating, not just re-classifying what's already stored.
 const repairMode = args.includes("--repair-regions");
+const upsertBatch = createJobhiveWriter(supabase, { dryRun, repairMode, sleep });
 
 if (!ats || ats.startsWith("--")) {
   console.error("Usage: node --env-file=.env ingest/import_jobhive.js <ats> [--limit N] [--dry-run]");
@@ -112,136 +114,6 @@ if (BANNED.has(ats)) {
   console.error(`\n⛔ "${ats}" is deliberately excluded — its apply links are paywalled.`);
   console.error(`   We removed this source on purpose. Not importing.\n`);
   process.exit(1);
-}
-
-// Map a jobhive CSV record (an object keyed by lowercased header, from
-// csv-parse with columns:true) into the shape normalizeJob expects.
-//
-// A real CSV parser (not line-splitting) is required here: job descriptions
-// routinely contain literal embedded newlines inside quoted fields. Splitting
-// on "\n" (as a naive readline-based approach does) breaks those rows into
-// garbage fragments, which then land in the wrong columns — this is exactly
-// what caused "invalid input syntax for type numeric" errors on Recruitee's
-// richer multi-paragraph descriptions (e.g. a fragment like "Texas" or a
-// paragraph of description text ending up where salary_min was expected).
-function rowToRaw(record) {
-  const g = (name) => (record[name] || "").trim();
-  // REAL jobhive v2.0 schema (from manifest stats.schema_columns):
-  //   url, title, company, ats_type, ats_id, location, is_remote, salary_min,
-  //   salary_max, salary_currency, salary_period, salary_summary,
-  //   employment_type, department, team, description, posted_at,
-  //   requisition_id, apply_url, commitment, raw, country_iso
-  return {
-    title: g("title"),
-    company: g("company"),
-    location: g("location"),
-    description: g("description"),
-    // apply_url is the employer's real link; url is jobhive's canonical. Prefer apply_url.
-    apply_url: g("apply_url") || g("url"),
-    posted_at: g("posted_at"),
-    created_at: g("posted_at"),
-    employment_type: g("employment_type") || g("commitment") || null,
-    department: g("department") || null,
-    salary_min: g("salary_min") || null,
-    salary_max: g("salary_max") || null,
-    isRemote: /^(true|1|yes)$/i.test(g("is_remote")),
-    _country_iso: g("country_iso").toUpperCase(),
-  };
-}
-
-// African ISO-3166 alpha-2 codes — a job physically located in one of these is
-// inherently reachable for our users.
-const AFRICAN_ISO = new Set([
-  "NG","GH","KE","ZA","EG","MA","TZ","UG","RW","ET","SN","CI","CM","DZ","TN",
-  "ZM","ZW","BW","NA","MZ","AO","MU","MW","LY","SD","SS","BJ","BF","ML","NE",
-  "TD","SO","SL","LR","TG","GA","GN","GM","GW","CV","CG","CD","CF","DJ","ER",
-  "SZ","LS","MG","KM","ST","SC","MR","BI",
-]);
-
-/**
- * Cheap pre-filter before the expensive normalize+tag step. Streaming 726K rows
- * means we want to reject the obvious bulk (in-office roles in the US/EU/Asia)
- * without running the full classifier on each one.
- *
- * Deliberately conservative: we only fast-reject when a job has a CONCRETE
- * non-African country AND is not flagged remote. Anything remote, or with no
- * country at all, still goes through the real eligibility engine — because
- * "Remote, country_iso=US" might be genuinely global, and only
- * detectEligibilityRegion can judge that from the text.
- */
-function fastReject(raw) {
-  const iso = raw._country_iso;
-  if (!iso) return false;                    // unknown country -> let the engine decide
-  if (AFRICAN_ISO.has(iso)) return false;    // African -> always evaluate
-  if (raw.isRemote) return false;            // remote anywhere -> might be global
-  return true;                                // concrete foreign + on-site -> drop
-}
-
-// Postgres/PostgREST error messages that mean "this DATA is malformed" —
-// retrying the exact same batch will fail identically every time. Better to
-// isolate which single row is bad and skip just that one, keeping the rest
-// of the batch instead of losing it all to one problem row.
-const DATA_ERROR_PATTERNS = [
-  "invalid input syntax", "violates not-null constraint", "violates check constraint",
-  "value too long", "invalid byte sequence", "violates foreign key constraint",
-];
-function isDataError(message = "") {
-  const m = message.toLowerCase();
-  return DATA_ERROR_PATTERNS.some((p) => m.includes(p));
-}
-
-// Insert exactly one row, swallowing (and logging) a data error rather than
-// letting one malformed row block its neighbors. Used only as a fallback
-// when a whole batch fails with a clear data/schema error, not for normal
-// transient network retries.
-async function upsertOneRow(row) {
-  try {
-    const { error } = await supabase
-      .from("jobs")
-      .upsert([row], { onConflict: "apply_url", ignoreDuplicates: !repairMode });
-    if (error) throw new Error(error.message);
-    return true;
-  } catch (e) {
-    console.log(`  ❌ dropped one malformed row ("${(row.title || "?").slice(0, 40)}"): ${e.message.slice(0, 100)}`);
-    return false;
-  }
-}
-
-async function upsertBatch(batch, attempt = 1) {
-  if (dryRun || batch.length === 0) return true;
-  try {
-    const { error } = await supabase
-      .from("jobs")
-      // repairMode=false (normal imports): ignoreDuplicates=true — never touch
-      //   a row we already have, just add genuinely new ones. Safe, cheap.
-      // repairMode=true (one-off fix): ignoreDuplicates=false — a REAL upsert,
-      //   overwriting existing rows with freshly computed values (including
-      //   the now-correct eligibility_region). This is what actually fixes
-      //   historical rows; simply re-running a normal import does nothing to
-      //   them because ignoreDuplicates:true silently skips existing apply_urls.
-      .upsert(batch, { onConflict: "apply_url", ignoreDuplicates: !repairMode });
-    if (error) throw new Error(error.message);
-    return true;
-  } catch (e) {
-    if (isDataError(e.message) && batch.length > 1) {
-      // Don't burn retries on data that will never become valid. Isolate:
-      // insert one row at a time so only the actually-bad row(s) get
-      // dropped, instead of losing the whole batch to one problem row.
-      console.log(`  ⚠️  Batch has malformed data (${e.message.slice(0, 80)}) — isolating row-by-row...`);
-      let anyOk = false;
-      for (const row of batch) {
-        const ok = await upsertOneRow(row);
-        if (ok) anyOk = true;
-      }
-      return anyOk;
-    }
-    // More attempts + longer backoff — the CSV download competing for the
-    // same connection's bandwidth is the usual cause of transient failures,
-    // not a real Supabase problem.
-    if (attempt < 5) { await sleep(2000 * attempt); return upsertBatch(batch, attempt + 1); }
-    console.log(`  ❌ batch failed after ${attempt} tries: ${e.message}`);
-    return false;
-  }
 }
 
 async function run() {
@@ -273,7 +145,13 @@ async function run() {
   const sourceStream = Readable.fromWeb(res.body);
   const parser = sourceStream.pipe(
     parse({
-      columns: (hdr) => hdr.map((h) => h.trim().toLowerCase()),
+      bom: true,
+      columns: (hdr) => {
+        const columns = hdr.map((h) => h.trim().toLowerCase());
+        if (!columns.includes("title") || !(columns.includes("url") || columns.includes("apply_url")))
+          throw new Error("JobHive CSV schema missing title or application URL columns");
+        return columns;
+      },
       skip_empty_lines: true,
       relax_column_count: true,
       relax_quotes: true,
@@ -281,13 +159,14 @@ async function run() {
   );
   sourceStream.on("error", (err) => parser.destroy(err));
 
-  let scanned = 0, keptEligible = 0, notEnglish = 0, wrongRegion = 0, kept = 0, upserted = 0, failed = 0, fastRejected = 0, duplicate = 0;
+  let scanned = 0, notEnglish = 0, wrongRegion = 0, kept = 0, upserted = 0, failed = 0, fastRejected = 0, duplicate = 0;
   const failedRows = []; // rows that failed mid-stream, retried once more after stream ends
   let batch = [];
   const keptUrls = []; // every apply_url kept this run, new AND already-existing —
   // powers the last_seen_at touch pass below, since ignoreDuplicates:true means
   // the upsert itself never refreshes last_seen_at on rows we've already seen.
   const regionTally = {};
+  const keptRegionTally = {};
 
   // De-dup within this run. The SAME role is often posted many times under
   // different req IDs/apply URLs by the same company — bulk ATS exports are
@@ -306,7 +185,7 @@ async function run() {
     for await (const record of parser) {
       scanned++;
       if (scanned % 25000 === 0) {
-        process.stdout.write(`  …scanned ${scanned} · kept ${kept} (eligible & English)\n`);
+        process.stdout.write(`  …scanned ${scanned} · kept ${kept} candidates (English + region filter)\n`);
       }
 
       const raw = rowToRaw(record);
@@ -350,7 +229,7 @@ async function run() {
       seenUrls.add(dedupUrl);
       seenContent.add(dedupKey);
 
-      keptEligible++;
+      keptRegionTally[job.eligibility_region] = (keptRegionTally[job.eligibility_region] || 0) + 1;
       kept++;
       // Strip _region_hint before it reaches the DB — it's internal metadata
       // for detectEligibilityRegion(), not a real "jobs" table column. Same
@@ -367,7 +246,8 @@ async function run() {
 
       if (batch.length >= BATCH) {
         const ok = await upsertBatch(batch);
-        if (ok) upserted += batch.length; else failedRows.push(...batch);
+        upserted += ok.accepted;
+        failedRows.push(...ok.failedRows);
         batch = [];
         await sleep(SLEEP_MS);
       }
@@ -386,7 +266,8 @@ async function run() {
 
   if (batch.length) {
     const ok = await upsertBatch(batch);
-    if (ok) upserted += batch.length; else failedRows.push(...batch);
+    upserted += ok.accepted;
+    failedRows.push(...ok.failedRows);
   }
 
   // FINAL RETRY PASS: once the download is fully done, the connection is no
@@ -397,8 +278,8 @@ async function run() {
     for (let i = 0; i < failedRows.length; i += BATCH) {
       const slice = failedRows.slice(i, i + BATCH);
       const ok = await upsertBatch(slice);
-      if (ok) { upserted += slice.length; }
-      else { failed += slice.length; }
+      upserted += ok.accepted;
+      failed += ok.failedRows.length;
       await sleep(SLEEP_MS);
     }
   }
@@ -409,7 +290,7 @@ async function run() {
   // upsert above uses ignoreDuplicates:true, so it silently no-ops on conflict),
   // meaning it silently ages out of the search freshness gate ~28 days after
   // it was FIRST imported, even though it's still actually open.
-  let touched = 0;
+  let touched = 0, touchFailed = 0;
   if (!dryRun) {
     const nowIso = new Date().toISOString();
     for (let i = 0; i < keptUrls.length; i += BATCH) {
@@ -417,7 +298,8 @@ async function run() {
       try {
         const { error } = await supabase.from("jobs").update({ last_seen_at: nowIso }).in("apply_url", slice);
         if (!error) touched += slice.length;
-      } catch { /* non-fatal: next run touches it instead */ }
+        else { touchFailed += slice.length; console.error(`  ❌ freshness update failed: ${error.message}`); }
+      } catch (e) { touchFailed += slice.length; console.error(`  ❌ freshness update failed: ${e.message}`); }
       await sleep(SLEEP_MS);
     }
   }
@@ -428,12 +310,13 @@ async function run() {
   console.log(`   dropped (lang): ${notEnglish}`);
   console.log(`   dropped (region): ${wrongRegion}`);
   console.log(`   dropped (duplicate): ${duplicate}`);
-  console.log(`   KEPT eligible:  ${kept}`);
-  console.log(`   region split of kept:`, Object.fromEntries(Object.entries(regionTally).filter(([k]) => KEEP_REGIONS.has(k))));
+  console.log(`   KEPT candidates: ${kept}`);
+  console.log(`   region split before dedup:`, regionTally);
+  console.log(`   region split of kept:`, keptRegionTally);
   if (dryRun) console.log(`   (dry run — nothing written)`);
-  else console.log(`   ✅ upserted: ${upserted} | ❌ failed: ${failed} | 🕒 last_seen refreshed: ${touched}`);
+  else console.log(`   ✅ write requests accepted (includes existing rows): ${upserted} | ❌ failed: ${failed} | 🕒 freshness update requests accepted: ${touched} | freshness failures: ${touchFailed}`);
   console.log(`\n   ⚠️  Check Supabase DB size before importing a larger slice.\n`);
-  if (streamError) process.exitCode = 1;
+  if (streamError || failed > 0 || touchFailed > 0) process.exitCode = 1;
 }
 
 run().catch((e) => { console.error(e); process.exit(1); });
