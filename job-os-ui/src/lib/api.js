@@ -68,8 +68,8 @@ export function aiSearch({ q, country, limit = 10, offset = 0 }) {
   return call(`/ai/search?${p}`, { timeoutMs: 60000 });
 }
 
-export function aiRefine({ refinement, activeIntent }) {
-  return call(`/ai/refine`, { method: "POST", body: { refinement, activeIntent }, timeoutMs: 45000 });
+export function aiRefine({ refinement, activeIntent, limit = 20, offset = 0 }) {
+  return call(`/ai/refine`, { method: "POST", body: { refinement, activeIntent, limit, offset }, timeoutMs: 45000 });
 }
 
 export function aiClarify({ q, hasCountry = false }) {

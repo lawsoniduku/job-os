@@ -31,6 +31,7 @@ import {
 import { looksEnglish, looksEnglishJob } from "./core/language.js";
 import { dedupe } from "./core/dedup.js";
 import { tagJob } from "./core/tag.js";
+import { createJobhiveWriter } from "./core/jobhiveWriter.js";
 
 dotenv.config();
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
@@ -56,8 +57,15 @@ async function run() {
     fetchTeamtailor(),
     fetchBreezy(),
   ]);
-  let jobs = [];
-  for (const s of settled) if (s.status === "fulfilled") jobs.push(...s.value);
+  const sourceNames = ["greenhouse", "lever", "ashby", "workable", "smartrecruiters", "remotive", "himalayas", "jobicy", "arbeitnow", "myjobmag", "weworkremotely", "jobspresso", "teamtailor", "breezy"];
+  let jobs = [], sourceFailures = 0;
+  settled.forEach((result, index) => {
+    if (result.status === "fulfilled") jobs.push(...result.value);
+    else {
+      sourceFailures++;
+      console.error(`❌ ${sourceNames[index]} fetch failed: ${result.reason?.message || result.reason}`);
+    }
+  });
   console.log(`\n📦 RAW (normalized): ${jobs.length}`);
 
   // 2. LANGUAGE FILTER (kills non-English postings at the source)
@@ -79,37 +87,23 @@ async function run() {
   const reachable = africaCount + globalCount + remoteCount;
   console.log(`🏷  Tagged. Africa/Nigeria: ${africaCount} | Global: ${globalCount} | Remote: ${remoteCount} | → Reachable: ${reachable}`);
 
-  // 5. UPSERT — resilient: small delay between batches + one retry on failure,
-  // so a single transient "fetch failed" doesn't lose the whole run (important
-  // now that volume is in the thousands).
+  // Use the same bounded retries and malformed-row isolation as JobHive.
   const BATCH = 50;
   let ok = 0, fail = 0;
+  const acceptedUrls = [];
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-  async function upsertBatch(batch, attempt = 1) {
-    try {
-      const { error } = await supabase
-        .from("jobs")
-        .upsert(batch, { onConflict: "apply_url", ignoreDuplicates: true });
-      if (error) throw new Error(error.message);
-      return true;
-    } catch (e) {
-      if (attempt < 3) {
-        await sleep(1500 * attempt); // back off: 1.5s, then 3s
-        return upsertBatch(batch, attempt + 1);
-      }
-      console.log(`❌ batch failed after ${attempt} tries: ${e.message}`);
-      return false;
-    }
-  }
+  const upsertBatch = createJobhiveWriter(supabase);
 
   for (let i = 0; i < jobs.length; i += BATCH) {
     const batch = jobs.slice(i, i + BATCH).map(({ _region_hint, ...row }) => row);
-    const success = await upsertBatch(batch);
-    if (success) ok += batch.length; else fail += batch.length;
+    const result = await upsertBatch(batch);
+    ok += result.accepted;
+    fail += result.failedRows.length;
+    const failedUrls = new Set(result.failedRows.map((j) => j.apply_url));
+    acceptedUrls.push(...batch.filter((j) => !failedUrls.has(j.apply_url)).map((j) => j.apply_url));
     await sleep(150); // gentle pacing so we don't overwhelm the connection
   }
-  console.log(`\n✅ UPSERTED: ${ok} | ❌ FAILED: ${fail}`);
+  console.log(`\n✅ ACCEPTED (including existing): ${ok} | ❌ FAILED: ${fail}`);
 
   // 6. TOUCH last_seen_at for EVERY job seen this run (new or existing).
   // The upsert above ignores duplicates, so it never refreshes existing rows.
@@ -118,8 +112,8 @@ async function run() {
   // are never overwritten). This powers the nightly stale-job prune: jobs that
   // stop appearing in feeds stop being touched, and age out after 60 days.
   const nowIso = new Date().toISOString();
-  const urls = jobs.map((j) => j.apply_url).filter(Boolean);
-  let touched = 0;
+  const urls = [...new Set(acceptedUrls.filter(Boolean))];
+  let touched = 0, touchFailures = 0;
   for (let i = 0; i < urls.length; i += BATCH) {
     const slice = urls.slice(i, i + BATCH);
     try {
@@ -127,11 +121,22 @@ async function run() {
         .from("jobs")
         .update({ last_seen_at: nowIso })
         .in("apply_url", slice);
-      if (!error) touched += slice.length;
-    } catch { /* non-fatal: prune just waits another cycle */ }
+      if (error) throw new Error(error.message);
+      touched += slice.length;
+    } catch (error) {
+      touchFailures += slice.length;
+      console.error(`❌ Freshness update failed for ${slice.length} candidates: ${error.message}`);
+    }
     await sleep(120);
   }
-  console.log(`🕒 last_seen refreshed: ${touched}\n`);
+  console.log(`🕒 last_seen refresh accepted: ${touched} | failed: ${touchFailures}\n`);
+  if (sourceFailures || fail || touchFailures) {
+    console.error(`Incomplete ingestion: ${sourceFailures} source failures, ${fail} failed rows, ${touchFailures} failed freshness updates`);
+    process.exitCode = 1;
+  }
 }
 
-run();
+run().catch((error) => {
+  console.error("Ingestion failed:", error.message);
+  process.exitCode = 1;
+});

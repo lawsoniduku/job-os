@@ -211,7 +211,7 @@ export default function Copilot({ shared, active, initialQuery, onInitialConsume
     try {
       const res = await aiSearch({ q, country: profile?.country || undefined, limit: 10 });
 
-      if (res.total === 0 && !res.intent?.cluster) {
+      if (res.total === 0 && !res.intent?.cluster && !res.intent?.keywords?.length) {
         await runChat(q);
         return;
       }
@@ -242,6 +242,8 @@ export default function Copilot({ shared, active, initialQuery, onInitialConsume
         offset: (res.data || []).length,
         hasMore: !!res.has_more,
         activeFilters: {},
+        searchIntent: res.intent,
+        duplicates: res.duplicate_count || 0,
       }, (next) => persistThread(next, q, res.intent));
     } catch (err) {
       push({ role: "ai", kind: "text", text: `Search failed: ${err.message}. If Render is cold-starting, wait ~30s and try again.` });
@@ -260,23 +262,27 @@ export default function Copilot({ shared, active, initialQuery, onInitialConsume
         return;
       }
 
+      activeIntent.current = res.intent || activeIntent.current;
+      setIntentState(activeIntent.current);
+
       // Push the refined results as a NEW block below the confirmation, so the
       // conversation reads top-to-bottom: "you refined" -> "here are the results".
       // (Mutating the old block above the message left users staring at a
       //  "22 roles match" line with no visible cards — the classic bug.)
       setMessages((prev) => {
-        const prevResult = [...prev].reverse().find((mm) => mm.kind === "results");
         const newBlock = {
           role: "ai", kind: "results",
           query: lastQuery.current,
           cluster: null,          // no taxonomy card on a refinement
           variants: [],
           total: res.total,
-          excluded: prevResult ? prevResult.excluded : 0,
-          scanned: prevResult ? prevResult.scanned : res.total,
+          excluded: res.excluded_count || 0,
+          scanned: res.evaluated || 0,
+          duplicates: res.duplicate_count || 0,
+          searchIntent: res.intent,
           jobs: res.data || [],
           offset: (res.data || []).length,
-          hasMore: false,
+          hasMore: !!res.has_more,
           activeFilters: res.filters || {},
           refinedNote: res.description,
         };
@@ -313,7 +319,9 @@ export default function Copilot({ shared, active, initialQuery, onInitialConsume
     if (!lastResult || busy) return;
     setBusy(true);
     try {
-      const res = await aiSearch({
+      const res = lastResult.refinedNote
+        ? await aiRefine({ refinement: "", activeIntent: lastResult.searchIntent, limit: 10, offset: lastResult.offset })
+        : await aiSearch({
         q: lastResult.query,
         country: profile?.country || undefined,
         limit: 10,
@@ -451,7 +459,7 @@ export default function Copilot({ shared, active, initialQuery, onInitialConsume
           {empty && threadLoaded && (
             <div className="empty-state">
               <h1>Every job you see here,<br />you can actually get.</h1>
-              <p>Tell me what you're looking for. I verify eligibility — location rules, region locks, sponsorship — before you see a single listing.</p>
+              <p>Tell me what you're looking for. I match roles and check location restrictions in the listing. Each result shows how certain its eligibility is.</p>
               <div className="prompts">
                 {SUGGESTIONS.map((s) => (
                   <button key={s} className="prompt-chip" onClick={() => { push({ role: "user", text: s }); dispatch(s); }}>
@@ -592,7 +600,7 @@ function TaxonomyCard({ cluster, variants }) {
         )}
       </div>
       <div className="taxonomy-foot">
-        A title-only search misses most of these — the engine matches the <b>role</b>, not the wording.
+        Related job titles are included. Each listing must match the requested role before it appears.
         {open && <button className="tx-collapse" onClick={() => setOpen(false)}>Collapse</button>}
       </div>
     </div>
@@ -608,7 +616,7 @@ function ResultsBlock({ m, isLatest, onLoadMore, onTailor, onReport, user, busy 
       {m.cluster && m.variants.length > 1 && (
         <>
           <div className="ai-text">
-            <b>{m.cluster}</b> gets posted under {m.variants.length} different names — I searched all of them:
+            Searching <b>{m.cluster}</b> and these related titles:
           </div>
           <TaxonomyCard cluster={m.cluster} variants={m.variants} />
         </>
@@ -621,11 +629,13 @@ function ResultsBlock({ m, isLatest, onLoadMore, onTailor, onReport, user, busy 
         </div>
       ) : (
         <div className="scan-card" role="group" aria-label="Eligibility scan">
-          <div className="scan-item" aria-label={`${m.scanned.toLocaleString()} listings scanned`}><div className="num" aria-hidden="true">{m.scanned.toLocaleString()}</div><div className="lbl">listings scanned across all role names</div></div>
+          <div className="scan-item" aria-label={`${m.scanned.toLocaleString()} listings scanned`}><div className="num" aria-hidden="true">{m.scanned.toLocaleString()}</div><div className="lbl">candidate listings checked</div></div>
           <div className="scan-item excluded" aria-label={`${m.excluded.toLocaleString()} excluded — eligibility or role mismatch`}><div className="num" aria-hidden="true">{m.excluded.toLocaleString()}</div><div className="lbl">excluded — eligibility or role mismatch</div></div>
           <div className="scan-item eligible" aria-label={`${m.total.toLocaleString()} matches, including unconfirmed eligibility`}><div className="num" aria-hidden="true">{m.total.toLocaleString()}</div><div className="lbl">matches — check eligibility below</div></div>
         </div>
       )}
+
+      {m.duplicates > 0 && <p className="ai-text">{m.duplicates} duplicate listing{m.duplicates === 1 ? "" : "s"} removed.</p>}
 
       {hasFilters && (
         <div className="filter-pills">
