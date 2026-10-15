@@ -1571,6 +1571,8 @@ export function applyInference(infer, country, isAfrican) {
 
   // Positive inferred verdicts cap at "likely", never "certain". Certainty is
   // reserved for something the posting stated outright and we matched literally.
+  if (infer.scope === "worldwide" && !hasAny(String(infer.evidence || "").toLowerCase(), WORLDWIDE_DESC_STRONG))
+    return { eligible: true, confidence: "possible", reason: "Remote — worldwide hiring is not stated" };
   if (infer.scope === "worldwide")
     return { eligible: true, confidence: "likely", reason: `Open worldwide — "${infer.evidence}"` };
 
@@ -1856,9 +1858,14 @@ export function checkEligibility(job, country) {
   const userTerms = COUNTRY_TERMS[country] || [];
   const tiedCountry = (sig.tiedCountries || [])
     .find((c) => !userTerms.some((t) => t === c) && country !== c) || null;
-  if (tiedCountry) {
+  if (tiedCountry && !matchesScope) {
     return E("excluded", `Body ties the role to ${tiedCountry}`, false);
   }
+
+  // An explicit applicant scope can list alternatives (UK, EMEA, or US).
+  // Office-address metadata must not narrow that stated hiring scope.
+  if (matchingScope?.required)
+    return soften(E("certain", `Hiring location matches your country — "${matchingScope.evidence}"`));
 
   // Do not let a matching title bypass restrictions stated in the body.
   if (ownHit) return soften(E("certain", `Title names your location ("${ownHit}")`));
@@ -2048,7 +2055,7 @@ export function scoreJobLocally(job, intent) {
     const hasRemoteSignal =
       job.remote === true ||
       hasAny(remoteField, ["remote", "work from home", "wfh", "work from anywhere", "fully distributed", "distributed team", "telecommute"]);
-    if (!hasRemoteSignal) {
+    if (/\b(on[- ]?site|hybrid)\b/i.test(job.title || "") || !hasRemoteSignal) {
       if (hasPhrase(remoteField, "hybrid")) {
         eligibility = {
           eligible: true, confidence: "possible",

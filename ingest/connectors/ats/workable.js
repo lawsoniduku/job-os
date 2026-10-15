@@ -15,10 +15,10 @@ import { runBatched } from "./greenhouse.js";
 
 const UA = { "User-Agent": "Mozilla/5.0 (compatible; job-copilot/3.1)", Accept: "application/json" };
 
-function loc(j) {
+export function loc(j) {
   const l = j.location || {};
-  if (l.telecommuting || j.telecommuting) return "Remote";
-  return [l.city, l.region, l.country].filter(Boolean).join(", ") || "";
+  const places = (j.locations?.length ? j.locations : [l]).map(p => [p.city, p.region, p.country].filter(Boolean).join(", ")).filter(Boolean).join("; ");
+  return places || (l.telecommuting || j.telecommuting ? "Remote" : "");
 }
 
 async function fetchBoard({ slug, name, region }) {
@@ -32,6 +32,7 @@ async function fetchBoard({ slug, name, region }) {
           title: j.title || j.name,
           company: name || j.company || res.data?.name,
           location: loc(j),
+          isRemote: !!(j.remote || j.telecommuting || j.location?.telecommuting),
           description: j.description || j.full_description || "",
           apply_url: j.application_url || j.url || j.shortlink,
           employment_type: j.employment_type || null,

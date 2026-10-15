@@ -43,6 +43,7 @@ export function extractHiringScopes(text, countryTerms) {
   // Deliberately candidate-focused. "Our headquarters are in Kenya" is not
   // an instruction that applicants must live there.
   const patterns = [
+    /\blocation\s*:\s*(?:fully\s+)?remote\s+(?:in|within|across)\s+([^.!?;\n]{1,180})/g,
     /\b(?:must|required to|need to)\s+(?:currently\s+)?(?:be\s+)?(?:based|located|resident|residing|reside|live|living)\s+in\s+([^.!?;\n]{1,180})/g,
     /\b(?:open to|hiring|accepting)\s+(?:(?:remote\s+)?(?:candidates|applicants|residents|people)\s+)?(?:who (?:are|live)\s+)?(?:(?:based|located|residing)\s+)?(?:in|from|across)\s+([^.!?;\n]{1,180})/g,
     /\bopen to\s+(nigeria|kenya|ghana|africa|emea|europe|canada|india|south africa)\b/g,
@@ -55,7 +56,7 @@ export function extractHiringScopes(text, countryTerms) {
       const targets = targetsIn(match[1], countryTerms);
       if (targets.length) scopes.push({
         targets,
-        required: /^(?:must|required to|need to)\b/.test(match[0]) || /\bonly\b/.test(match[0]),
+        required: /^(?:must|required to|need to|location)\b/.test(match[0]) || /\bonly\b/.test(match[0]),
         evidence: match[0],
       });
     }

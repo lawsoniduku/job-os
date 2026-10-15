@@ -77,7 +77,7 @@ t("medium tells the user to confirm", /worth confirming/.test(med.reason));
 t("high DOES exclude", applyInference(I({ scope:"country", countries:["united arab emirates"] }), "nigeria", true).eligible === false);
 
 console.log("\n✅ INFERENCE — positives cap at 'likely', never 'certain'");
-t("worldwide → likely",            applyInference(I({ scope:"worldwide" }), "nigeria", true).confidence === "likely");
+t("worldwide → likely",            applyInference(I({ scope:"worldwide", evidence:"Open to candidates worldwide" }), "nigeria", true).confidence === "likely");
 t("own country named → eligible",  applyInference(I({ scope:"country", countries:["nigeria"] }), "nigeria", true).eligible);
 t("EMEA reaches an African user",  applyInference(I({ scope:"region", regions:["emea"] }), "nigeria", true).eligible);
 t("APAC does not",                !applyInference(I({ scope:"region", regions:["apac"] }), "nigeria", true).eligible);

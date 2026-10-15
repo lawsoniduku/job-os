@@ -244,10 +244,11 @@ export default function Copilot({ shared, active, initialQuery, onInitialConsume
         activeFilters: {},
         searchIntent: res.intent,
         duplicates: res.duplicate_count || 0,
+        verificationPending: res.verification_pending || 0,
         sort: res.sort,
       }, (next) => persistThread(next, q, res.intent));
     } catch (err) {
-      push({ role: "ai", kind: "text", text: `Search failed: ${err.message}. If Render is cold-starting, wait ~30s and try again.` });
+      push({ role: "ai", kind: "text", text: `Search failed: ${err.message}. Please try again shortly.` });
     }
   }
 
@@ -280,6 +281,7 @@ export default function Copilot({ shared, active, initialQuery, onInitialConsume
           excluded: res.excluded_count || 0,
           scanned: res.evaluated || 0,
           duplicates: res.duplicate_count || 0,
+        verificationPending: res.verification_pending || 0,
           sort: res.sort,
           searchIntent: res.intent,
           jobs: res.data || [],
@@ -333,6 +335,8 @@ export default function Copilot({ shared, active, initialQuery, onInitialConsume
         ...m,
         jobs: dedupe([...m.jobs, ...(res.data || [])]),
         offset: m.offset + (res.data || []).length,
+        total: res.total,
+        verificationPending: res.verification_pending || 0,
         hasMore: !!res.has_more,
       }), true);
     } catch (err) {
@@ -460,7 +464,7 @@ export default function Copilot({ shared, active, initialQuery, onInitialConsume
         <div className="chat-wrap">
           {empty && threadLoaded && (
             <div className="empty-state">
-              <h1>Every job you see here,<br />you can actually get.</h1>
+              <h1>Find roles open<br />to your location.</h1>
               <p>Tell me what you're looking for. I match roles and check location restrictions in the listing. Each result shows how certain its eligibility is.</p>
               <div className="prompts">
                 {SUGGESTIONS.map((s) => (
@@ -632,12 +636,14 @@ function ResultsBlock({ m, isLatest, onLoadMore, onTailor, onReport, user, busy 
       ) : (
         <div className="scan-card" role="group" aria-label="Eligibility scan">
           <div className="scan-item" aria-label={`${m.scanned.toLocaleString()} listings scanned`}><div className="num" aria-hidden="true">{m.scanned.toLocaleString()}</div><div className="lbl">candidate listings checked</div></div>
-          <div className="scan-item excluded" aria-label={`${m.excluded.toLocaleString()} excluded — eligibility or role mismatch`}><div className="num" aria-hidden="true">{m.excluded.toLocaleString()}</div><div className="lbl">excluded — eligibility or role mismatch</div></div>
-          <div className="scan-item eligible" aria-label={`${m.total.toLocaleString()} matches, including unconfirmed eligibility`}><div className="num" aria-hidden="true">{m.total.toLocaleString()}</div><div className="lbl">matches — check eligibility below</div></div>
+          <div className="scan-item excluded" aria-label={`${m.excluded.toLocaleString()} not shown — role, eligibility or verification`}><div className="num" aria-hidden="true">{m.excluded.toLocaleString()}</div><div className="lbl">not shown — role, eligibility or verification</div></div>
+          <div className="scan-item eligible" aria-label={`${m.total.toLocaleString()} matches, with current posting checks`}><div className="num" aria-hidden="true">{m.total.toLocaleString()}</div><div className="lbl">matches — location checked</div></div>
         </div>
       )}
 
       {m.sort === "newest" && m.total > 0 && <p className="ai-text">Newest postings first · Listings without a posting date appear last.</p>}
+
+      {m.verificationPending > 0 && <p className="ai-text">{m.verificationPending} additional listings could not be verified yet and are not included. Results may grow as checks complete.</p>}
 
       {m.duplicates > 0 && <p className="ai-text">{m.duplicates} duplicate listing{m.duplicates === 1 ? "" : "s"} removed.</p>}
 

@@ -40,8 +40,8 @@ export default function Landing({ onStart, onSignIn, theme, toggleTheme }) {
       {/* ── Hero ─────────────────────────────────────────────── */}
       <section className="lp-hero">
         <div className="lp-hero-copy">
-          <h1>Only see jobs you can <span className="lp-accent">actually get.</span></h1>
-          <p className="lp-sub">No more region-locked listings. No more sponsorship surprises. Eligibility checked before you see anything.</p>
+          <h1>Find jobs open to <span className="lp-accent">your location.</span></h1>
+          <p className="lp-sub">Current postings checked against your location. Clear eligibility evidence before you spend time applying.</p>
           <div className="lp-cta-row">
             <button className="lp-btn-primary" onClick={go}>
               Find my jobs
@@ -101,7 +101,7 @@ export default function Landing({ onStart, onSignIn, theme, toggleTheme }) {
         <h2>Three steps. No forms.</h2>
         <div className="lp-steps">
           <div className="lp-step"><span className="lp-step-n">1</span><div><h3>Say it plainly</h3><p>"Remote product roles open to Ghana, over $50k."</p></div></div>
-          <div className="lp-step"><span className="lp-step-n">2</span><div><h3>It verifies eligibility</h3><p>Region locks, visas, sponsorship — checked before you see anything.</p></div></div>
+          <div className="lp-step"><span className="lp-step-n">2</span><div><h3>It checks the posting</h3><p>We check location restrictions and whether the posting is still available. Review the stated requirements before applying.</p></div></div>
           <div className="lp-step"><span className="lp-step-n">3</span><div><h3>Apply in minutes</h3><p>Tailored CV, ready-to-send PDF, tracked to offer.</p></div></div>
         </div>
       </section>
