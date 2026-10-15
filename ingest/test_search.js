@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseIntent, scoreJobLocally, extractEligibilitySignals, SIGNALS_VERSION } from "../api/roleIntelligence.js";
+import { parseIntent, scoreJobLocally, extractEligibilitySignals, SIGNALS_VERSION, getAliasesForCluster } from "../api/roleIntelligence.js";
 import { titlePattern, applyRoleQuery, fetchCandidates, rankCandidates, matchesFilters, compareSearchResults } from "../api/searchCandidates.js";
 
 const intent = parseIntent("virtual assistant jobs open to nigeria");
@@ -87,12 +87,14 @@ function fakeDatabase(rows) {
       or: (v) => { request.ors.push(v); return q; },
       filter: () => q,
       gt: (_, v) => { request.after = v; return q; },
+      gte: (_, v) => { request.lower = v; return q; },
+      lt: (_, v) => { request.upper = v; return q; },
       order: () => q,
       limit: (v) => { request.limit = v; return q; },
       in: (_, ids) => { request.ids = ids; return q; },
       then: (resolve) => {
         requests.push(request);
-        const result = rows.filter((r) => (!request.after || r.id > request.after) && (!request.ids || request.ids.includes(r.id)));
+        const result = rows.filter((r) => (!request.after || r.id > request.after) && (!request.lower || r.id >= request.lower) && (!request.upper || r.id < request.upper) && (!request.ids || request.ids.includes(r.id)));
         resolve({ data: result.slice(0, request.limit), error: null });
       },
     };
@@ -106,11 +108,11 @@ test("retrieval exhausts more than 600 candidates and applies visibility to ever
   const got = await fetchCandidates({ db, intent, columns: "id,title", lean: true, hasLiveness: true, suppressed: new Set(["0000"]) });
   assert.equal(got.length, 1204);
   assert.equal(got.at(-1).id, "1204");
-  assert.equal(db.requests.length, 3);
+  assert.ok(db.requests.length >= 16);
   for (const request of db.requests) {
     assert.ok(request.ors.some((s) => s.includes("last_seen_at.gte.")));
     assert.ok(request.ors.includes("link_status.is.null,link_status.neq.dead"));
-    assert.ok(request.ors.some((s) => s.includes("title.imatch.")));
+    assert.ok(request.ors.some((s) => /title\.|role_cluster\./.test(s)));
   }
 });
 
@@ -118,15 +120,15 @@ test("lean retrieval hydrates descriptions for stale and missing signals", async
   const rows = [job("Virtual Assistant", { id: "1", elig_signals: null }), job("Executive Assistant", { id: "2", elig_signals: { v: 1 } })];
   const db = fakeDatabase(rows);
   const got = await fetchCandidates({ db, intent, columns: "id,title", lean: true, hasLiveness: false });
-  assert.equal(db.requests.length, 2);
-  assert.equal(db.requests[1].columns, "id,description");
-  assert.deepEqual(db.requests[1].ids, ["1", "2"]);
+  assert.equal(db.requests.length, 17);
+  assert.equal(db.requests.at(-1).columns, "id,description");
+  assert.deepEqual(db.requests.at(-1).ids, ["1", "2"]);
   assert.ok(got.every((j) => j.description));
 });
 
 test("retrieval failures are surfaced instead of reporting a partial total", async () => {
   const db = { from: () => {
-    const q = { select: () => q, or: () => q, order: () => q, limit: () => Promise.resolve({ error: { message: "database unavailable" } }) };
+    const q = { select: () => q, or: () => q, gte: () => q, lt: () => q, order: () => q, limit: () => Promise.resolve({ error: { message: "database unavailable" } }) };
     return q;
   } };
   await assert.rejects(fetchCandidates({ db, intent, columns: "id" }), /database unavailable/);

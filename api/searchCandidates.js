@@ -1,4 +1,5 @@
 import { getAliasesForCluster, scoreJobLocally, SIGNALS_VERSION } from "./roleIntelligence.js";
+import { nonVacancyReason } from "./postingVerification.js";
 import { canonicalUrl } from "../ingest/core/dedup.js";
 
 const PAGE_SIZE = 500;
@@ -39,24 +40,35 @@ export function applyRoleQuery(query, intent) {
 // Keyset pagination avoids the old newest-600 cutoff and Supabase's row limit.
 export async function fetchCandidates({ db, intent, columns, lean, hasLiveness, suppressed = new Set(), now = Date.now() }) {
   if (!intent.cluster && !intent.keywords?.length) throw new Error("Include a job title or role in your search.");
-  const rows = [];
-  let after = null;
-  for (;;) {
-    let query = applyRoleQuery(db.from("jobs").select(columns), intent)
-      .or(`last_seen_at.is.null,last_seen_at.gte.${new Date(now - 28 * DAY).toISOString()}`);
-    if (hasLiveness) query = query.or("link_status.is.null,link_status.neq.dead");
-    // Coarse eligibility_region tags are NOT a country gate. They can be stale,
-    // null, or merely the country of the employer, and used to hide real matches.
-    if (after !== null) query = query.gt("id", after);
-    const { data, error } = await query.order("id", { ascending: true }).limit(PAGE_SIZE);
-    if (error) throw new Error(error.message);
-    if (!data?.length) break;
-    rows.push(...data.filter((j) => !suppressed.has(j.id)));
-    const next = data.at(-1).id;
-    if (next === after) throw new Error("Search pagination did not advance");
-    after = next;
-    if (data.length < PAGE_SIZE) break;
-  }
+  const byId = new Map();
+  // Bound each query to a UUID primary-key range. A broad OR over 50k rows
+  // can choose an unbounded index scan (especially for EA/VA/CS aliases).
+  // Sixteen disjoint ranges retain every candidate without a newest-N cap.
+  const boundary = n => `${n.toString(16)}0000000-0000-0000-0000-000000000000`;
+  let cursor = 0;
+  await Promise.all(Array.from({ length: 4 }, async () => {
+    while (cursor < 16) {
+      const partition = cursor++;
+      let after = null;
+      for (;;) {
+        let query = applyRoleQuery(db.from("jobs").select(columns), intent)
+          .or(`last_seen_at.is.null,last_seen_at.gte.${new Date(now - 28 * DAY).toISOString()}`);
+        if (hasLiveness) query = query.or("link_status.is.null,link_status.neq.dead");
+        if (after !== null) query = query.gt("id", after);
+        else if (partition > 0) query = query.gte("id", boundary(partition));
+        if (partition < 15) query = query.lt("id", boundary(partition + 1));
+        const { data, error } = await query.order("id", { ascending: true }).limit(PAGE_SIZE);
+        if (error) throw new Error(error.message);
+        if (!data?.length) break;
+        for (const job of data) if (!suppressed.has(job.id)) byId.set(job.id, job);
+        const next = data.at(-1).id;
+        if (next === after) throw new Error("Search pagination did not advance");
+        after = next;
+        if (data.length < PAGE_SIZE) break;
+      }
+    }
+  }));
+  const rows = [...byId.values()].sort((a,b) => String(a.id).localeCompare(String(b.id)));
   // The coverage probe permits up to 5% stale/missing signals. Hydrate precisely
   // those rows rather than evaluating them with an absent job description.
   if (lean) {
@@ -112,12 +124,12 @@ export function compareSearchResults(a, b) {
   return postedTime(b) - postedTime(a) || b.score - a.score || String(a.id).localeCompare(String(b.id));
 }
 
-export function rankCandidates(rows, intent, filters = {}, now = Date.now()) {
+export function rankCandidates(rows, intent, filters = {}, now = Date.now(), verifiedOnly = false) {
   const scored = rows.map((job) => {
     const r = scoreJobLocally(job, intent);
     return { ...job, score: r.score, eligibility: r.eligibility, offTarget: r.offTarget, match_breakdown: r.breakdown, match_reason: r.eligibility.reason };
   });
-  const matching = scored.filter((j) => j.eligibility.eligible !== false && !j.offTarget && matchesFilters(j, filters, now));
+  const matching = scored.filter((j) => j.eligibility.eligible !== false && !j.offTarget && !nonVacancyReason(j) && (!verifiedOnly || (j.verification?.status === "ok" && (!intent.locationCountry || ["certain", "likely"].includes(j.eligibility.confidence)))) && matchesFilters(j, filters, now));
   matching.sort(compareSearchResults);
   const urls = new Set(), contents = new Set();
   const results = matching.filter((j) => {

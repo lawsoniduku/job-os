@@ -1,38 +1,9 @@
-/**
- * ingest/check_links.js
- * =====================
- * Answers the question the eligibility engine never asked: DOES THIS JOB
- * STILL EXIST?
- *
- * "Every job you see here, you can actually get" fails hardest not on
- * eligibility but on existence. Of the first 10 user reports, 5 were
- * reason='expired' — the most common complaint by a wide margin, and there
- * was no detection for it anywhere in the pipeline.
- *
- * WHAT IT DOES
- *   Picks the least-recently-checked live rows, requests each apply_url, and
- *   writes link_status back (see migration 010 for the semantics).
- *
- * DESIGN NOTES
- *   - HEAD first (cheap), falling back to GET when a host rejects HEAD.
- *     Plenty of ATS platforms return 405/501 for HEAD.
- *   - A 200 is NOT automatically alive: most ATS serve a friendly "this
- *     position is no longer accepting applications" page with a 200 status.
- *     We sniff the body for those phrases.
- *   - Anything ambiguous (403 bot-block, 429, 5xx, timeout, DNS failure) is
- *     recorded as 'unknown', NEVER 'dead'. Hiding a real job because
- *     Cloudflare challenged our crawler would be its own trust failure. Only
- *     positive evidence of death counts.
- *   - Politeness: bounded concurrency, per-host serialisation is not
- *     attempted but the shuffle spreads hosts out naturally.
- *
- * USAGE
- *   node --env-file=.env ingest/check_links.js                # default batch
- *   node --env-file=.env ingest/check_links.js --limit 300
- *   node --env-file=.env ingest/check_links.js --dry-run      # report only
- *   node --env-file=.env ingest/check_links.js --recheck-days 14
+/** Scheduled verification of current public postings, with bounded batches.
+ * Stores compact evidence in existing elig_signals JSONB; no schema change.
+ * A blocked/unsupported source is unknown, never falsely marked closed.
  */
 
+import { verifyPosting, compactVerification } from "../api/postingVerification.js";
 import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
 import { pathToFileURL } from "node:url";
@@ -155,7 +126,7 @@ function redirectedAwayFromPosting(originalUrl, finalUrl) {
     if (last && !GENERIC.has(last.toLowerCase())) ids.push(last);
     for (const v of u.searchParams.values()) ids.push(v);
   } catch { return false; }
-  ids = ids.filter((s) => s && s.length >= 4);
+  ids = ids.filter((s) => s && s.length >= 1);
   if (ids.length === 0) return false;               // nothing identifying to track
   const final = finalUrl.toLowerCase();
   return !ids.some((id) => final.includes(id.toLowerCase()));
@@ -219,7 +190,7 @@ async function assertLivenessColumns() {
 // coverage, not a shortcut. Pass --all-regions to check everything anyway.
 const SEARCHABLE_REGIONS = ["Nigeria", "Africa", "Global", "Remote", "EMEA", "Unknown"];
 
-async function selectBatch() {
+async function selectBatch(limit = Math.min(LIMIT, 500)) {
   const staleBefore = new Date(Date.now() - RECHECK_DAYS * 864e5).toISOString();
   const liveCutoff = new Date(Date.now() - 28 * 864e5).toISOString();
   for (let a = 1; a <= 4; a++) {
@@ -227,13 +198,13 @@ async function selectBatch() {
     // requests on listings already gated out by freshness or by region.
     let q = supabase
       .from("jobs")
-      .select("id, apply_url, title, company, link_status, link_checked_at")
+      .select("id, apply_url, title, company, link_status, link_checked_at, elig_signals")
       .gte("last_seen_at", liveCutoff)
       .or(`link_checked_at.is.null,link_checked_at.lt.${staleBefore}`);
-    if (!allRegions) q = q.in("eligibility_region", SEARCHABLE_REGIONS);
+    // Country filters are applied at search time; check every region.
     const { data, error } = await q
       .order("link_checked_at", { ascending: true, nullsFirst: true })
-      .limit(LIMIT);
+      .limit(limit);
     if (!error) return data || [];
     console.log(`  ⚠️  select failed (attempt ${a}/4): ${error.message}`);
     await sleep(1500 * a);
@@ -266,41 +237,37 @@ async function persist(rows) {
 async function run() {
   console.log(`\n🔗 LINK CHECK${dryRun ? " (DRY RUN)" : ""} — batch ${LIMIT}, recheck older than ${RECHECK_DAYS}d`);
   await assertLivenessColumns();
-  const batch = await selectBatch();
-  if (batch.length === 0) { console.log("   nothing due for checking.\n"); return; }
-  console.log(`   ${batch.length} listings due\n`);
-
-  const results = [];
-  let done = 0;
-  const queue = [...batch];
-
-  async function worker() {
-    while (queue.length) {
-      const row = queue.shift();
-      const status = await checkOne(row.apply_url);
-      results.push({ ...row, status });
-      done++;
-      if (done % 50 === 0) process.stdout.write(`   …checked ${done}/${batch.length}\n`);
+  let checked = 0, written = 0;
+  const by = { ok: 0, dead: 0, unknown: 0 };
+  const deadline = Date.now() + 44 * 60 * 1000;
+  while (checked < LIMIT && Date.now() < deadline) {
+    // Persist each batch before selecting again, so PostgREST's response row
+    // limit cannot silently turn a requested 12,000-job sweep into 1,000 jobs.
+    const batch = await selectBatch(Math.min(500, LIMIT - checked));
+    if (!batch.length) break;
+    const results = [], queue = [...batch];
+    await Promise.all(Array.from({length: CONCURRENCY}, async () => {
+      while (queue.length) {
+        const row = queue.shift();
+        const verification = compactVerification(await verifyPosting(row, {timeoutMs: 12000}));
+        const status = verification.status === 'ok' ? 'ok' : verification.status === 'dead' ? 'dead' : 'unknown';
+        if (!dryRun) {
+          const {error} = await supabase.from('jobs').update({
+            elig_signals: {...(row.elig_signals || {}), verification},
+          }).eq('id',row.id);
+          if (error) {console.error('Verification persistence failed:',error.message);process.exitCode=1;}
+        }
+        results.push({...row,status}); by[status]++; checked++;
+      }
+    }));
+    const count = await persist(results); written += count;
+    console.log(`Checked ${checked}/${LIMIT}: ${by.ok} current, ${by.dead} closed/non-vacancies, ${by.unknown} unverified`);
+    if (dryRun || count !== results.length || process.exitCode) {
+      if (!dryRun) process.exitCode=1;
+      break;
     }
   }
-  await Promise.all(Array.from({ length: CONCURRENCY }, worker));
-
-  const by = { ok: 0, dead: 0, unknown: 0 };
-  for (const r of results) by[r.status]++;
-  const written = await persist(results);
-
-  console.log(`\n📊 DONE`);
-  console.log(`   alive:   ${by.ok}`);
-  console.log(`   DEAD:    ${by.dead}   ← removed from search`);
-  console.log(`   unknown: ${by.unknown}  (bot-blocked / timeout — left visible on purpose)`);
-  if (dryRun) console.log(`   (dry run — nothing written)`);
-  else console.log(`   rows updated: ${written}`);
-
-  const dead = results.filter((r) => r.status === "dead").slice(0, 12);
-  if (dead.length) {
-    console.log(`\n   sample of dead listings:`);
-    for (const d of dead) console.log(`     ✗ ${(d.title || "").slice(0, 52)} @ ${d.company}`);
-  }
+  console.log(`Verification complete: ${checked} checked, ${written} saved. Unknown listings stay out of verified search.`);
   console.log("");
 }
 

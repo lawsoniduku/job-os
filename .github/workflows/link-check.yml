@@ -1,40 +1,7 @@
-name: Link Check (dead listings)
+name: Verify current job postings
 
-# Verifies that listings still exist. "Every job you see here, you can
-# actually get" fails hardest on postings that are simply gone — the most
-# common thing users report (5 of the first 10 job_reports were 'expired').
-#
-# WHY IT RUNS HERE rather than locally: this makes a few hundred outbound
-# requests per run. GitHub's runners have far better connectivity than a
-# laptop on a mobile connection, and it should happen on a schedule with no
-# one babysitting it.
-#
-# WHY A CAPPED BATCH: the checker walks least-recently-checked first, so
-# successive nightly runs rotate through the whole live pool instead of
-# hammering every host at once.
-#
-# SETUP: uses the same repo secrets as ingest.yml (SUPABASE_URL, SUPABASE_KEY).
-# Requires migration 010_job_liveness.sql to have been run.
-
-# THROUGHPUT: the first real run measured ~21.75% of live-looking listings as
-# dead (87 of 400), i.e. roughly 10,500 across the table — too much to leave
-# uncrawled for long.
-#
-# Three things make a full sweep cheap rather than slow:
-#   - SCOPE. The checker skips regions the search can never surface (US / UK /
-#     Canada / Regional). That is 18,560 of 48,673 rows — 38% of the crawl
-#     removed without losing anything a user could see.
-#   - CONCURRENCY. Measured host spread in the queue: 28 distinct hosts per
-#     300 rows, averaging 1.4 consecutive requests to the same host. So the
-#     load is naturally spread and 24 parallel checks does not hammer any one
-#     ATS. (A home connection cannot do this — see backfill_signals.js — but a
-#     runner can.)
-#   - BODY CAP. Page reads stop at 256KB instead of pulling whole pages just
-#     to phrase-match.
-#
-# Net: ~30k reachable rows at 12,000 per run, twice daily = full coverage in
-# ~1.5 days instead of 10, then --recheck-days 7 keeps it cycling at a few
-# thousand a day.
+# Refresh current posting content and availability, not just HTTP status.
+# Unknown/blocked pages never qualify for verified search; recheck daily.
 on:
   schedule:
     - cron: "30 2 * * *"    # 02:30 UTC, before the 03:00 jobhive import
@@ -59,7 +26,7 @@ jobs:
         run: npm install
 
       - name: Check listing links
-        run: node ingest/check_links.js --limit ${{ github.event.inputs.limit || 12000 }} --concurrency 24
+        run: node ingest/check_links.js --limit ${{ github.event.inputs.limit || 12000 }} --concurrency 24 --recheck-days 1
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}

@@ -33,6 +33,7 @@ import {
 } from "./roleIntelligence.js";
 import { generateJSON, generateText, isLLMHealthy, llmConfig, llmState } from "../lib/llm.js";
 import { makeRequireAuth, makeRequireEmployer, makeOptionalAuth } from "./auth.js";
+import { verifyCandidates } from "./postingVerification.js";
 import { fetchCandidates, rankCandidates, sanitizeFilters, compareSearchResults } from "./searchCandidates.js";
 import { employerRouter } from "./employer.js";
 
@@ -107,7 +108,7 @@ const JOB_COLUMNS_LEAN =
 const JOB_COLUMNS_FULL =
   "id, title, company, location, description, apply_url, remote, source, ats_source, " +
   "role_cluster, department, seniority, posted_at, created_at, salary_min, " +
-  "salary_max, employment_type, remote_type, eligibility_region";
+  "salary_max, employment_type, remote_type, eligibility_region, elig_signals";
 
 // ── Reported-dead suppression ────────────────────────────────────────────
 // job_reports was write-only: the UI said "✓ Thanks — flagged for review"
@@ -228,6 +229,24 @@ async function searchPool(intent) {
     columns: lean ? JOB_COLUMNS_LEAN : JOB_COLUMNS_FULL });
 }
 
+const rankingCache = new Map();
+async function verifiedRanking(rawJobs, intent, filters = {}) {
+  const key = JSON.stringify([intent, filters]);
+  const cached = rankingCache.get(key);
+  if (cached && Date.now() - cached.at < 180000) return cached.value;
+  const preliminary = rankCandidates(rawJobs, intent, filters);
+  const checked = await verifyCandidates(preliminary.results, { db: supabase });
+  const ranked = rankCandidates(checked, intent, filters, Date.now(), true);
+  const value = { ...ranked, evaluated: rawJobs.length,
+    excluded: preliminary.excluded + ranked.excluded,
+    duplicates: preliminary.duplicates + ranked.duplicates,
+    verificationPending: checked.filter(j => j.verification?.status !== 'ok' && j.verification?.status !== 'dead').length,
+  };
+  if (rankingCache.size >= 100) rankingCache.delete(rankingCache.keys().next().value);
+  rankingCache.set(key, { at: Date.now(), value });
+  return value;
+}
+
 function publicIntent(intent, filters = {}) {
   return { cluster: intent.cluster, locationCountry: intent.locationCountry,
     remoteOnly: intent.remoteOnly, seniority: intent.seniority,
@@ -269,7 +288,7 @@ app.get("/ai/search", searchLimit, async (req, res) => {
     console.log(`🔍 "${q}" -> cluster=${intent.cluster} country=${intent.locationCountry} remote=${intent.remoteOnly}`);
 
     const rawJobs = await searchPool(intent);
-    const ranked = rankCandidates(rawJobs, intent);
+    const ranked = await verifiedRanking(rawJobs, intent);
     const eligible = ranked.results;
     const excludedCount = ranked.excluded;
     console.log(`✅ matches=${eligible.length} ❌ excluded=${excludedCount}`);
@@ -299,12 +318,13 @@ app.get("/ai/search", searchLimit, async (req, res) => {
       : intent.remoteOnly ? " that are remote" : "";
     const filteredPart = excludedCount > 0 ? ` (${excludedCount} excluded by eligibility or role)` : "";
     const summary = totalAvailable === 0
-      ? `No results for "${q}". Try broader terms.`
+      ? (ranked.verificationPending ? `No verified matches yet. ${ranked.verificationPending} listings could not be verified.` : `No current verified matches for "${q}". Try broader terms.`)
       : `Found ${totalAvailable} ${intent.cluster || "matching"} role${totalAvailable !== 1 ? "s" : ""}${locPart}${filteredPart}.`;
 
     res.json({
       query: q,
       sort: "newest",
+      verification_pending: ranked.verificationPending,
       intent: publicIntent(intent),
       total: totalAvailable, offset, limit, has_more: hasMore,
       excluded_count: excludedCount, summary, data: results,
@@ -929,7 +949,7 @@ app.post("/ai/refine", searchLimit, async (req, res) => {
     });
     ({ salFloor, seniorityFilter, sourceFilter, maxAgeDays, employmentFilter } = filters);
     if (seniorityFilter) intent.seniority = seniorityFilter;
-    const ranked = rankCandidates(await searchPool(intent), intent, filters);
+    const ranked = await verifiedRanking(await searchPool(intent), intent, filters);
     const results = ranked.results.slice(offset, offset + limit);
 
     // Human-readable description of what changed.
@@ -944,6 +964,7 @@ app.post("/ai/refine", searchLimit, async (req, res) => {
     res.json({
       type: "refined",
       sort: "newest",
+      verification_pending: ranked.verificationPending,
       description,
       total: ranked.results.length, offset, limit,
       has_more: offset + limit < ranked.results.length,
