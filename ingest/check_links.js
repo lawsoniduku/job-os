@@ -3,7 +3,7 @@
  * A blocked/unsupported source is unknown, never falsely marked closed.
  */
 
-import { verifyPosting, compactVerification } from "../api/postingVerification.js";
+import { verifyPosting, compactVerification, retainVerificationEvidence } from "../api/postingVerification.js";
 import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
 import { pathToFileURL } from "node:url";
@@ -249,7 +249,7 @@ async function run() {
     await Promise.all(Array.from({length: CONCURRENCY}, async () => {
       while (queue.length) {
         const row = queue.shift();
-        const verification = compactVerification(await verifyPosting(row, {timeoutMs: 12000}));
+        const verification = retainVerificationEvidence(compactVerification(await verifyPosting(row, {timeoutMs: 12000})), row.elig_signals?.verification);
         const status = verification.status === 'ok' ? 'ok' : verification.status === 'dead' ? 'dead' : 'unknown';
         if (!dryRun) {
           const {error} = await supabase.from('jobs').update({

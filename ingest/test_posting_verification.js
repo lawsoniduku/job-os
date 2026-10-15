@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {verifyPosting,applyVerification,compactVerification,verifyCandidates,nonVacancyReason,redirectedToIndex,parseJobPosting,locationText} from '../api/postingVerification.js';
+import {verifyPosting,applyVerification,compactVerification,verifyCandidates,nonVacancyReason,redirectedToIndex,parseJobPosting,locationText,retainVerificationEvidence} from '../api/postingVerification.js';
 import {checkEligibility,parseIntent} from '../api/roleIntelligence.js';
 import {rankCandidates} from '../api/searchCandidates.js';
 import {normalizeJob} from './core/normalize.js';
@@ -109,4 +109,35 @@ test('known employer board replaces aggregator metadata and supplies direct appl
  assert.equal(v.provider,'employer');assert.equal(v.apply_url,direct);
  assert.equal(applyVerification(row,compactVerification(v)).apply_url,direct);
  assert.equal(checkEligibility(applyVerification(row,compactVerification(v)),'nigeria').eligible,true);
+});
+
+test('failed rechecks preserve US restrictions across repeated failures and restart', () => {
+ const known=compactVerification({v:1,status:'ok',checked_at:'2026-10-15T10:00:00Z',title:job.title,description:'US applicants only.',location:'Remote US',remote:true});
+ const unknown={v:1,status:'unknown',checked_at:'2026-10-15T18:00:00Z'};
+ const persisted=JSON.parse(JSON.stringify(retainVerificationEvidence(unknown,known)));
+ const again=retainVerificationEvidence(unknown,persisted);
+ assert.equal(again.last_known.last_known,undefined);
+ const row=applyVerification({...job,elig_signals:{verification:again}},unknown);
+ assert.equal(row.verification.status,'unknown');
+ assert.equal(checkEligibility(row,'nigeria').eligible,false);
+});
+test('pending recheck retains restrictions and confirmed closure', async () => {
+ const known=compactVerification({v:1,status:'ok',checked_at:'2000-01-01T00:00:00Z',title:job.title,description:'US applicants only.',location:'Remote US',remote:true});
+ const rows=await verifyCandidates([{...job,apply_url:'https://example.bamboohr.com/careers/999991',elig_signals:{verification:known}}],{budgetMs:0});
+ assert.equal(checkEligibility(rows[0],'nigeria').eligible,false);
+ const closed=retainVerificationEvidence({status:'unknown'},{status:'dead',reason:'Posting removed'});
+ assert.equal(applyVerification(job,closed).verification.status,'dead');
+});
+test('successful changed posting replaces old restrictions', () => {
+ const current=compactVerification({...job,status:'ok',v:1});
+ const retained=retainVerificationEvidence(current,{status:'dead'});
+ assert.equal(retained.last_known,undefined);
+ assert.equal(checkEligibility(applyVerification(job,retained),'nigeria').eligible,true);
+});
+test('unverified board worldwide label stays discoverable but unconfirmed', () => {
+ const row={...job,source:'weworkremotely',description:'Administrative support for the team.'};
+ const uncertain=applyVerification(row,{status:'unknown'});
+ assert.equal(checkEligibility(uncertain,'nigeria').confidence,'possible');
+ assert.equal(rankCandidates([uncertain],parseIntent('virtual assistant Nigeria'),{},Date.now(),true).results.length,1);
+ assert.equal(checkEligibility(applyVerification({...row,description:'Open to candidates worldwide.'},{status:'unknown'}),'nigeria').confidence,'certain');
 });
