@@ -172,12 +172,34 @@ export function compactVerification(v) {
   const {description,...rest}=v;
   return {...rest,signals:extractEligibilitySignals(v)};
 }
-export function applyVerification(job, v) {
-  if(v.status!=='ok') return {...job,verification:v};
-  const fresh={...job,title:v.title,description:v.description,location:v.location,remote:v.remote,apply_url:v.apply_url || job.apply_url};
-  // Deliberately discard stored LLM inference. Re-evaluate complete current text.
-  fresh.elig_signals=v.signals || extractEligibilitySignals(fresh);
-  return {...fresh,verification:{status:v.status,checked_at:v.checked_at,provider:v.provider}};
+// Keep the last conclusive evidence across transient failures, in both cron and search.
+// A newer conclusive response replaces it; unknown responses never erase it.
+export function retainVerificationEvidence(current, previous) {
+  if (current.status === 'ok' || current.status === 'dead') return current;
+  const known = [current.last_known, previous?.status === 'ok' || previous?.status === 'dead'
+    ? previous : previous?.last_known].filter(Boolean)
+    .sort((a,b)=>(Date.parse(b.checked_at)||0)-(Date.parse(a.checked_at)||0))[0];
+  return known ? {...current, last_known: known} : current;
+}
+export function applyVerification(job, incoming) {
+  const v = retainVerificationEvidence(incoming, job.elig_signals?.verification);
+  const evidence = v.status === 'ok' || v.status === 'dead' ? v : v.last_known;
+  if (evidence?.status === 'dead') return {...job, verification: {...v, status:'dead'}};
+  if (evidence?.status === 'ok') {
+    const fresh={...job,title:evidence.title,description:evidence.description,location:evidence.location,remote:evidence.remote,apply_url:evidence.apply_url || job.apply_url};
+    // Discard stored model inference in favour of the last complete posting evidence.
+    fresh.elig_signals=evidence.signals || extractEligibilitySignals(fresh);
+    return {...fresh,verification:{status:v.status,checked_at:v.checked_at,provider:evidence.provider,evidence_checked_at:evidence.checked_at}};
+  }
+  // Generic aggregator labels alone are not proof of worldwide hiring. Keep the
+  // role discoverable, but do not give it a green badge when the body lacks evidence.
+  const signals=job.elig_signals || extractEligibilitySignals(job);
+  const board = ['weworkremotely','jobicy','himalayas'].includes(job.source)
+    || /^https:\/\/(?:www\.)?(?:weworkremotely\.com|jobicy\.com|himalayas\.app)\//i.test(job.apply_url || '');
+  if (board && /worldwide|anywhere|global/i.test(job.location || '') && !signals.worldwideDesc) {
+    return {...job,location:'Remote',eligibility_region:null,elig_signals:signals,verification:v};
+  }
+  return {...job,verification:v};
 }
 // Bounded work per request. Unknown availability is separate from location eligibility.
 // The scheduled checker persists this same evidence and progressively warms it.
@@ -194,7 +216,8 @@ export async function verifyCandidates(rows,{db,verify=verifyPosting,now=Date.no
     while(cursor<queue.length && Date.now()<deadline) {
       const {job,i}=queue[cursor++];
       const checked=await verify(job,{now,timeoutMs:Math.max(100,Math.min(6000,deadline-Date.now()))});
-      const v=compactVerification(checked);
+      const previous = retainVerificationEvidence(cache.get(job.apply_url) || {status:'pending'},job.elig_signals?.verification);
+      const v=retainVerificationEvidence(compactVerification(checked),previous);
       if(cache.size>5000)cache.delete(cache.keys().next().value);
       cache.set(job.apply_url,v); output[i]=applyVerification(job,v);
       if(db && job.id) {
@@ -205,5 +228,5 @@ export async function verifyCandidates(rows,{db,verify=verifyPosting,now=Date.no
       }
     }
   }));
-  return Array.from(output,(v,i)=>v||{...rows[i],verification:{status:'pending',reason:'Not checked yet'}});
+  return Array.from(output,(v,i)=>v||applyVerification(rows[i],retainVerificationEvidence({status:'pending',reason:'Not checked yet'},cache.get(rows[i].apply_url) || rows[i].elig_signals?.verification)));
 }

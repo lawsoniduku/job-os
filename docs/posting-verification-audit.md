@@ -37,3 +37,12 @@ Limitations: current evidence is not a hiring guarantee, employment-law opinion 
 proof of qualification. Unsupported sources can have unconfirmed availability; their listing evidence is
 still used for location eligibility without claiming a successful live check. Credentials, applications and
 user profiles are not submitted or changed by verification.
+
+## Availability fallback correction
+
+Search remains inclusive of unknown or pending availability, with clear notices.
+The last conclusive posting evidence is retained by both search and the cron checker
+when rechecks fail. Persisted evidence survives process restarts; a newer conclusive
+posting replaces it. Country restrictions and closed states do not disappear on a
+timeout. An unverified aggregator worldwide label without supporting description
+evidence remains discoverable as Unconfirmed rather than receiving an Eligible badge.
