@@ -33,7 +33,7 @@ import {
 } from "./roleIntelligence.js";
 import { generateJSON, generateText, isLLMHealthy, llmConfig, llmState } from "../lib/llm.js";
 import { makeRequireAuth, makeRequireEmployer, makeOptionalAuth } from "./auth.js";
-import { fetchCandidates, rankCandidates, sanitizeFilters } from "./searchCandidates.js";
+import { fetchCandidates, rankCandidates, sanitizeFilters, compareSearchResults } from "./searchCandidates.js";
 import { employerRouter } from "./employer.js";
 
 // Friendly message for when a structured call comes back empty.
@@ -272,7 +272,6 @@ app.get("/ai/search", searchLimit, async (req, res) => {
     const ranked = rankCandidates(rawJobs, intent);
     const eligible = ranked.results;
     const excludedCount = ranked.excluded;
-    const postedTs = (j) => Date.parse(j.posted_at) || 0;
     console.log(`✅ matches=${eligible.length} ❌ excluded=${excludedCount}`);
 
     // --- optional ONE-SHOT batched LLM re-rank of the top slice ---
@@ -290,7 +289,8 @@ app.get("/ai/search", searchLimit, async (req, res) => {
       finalResults = eligible.map((j) => ({ ...j, match_reason: j.eligibility.reason }));
     }
 
-    finalResults.sort((a, b) => b.score - a.score || postedTs(b) - postedTs(a));
+    // Keep publication-date order even when optional model scoring is enabled.
+    finalResults.sort(compareSearchResults);
     const totalAvailable = finalResults.length;        // how many eligible matches exist in all
     const results = finalResults.slice(offset, offset + limit);
     const hasMore = offset + limit < totalAvailable;   // is there another page after this one?
@@ -304,6 +304,7 @@ app.get("/ai/search", searchLimit, async (req, res) => {
 
     res.json({
       query: q,
+      sort: "newest",
       intent: publicIntent(intent),
       total: totalAvailable, offset, limit, has_more: hasMore,
       excluded_count: excludedCount, summary, data: results,
@@ -942,6 +943,7 @@ app.post("/ai/refine", searchLimit, async (req, res) => {
 
     res.json({
       type: "refined",
+      sort: "newest",
       description,
       total: ranked.results.length, offset, limit,
       has_more: offset + limit < ranked.results.length,

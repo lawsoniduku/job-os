@@ -107,3 +107,17 @@ test('dry run never writes', async () => {
   const write = createJobhiveWriter(null, { dryRun: true });
   assert.deepEqual(await write([{}]), { accepted: 1, failedRows: [] });
 });
+
+
+test('missing publication dates are not replaced with ingestion time', () => {
+  const row = normalizeJob({ title: 'Virtual Assistant', apply_url: 'https://example.com/unknown' });
+  assert.equal(row.posted_at, null);
+  assert.ok(Number.isFinite(Date.parse(row.created_at)));
+});
+
+test('source publication dates and source creation dates remain usable', () => {
+  const raw = { title: 'Virtual Assistant', apply_url: 'https://example.com/dated', posted_at: '2026-10-14', created_at: '2026-09-01' };
+  assert.equal(normalizeJob(raw).posted_at, '2026-10-14T00:00:00.000Z');
+  assert.equal(normalizeJob({ ...raw, posted_at: null }).posted_at, '2026-09-01T00:00:00.000Z');
+  assert.equal(normalizeJob({ ...raw, posted_at: 'invalid', created_at: 'invalid' }).posted_at, null);
+});

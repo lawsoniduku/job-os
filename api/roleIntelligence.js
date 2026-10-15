@@ -2146,28 +2146,20 @@ export function scoreJobLocally(job, intent) {
   //   likely   → 21  (regional signal e.g. EMEA)
   //   possible → 12  ("region unconfirmed" — eligibility not proven)
   //
-  // The 23-point spread between "named your country" and "unconfirmed" stays
-  // wider than the 15-point freshness swing below, so a proven-eligible role
-  // still outranks a merely newer unproven one — which is the whole promise.
+  // Eligibility confidence stays prominent in the displayed fit score.
+  // Publication date independently controls the order of matching results.
   const explicitCountry = eligibility.confidence === "certain" &&
     /location mentions|open to.*nigeria|open to.*kenya|open to.*ghana|open to.*africa/i.test(eligibility.reason);
   const locScore = explicitCountry ? ELIG_MAX
     : { certain: 28, likely: 21, possible: 12 }[eligibility.confidence] ?? 12;
 
-  // STEP 4: freshness/salary tiebreaker — kept small relative to role fit
-  // (55 pts) and eligibility confidence (48 pts) so it can't drag a clearly
-  // WORSE match above a clearly better one. But it used to be too small to
-  // matter at all (±7 max) AND had a silent dead zone — a job 21-45 days old
-  // got exactly zero freshness credit, neither a bonus nor a penalty, so a
-  // 3-week-old posting and a 6-week-old posting looked identical to the
-  // ranker. Real user complaint this fixes: a job posted today, an equally
-  // strong match, ranking BELOW one posted 3 weeks ago, with freshness too
-  // weak to make a visible difference. Widened + smoothed the day tiers, and
-  // server.js now also breaks exact score ties by posted_at as a backstop.
+  // STEP 4: publication freshness/salary contributes to the displayed fit score.
+  // Search orders surviving matches newest-first independently of this score.
+  // Database creation/import time is not evidence of a recent publication.
   let bonus = 0;
-  const d = job.posted_at || job.created_at;
-  if (d) {
-    const days = (Date.now() - new Date(d)) / 86400000;
+  const postedTime = Date.parse(job.posted_at);
+  if (Number.isFinite(postedTime)) {
+    const days = (Date.now() - postedTime) / 86400000;
     if (days <= 3) bonus += 13;
     else if (days <= 7) bonus += 10;
     else if (days <= 14) bonus += 6;

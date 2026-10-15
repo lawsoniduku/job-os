@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { parseIntent, scoreJobLocally, extractEligibilitySignals, SIGNALS_VERSION } from "../api/roleIntelligence.js";
-import { titlePattern, applyRoleQuery, fetchCandidates, rankCandidates, matchesFilters } from "../api/searchCandidates.js";
+import { titlePattern, applyRoleQuery, fetchCandidates, rankCandidates, matchesFilters, compareSearchResults } from "../api/searchCandidates.js";
 
 const intent = parseIntent("virtual assistant jobs open to nigeria");
 const job = (title, extra = {}) => ({ id: title, title, company: "Example", location: "Lagos, Nigeria", description: "Administrative support for our team in Nigeria.", posted_at: new Date().toISOString(), ...extra });
@@ -130,4 +130,65 @@ test("retrieval failures are surfaced instead of reporting a partial total", asy
     return q;
   } };
   await assert.rejects(fetchCandidates({ db, intent, columns: "id" }), /database unavailable/);
+});
+
+
+test("recent matches precede older higher-scoring matches from the reported search", () => {
+  const rows = [
+    job("Secretary & Admin Assistant", { id: "old", company: "Older", posted_at: "2026-09-17T16:13:26Z" }),
+    job("Executive Assistant / Corporate Administrator", { id: "new", company: "Newer", location: "EMEA", posted_at: "2026-10-04T05:30:42Z" }),
+  ];
+  const ranked = rankCandidates(rows, intent);
+  assert.ok(ranked.results.find((j) => j.id === "old").score > ranked.results.find((j) => j.id === "new").score);
+  assert.deepEqual(ranked.results.map((j) => j.id), ["new", "old"]);
+});
+
+test("unknown and invalid posting dates stay last despite recent import dates", () => {
+  const rows = [
+    { id: "unknown", posted_at: null, created_at: "2026-10-15", score: 100 },
+    { id: "invalid", posted_at: "invalid", created_at: "2026-10-15", score: 99 },
+    { id: "known", posted_at: "2026-09-01", score: 30 },
+  ];
+  assert.deepEqual(rows.sort(compareSearchResults).map((j) => j.id), ["known", "unknown", "invalid"]);
+});
+
+test("same-date matches use score then stable ID for pagination", () => {
+  const rows = [
+    { id: "b", posted_at: "2026-10-14", score: 75 },
+    { id: "c", posted_at: "2026-10-14", score: 90 },
+    { id: "a", posted_at: "2026-10-14", score: 75 },
+  ];
+  assert.deepEqual(rows.sort(compareSearchResults).map((j) => j.id), ["c", "a", "b"]);
+});
+
+test("score-only model changes cannot restore an older-first ordering", () => {
+  const rows = [
+    { id: "old", posted_at: "2026-09-01", score: 100 },
+    { id: "new", posted_at: "2026-10-14", score: 40 },
+  ];
+  assert.equal(rows.sort(compareSearchResults)[0].id, "new");
+});
+
+test("refinement filters preserve newest-first ordering", () => {
+  const rows = [
+    job("Senior Executive Assistant", { id: "old", company: "Old", posted_at: "2026-10-10", salary_max: 90000 }),
+    job("Senior Executive Assistant", { id: "new", company: "New", posted_at: "2026-10-14", salary_max: 70000 }),
+    job("Senior Executive Assistant", { id: "low", company: "Low", posted_at: "2026-10-15", salary_max: 10000 }),
+  ];
+  assert.deepEqual(rankCandidates(rows, intent, { seniorityFilter: "senior", salFloor: 60000 }).results.map((j) => j.id), ["new", "old"]);
+});
+
+test("a recent import without a publication date earns no freshness bonus", () => {
+  const row = job("Virtual Assistant", { posted_at: null, created_at: new Date().toISOString() });
+  assert.equal(scoreJobLocally(row, intent).breakdown.bonus, 0);
+});
+
+test("deduplication keeps the newest matching copy", () => {
+  const rows = [
+    job("Virtual Assistant", { id: "old", posted_at: "2026-09-01", salary_max: 100000 }),
+    job("Virtual Assistant", { id: "new", posted_at: "2026-10-14" }),
+  ];
+  const result = rankCandidates(rows, intent);
+  assert.equal(result.results.length, 1);
+  assert.equal(result.results[0].id, "new");
 });
