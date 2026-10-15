@@ -33,10 +33,10 @@ test('internal vacancies and talent pools are not current external openings',()=
  assert.ok(nonVacancyReason({title:'EA - Sourcing',description:'EA Talent pool for Contact Energy/DIA/FB'}));
  assert.equal(nonVacancyReason({title:'Talent Acquisition Specialist',description:'Build a talent pool while filling current vacancies.'}),null);
 });
-test('unknown verification and unknown country eligibility are excluded from scoped results',()=>{
+test('unknown availability does not suppress roles or imply country eligibility',()=>{
  const intent=parseIntent('remote virtual assistant Nigeria');
- assert.equal(rankCandidates([{...job,verification:{status:'unknown'}}],intent,{},Date.now(),true).results.length,0);
- assert.equal(rankCandidates([{...job,location:'Remote',description:'Support the team.',verification:{status:'ok'}}],intent,{},Date.now(),true).results.length,0);
+ assert.equal(rankCandidates([{...job,verification:{status:'unknown'}}],intent,{},Date.now(),true).results.length,1);
+ assert.equal(rankCandidates([{...job,location:'Remote',description:'Support the team.',verification:{status:'ok'}}],intent,{},Date.now(),true).results[0].eligibility.confidence,'possible');
 });
 test('untrusted hosts and redirects are not fetched',async()=>{
  let calls=0;

@@ -240,7 +240,7 @@ async function verifiedRanking(rawJobs, intent, filters = {}) {
   const value = { ...ranked, evaluated: rawJobs.length,
     excluded: preliminary.excluded + ranked.excluded,
     duplicates: preliminary.duplicates + ranked.duplicates,
-    verificationPending: checked.filter(j => j.verification?.status !== 'ok' && j.verification?.status !== 'dead').length,
+    verificationPending: ranked.results.filter(j => j.verification?.status !== 'ok').length,
   };
   if (rankingCache.size >= 100) rankingCache.delete(rankingCache.keys().next().value);
   rankingCache.set(key, { at: Date.now(), value });
@@ -318,7 +318,7 @@ app.get("/ai/search", searchLimit, async (req, res) => {
       : intent.remoteOnly ? " that are remote" : "";
     const filteredPart = excludedCount > 0 ? ` (${excludedCount} excluded by eligibility or role)` : "";
     const summary = totalAvailable === 0
-      ? (ranked.verificationPending ? `No verified matches yet. ${ranked.verificationPending} listings could not be verified.` : `No current verified matches for "${q}". Try broader terms.`)
+      ? `No matching roles for "${q}". Try broader terms.`
       : `Found ${totalAvailable} ${intent.cluster || "matching"} role${totalAvailable !== 1 ? "s" : ""}${locPart}${filteredPart}.`;
 
     res.json({

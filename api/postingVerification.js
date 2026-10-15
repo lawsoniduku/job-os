@@ -179,7 +179,7 @@ export function applyVerification(job, v) {
   fresh.elig_signals=v.signals || extractEligibilitySignals(fresh);
   return {...fresh,verification:{status:v.status,checked_at:v.checked_at,provider:v.provider}};
 }
-// Bounded work per request; never promote unchecked jobs to fill a result page.
+// Bounded work per request. Unknown availability is separate from location eligibility.
 // The scheduled checker persists this same evidence and progressively warms it.
 export async function verifyCandidates(rows,{db,verify=verifyPosting,now=Date.now(),budgetMs=14000,concurrency=8}={}) {
   const output=new Array(rows.length), queue=[]; let cursor=0;
