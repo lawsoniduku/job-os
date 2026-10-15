@@ -194,3 +194,29 @@ test("deduplication keeps the newest matching copy", () => {
   assert.equal(result.results.length, 1);
   assert.equal(result.results[0].id, "new");
 });
+
+
+test("availability failures retain relevant roles without changing eligibility confidence", () => {
+  for (const status of ['unknown', 'pending']) {
+    const row = job('Virtual Assistant', { verification: { status } });
+    const result = rankCandidates([row], intent, {}, Date.now(), true);
+    assert.equal(result.results.length, 1);
+    assert.equal(result.results[0].eligibility.confidence, 'certain');
+    assert.equal(result.results[0].verification.status, status);
+  }
+});
+test("remote country uncertainty remains explicitly unconfirmed", () => {
+  const row = job('Virtual Assistant', {location:'Remote', remote:true, description:'Assist our team with administration.', verification:{status:'pending'}});
+  const result = rankCandidates([row], intent, {}, Date.now(), true);
+  assert.equal(result.results.length, 1);
+  assert.equal(result.results[0].eligibility.confidence, 'possible');
+});
+test("availability fallback cannot restore closed, restricted or unrelated roles", () => {
+  const result = rankCandidates([
+    job('Virtual Assistant', {verification:{status:'dead'}}),
+    job('Virtual Assistant', {location:'United States', description:'Applicants must reside in the United States.', verification:{status:'unknown'}}),
+    job('Greaser', {verification:{status:'pending'}}),
+    job('Virtual Assistant - Internal Vacancy Only', {verification:{status:'unknown'}}),
+  ], intent, {}, Date.now(), true);
+  assert.equal(result.results.length, 0);
+});

@@ -124,12 +124,12 @@ export function compareSearchResults(a, b) {
   return postedTime(b) - postedTime(a) || b.score - a.score || String(a.id).localeCompare(String(b.id));
 }
 
-export function rankCandidates(rows, intent, filters = {}, now = Date.now(), verifiedOnly = false) {
+export function rankCandidates(rows, intent, filters = {}, now = Date.now(), postingChecksApplied = false) {
   const scored = rows.map((job) => {
     const r = scoreJobLocally(job, intent);
     return { ...job, score: r.score, eligibility: r.eligibility, offTarget: r.offTarget, match_breakdown: r.breakdown, match_reason: r.eligibility.reason };
   });
-  const matching = scored.filter((j) => j.eligibility.eligible !== false && !j.offTarget && !nonVacancyReason(j) && (!verifiedOnly || (j.verification?.status === "ok" && (!intent.locationCountry || ["certain", "likely"].includes(j.eligibility.confidence)))) && matchesFilters(j, filters, now));
+  const matching = scored.filter((j) => j.eligibility.eligible !== false && !j.offTarget && !nonVacancyReason(j) && (!postingChecksApplied || j.verification?.status !== "dead") && matchesFilters(j, filters, now));
   matching.sort(compareSearchResults);
   const urls = new Set(), contents = new Set();
   const results = matching.filter((j) => {

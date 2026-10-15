@@ -637,13 +637,13 @@ function ResultsBlock({ m, isLatest, onLoadMore, onTailor, onReport, user, busy 
         <div className="scan-card" role="group" aria-label="Eligibility scan">
           <div className="scan-item" aria-label={`${m.scanned.toLocaleString()} listings scanned`}><div className="num" aria-hidden="true">{m.scanned.toLocaleString()}</div><div className="lbl">candidate listings checked</div></div>
           <div className="scan-item excluded" aria-label={`${m.excluded.toLocaleString()} not shown — role, eligibility or verification`}><div className="num" aria-hidden="true">{m.excluded.toLocaleString()}</div><div className="lbl">not shown — role, eligibility or verification</div></div>
-          <div className="scan-item eligible" aria-label={`${m.total.toLocaleString()} matches, with current posting checks`}><div className="num" aria-hidden="true">{m.total.toLocaleString()}</div><div className="lbl">matches — location checked</div></div>
+          <div className="scan-item eligible" aria-label={`${m.total.toLocaleString()} matches, with eligibility labels`}><div className="num" aria-hidden="true">{m.total.toLocaleString()}</div><div className="lbl">matches — check eligibility below</div></div>
         </div>
       )}
 
       {m.sort === "newest" && m.total > 0 && <p className="ai-text">Newest postings first · Listings without a posting date appear last.</p>}
 
-      {m.verificationPending > 0 && <p className="ai-text">{m.verificationPending} additional listings could not be verified yet and are not included. Results may grow as checks complete.</p>}
+      {m.verificationPending > 0 && <p className="ai-text">{m.verificationPending} matching listings have not had their current availability confirmed. Check the posting before applying.</p>}
 
       {m.duplicates > 0 && <p className="ai-text">{m.duplicates} duplicate listing{m.duplicates === 1 ? "" : "s"} removed.</p>}
 
@@ -777,6 +777,7 @@ function JobCard({ job, onTailor, onReport, user }) {
       </div>
 
       {job.match_reason && <div className="jc-why">{job.match_reason}</div>}
+      {job.verification?.status !== "ok" && <div className="jc-why">Availability not confirmed — check the posting before applying.</div>}
 
       <div className="jc-meta">
         {sal && <span className="sal">{sal}</span>}
