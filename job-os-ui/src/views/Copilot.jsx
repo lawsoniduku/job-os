@@ -244,6 +244,7 @@ export default function Copilot({ shared, active, initialQuery, onInitialConsume
         activeFilters: {},
         searchIntent: res.intent,
         duplicates: res.duplicate_count || 0,
+        sort: res.sort,
       }, (next) => persistThread(next, q, res.intent));
     } catch (err) {
       push({ role: "ai", kind: "text", text: `Search failed: ${err.message}. If Render is cold-starting, wait ~30s and try again.` });
@@ -279,6 +280,7 @@ export default function Copilot({ shared, active, initialQuery, onInitialConsume
           excluded: res.excluded_count || 0,
           scanned: res.evaluated || 0,
           duplicates: res.duplicate_count || 0,
+          sort: res.sort,
           searchIntent: res.intent,
           jobs: res.data || [],
           offset: (res.data || []).length,
@@ -634,6 +636,8 @@ function ResultsBlock({ m, isLatest, onLoadMore, onTailor, onReport, user, busy 
           <div className="scan-item eligible" aria-label={`${m.total.toLocaleString()} matches, including unconfirmed eligibility`}><div className="num" aria-hidden="true">{m.total.toLocaleString()}</div><div className="lbl">matches — check eligibility below</div></div>
         </div>
       )}
+
+      {m.sort === "newest" && m.total > 0 && <p className="ai-text">Newest postings first · Listings without a posting date appear last.</p>}
 
       {m.duplicates > 0 && <p className="ai-text">{m.duplicates} duplicate listing{m.duplicates === 1 ? "" : "s"} removed.</p>}
 

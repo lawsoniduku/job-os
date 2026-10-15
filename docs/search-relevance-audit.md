@@ -50,3 +50,22 @@ from exactly 600 evaluated rows. Only two of those 29 were assistant roles.
 
 No database migration or signal-version backfill is required. This change does
 not independently verify work authorization or repair all historical source data.
+
+## Follow-up: publication-date ordering (15 October 2026)
+
+The live assistant query still placed a 17 September posting above 4 October and
+2 October postings because score was the primary ordering key. Search and
+refinement now order all surviving matches by publication date descending, then
+score and stable ID. The final sort after optional model scoring uses the same
+comparator. Undated/invalid dates sort last; neither import time nor feed refresh
+time substitutes for publication time. The UI identifies this as newest-first.
+
+Missing source dates now remain null on new imports (the live jobs table already
+contains null publication dates), and database creation time earns no freshness
+bonus. Existing historical dates are not rewritten without source evidence.
+Older listings can still appear below newer ones if they pass visibility checks;
+publication age alone does not prove a listing has closed.
+
+Nine additional regressions cover the reported date inversion, missing/invalid
+posting dates, stable ties, model-score ordering, refinements, duplicate selection,
+and ingestion date handling. All 170 checks and the frontend build pass.

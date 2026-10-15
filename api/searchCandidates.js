@@ -101,13 +101,24 @@ export function matchesFilters(job, filters, now = Date.now()) {
   return true;
 }
 
+// Role and eligibility are gates above this ordering. Among surviving matches,
+// publication date leads; a higher score must not bury a newer posting. Never
+// substitute created_at/last_seen_at: those can just be import/feed-refresh times.
+export function compareSearchResults(a, b) {
+  const postedTime = (job) => {
+    const time = Date.parse(job.posted_at);
+    return Number.isFinite(time) ? time : -Infinity;
+  };
+  return postedTime(b) - postedTime(a) || b.score - a.score || String(a.id).localeCompare(String(b.id));
+}
+
 export function rankCandidates(rows, intent, filters = {}, now = Date.now()) {
   const scored = rows.map((job) => {
     const r = scoreJobLocally(job, intent);
     return { ...job, score: r.score, eligibility: r.eligibility, offTarget: r.offTarget, match_breakdown: r.breakdown, match_reason: r.eligibility.reason };
   });
   const matching = scored.filter((j) => j.eligibility.eligible !== false && !j.offTarget && matchesFilters(j, filters, now));
-  matching.sort((a, b) => b.score - a.score || (Date.parse(b.posted_at) || 0) - (Date.parse(a.posted_at) || 0) || String(a.id).localeCompare(String(b.id)));
+  matching.sort(compareSearchResults);
   const urls = new Set(), contents = new Set();
   const results = matching.filter((j) => {
     const url = canonicalUrl(j.apply_url || "");

@@ -103,8 +103,10 @@ export function normalizeJob(raw, meta = {}) {
 
   const location = (raw.location || "").trim();
   const description = cleanText(raw.description || "", 3000);
-  const posted_at = parseDate(raw.posted_at) || parseDate(raw.created_at) || new Date().toISOString();
-  const created_at = parseDate(raw.created_at) || posted_at;
+  // Source creation/publication dates are usable evidence; ingestion time is
+  // not. Missing dates stay unknown rather than looking freshly posted daily.
+  const posted_at = parseDate(raw.posted_at) || parseDate(raw.created_at);
+  const created_at = parseDate(raw.created_at) || posted_at || new Date().toISOString();
 
   return {
     title,
