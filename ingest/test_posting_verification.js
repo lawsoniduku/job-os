@@ -151,3 +151,12 @@ test('Affirm aggregator copy resolves to employer US restriction',async()=>{
  assert.equal(checkEligibility(applyVerification(row,compactVerification(v)),'nigeria').eligible,false);
  assert.equal(checkEligibility(applyVerification(row,compactVerification(v)),'us').eligible,true);
 });
+
+test('v3 clean employer evidence keeps restrictions after source signals upgrade', () => {
+ const checked={v:2,status:'ok',title:'Data Analyst',location:'Remote',remote:true,
+   checked_at:new Date().toISOString(),signals:{v:3,hardExclusion:'us only',descriptionMissing:false}};
+ const applied=applyVerification(job,checked);
+ assert.equal(checkEligibility(applied,'nigeria').eligible,false);
+ const unknown=applyVerification(job,{v:2,status:'unknown',last_known:checked});
+ assert.equal(checkEligibility(unknown,'nigeria').eligible,false);
+});

@@ -66,3 +66,22 @@ for (const [name, input, label] of [
 ]) {
   test(`badge: ${name}`, () => assert.equal(verdictOf(input).label, label));
 }
+
+test('HTML policy URL geography does not exclude a remote candidate', () => {
+  const raw = {title:'Customer Success Manager', location:'Remote', description:
+    '<p>Support customers and build product adoption.</p><a href=&quot;https://about.gitlab.com/handbook/people-policies/inc-usa/#equal-employment-opportunity-policy&quot;>Equal opportunity policy</a>'};
+  const signals = extractEligibilitySignals(raw);
+  assert.equal(signals.descMentionsForeign, false);
+  assert.equal(checkEligibility(raw, 'nigeria').confidence, 'possible');
+  assert.equal(checkEligibility({...raw, description:undefined, elig_signals:signals}, 'nigeria').confidence, 'possible');
+  const restricted = {...raw, description:raw.description + '<p>Candidates must reside in the United States.</p>'};
+  assert.equal(checkEligibility(restricted, 'nigeria').eligible, false);
+});
+
+test('an old HTML-derived exclusion is recomputed from visible text', () => {
+  const raw = {title:'Data Analyst', location:'Remote', description:
+    '<p>Analyze product data.</p><a href="https://example.com/usa/policy">Privacy policy</a>',
+    elig_signals:{v:SIGNALS_VERSION-1, descMentionsForeign:true}};
+  assert.equal(checkEligibility(raw, 'nigeria').eligible, true);
+  assert.equal(checkEligibility(raw, 'nigeria').confidence, 'possible');
+});

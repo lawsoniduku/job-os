@@ -1,7 +1,7 @@
 // Current, public posting evidence. No model guesses and no arbitrary URL fetches.
 import { GREENHOUSE_COMPANIES } from '../ingest/connectors/registry.js';
 import { cleanText } from '../ingest/core/normalize.js';
-import { extractEligibilitySignals } from './roleIntelligence.js';
+import { extractEligibilitySignals, SIGNALS_VERSION } from './roleIntelligence.js';
 
 export const VERIFICATION_VERSION = 2;
 const TTL = 6 * 60 * 60 * 1000;
@@ -189,6 +189,10 @@ export function applyVerification(job, incoming) {
     const fresh={...job,title:evidence.title,description:evidence.description,location:evidence.location,remote:evidence.remote,apply_url:evidence.apply_url || job.apply_url};
     // Discard stored model inference in favour of the last complete posting evidence.
     fresh.elig_signals=evidence.signals || extractEligibilitySignals(fresh);
+    // v3 employer checks already extracted from cleanText() output. The v4
+    // source-HTML fix does not invalidate that evidence or its restrictions.
+    if (fresh.elig_signals.v === 3 && SIGNALS_VERSION === 4)
+      fresh.elig_signals={...fresh.elig_signals, v:SIGNALS_VERSION};
     return {...fresh,verification:{status:v.status,checked_at:v.checked_at,provider:evidence.provider,evidence_checked_at:evidence.checked_at}};
   }
   // Generic aggregator labels alone are not proof of worldwide hiring. Keep the
