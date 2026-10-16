@@ -215,13 +215,13 @@ export default function Briefing({ shared, active }) {
         ))}
       </div>
 
-      {total > 0 && (
+      {matches?.length > 0 && (
         <div className="block">
           <div className="insight-card">
             <div className="i-eyebrow">One insight</div>
             <p>
-              Right now there are <b>{total}</b> matches, including roles with unconfirmed eligibility on this feed alone.
-              Candidates who apply within 48 hours of a posting get the majority of replies — check this page daily.
+              Showing <b>{matches.length}</b> latest matches. Review each eligibility label before applying.
+              Check back regularly for new postings.
             </p>
           </div>
         </div>
