@@ -7,10 +7,11 @@
  *   2. Fallback: the user's most recent saved search
  * Movement is derived from real Pipeline state. No invented data anywhere.
  */
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { strengthOf } from "../lib/profile";
 import { aiSearch, verdictOf, fmtSalary, daysSince } from "../lib/api";
+import { loadBriefingFeed } from "../lib/briefingFeed.mjs";
 import { recordApplyIntent } from "../lib/applyIntent";
 
 export default function Briefing({ shared, active }) {
@@ -19,7 +20,8 @@ export default function Briefing({ shared, active }) {
   const [feedSource, setFeedSource] = useState(null); // "profile" | "search" | null
   const [feedLabel, setFeedLabel] = useState(null);
   const [movement, setMovement] = useState([]);
-  const [total, setTotal] = useState(0);
+  const [feedError, setFeedError] = useState(null);
+  const requestId = useRef(0);
   const [cvInfo, setCvInfo] = useState(null);
 
   // The daily page is where most people land, so it is where the profile
@@ -28,43 +30,50 @@ export default function Briefing({ shared, active }) {
   const strength = useMemo(() => strengthOf(profile, cvInfo), [profile, cvInfo]);
 
   const load = useCallback(async () => {
+    const request = ++requestId.current;
+    const current = () => request === requestId.current;
+    setMatches(null);
+    setFeedError(null);
+    setMovement([]);
+    setCvInfo(null);
+    setFeedSource(null);
+    setFeedLabel(null);
     if (!user) { setMatches([]); return; }
 
-    // 1. Build the feed query — profile first, saved search fallback.
-    let q = null;
+    let queries = [];
     if (profile?.target_roles?.length) {
       const seniority = profile?.preferences?.seniority;
-      q = `remote ${seniority && seniority !== "mid" ? seniority + " " : ""}${profile.target_roles[0]} jobs`;
+      queries = profile.target_roles.map(role => `remote ${seniority && seniority !== "mid" ? seniority + " " : ""}${role} jobs`);
       setFeedSource("profile");
       setFeedLabel(profile.target_roles.join(", "));
     } else {
-      const { data: searches } = await supabase
-        .from("saved_searches").select("query")
+      const { data: searches, error } = await supabase
+        .from("saved_searches").select("query").eq("user_id", user.id)
         .order("created_at", { ascending: false }).limit(1);
-      q = searches?.[0]?.query || null;
+      if (!current()) return;
+      if (error) setFeedError("Could not load your saved search. Please retry.");
+      const q = searches?.[0]?.query;
+      queries = q ? [q] : [];
       setFeedSource(q ? "search" : null);
-      setFeedLabel(q);
+      setFeedLabel(q || null);
     }
 
-    if (q) {
-      try {
-        const res = await aiSearch({ q, country: profile?.country || undefined, limit: 5 });
-        setMatches(res.data || []);
-        setTotal(res.total || 0);
-      } catch {
-        setMatches([]);
-      }
-    } else {
-      setMatches([]);
-    }
+    const result = await loadBriefingFeed({queries, country: profile?.country || undefined, search: aiSearch});
+    if (!current()) return;
+    setMatches(result.jobs);
+    if (result.failed.length) setFeedError(result.allFailed
+      ? "Could not load your matches. Your preferences are saved — please retry."
+      : "Some role searches could not load. Showing the available matches; retry for the rest.");
 
     // 2. CV state — the strength meter needs it and it's one cheap row.
     const { data: cv } = await supabase.from("saved_cvs")
       .select("filename, updated_at").eq("user_id", user.id).maybeSingle();
+    if (!current()) return;
     setCvInfo(cv || null);
 
     // 3. Movement from the Pipeline.
-    const { data: apps } = await supabase.from("applications").select("*");
+    const { data: apps } = await supabase.from("applications").select("*").eq("user_id", user.id);
+    if (!current()) return;
     const moves = [];
     for (const a of apps || []) {
       const d = daysSince(a.applied_at || a.created_at) ?? 0;
@@ -104,7 +113,7 @@ export default function Briefing({ shared, active }) {
     setMovement(moves.slice(0, 5));
   }, [user, profile]);
 
-  useEffect(() => { if (active) load(); }, [active, load]);
+  useEffect(() => { if (active) load(); return () => { requestId.current++; }; }, [active, load]);
 
   const today = new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
   const name = profile?.full_name?.split(" ")[0] || "there";
@@ -151,13 +160,17 @@ export default function Briefing({ shared, active }) {
       <div className="block">
         <div className="block-head">
           <h2>New for you</h2>
-          {total > 0 && <span className="bcount">top 5 of {total} matches</span>}
+          {matches?.length > 0 && <span className="bcount">{matches.length} latest matches</span>}
         </div>
         {matches === null && <div className="thinking"><span /><span /><span /></div>}
-        {matches?.length === 0 && (
+        {feedError && <div className="studio-card" role="alert">
+          <p>{feedError}</p>
+          <button className="btn primary" onClick={load}>Retry matches</button>
+        </div>}
+        {!feedError && matches?.length === 0 && (
           <div className="studio-card">
             <h3>No matches to show yet</h3>
-            <div className="s-sub">Pick your preferred roles in the You tab — that's what this feed runs on.</div>
+            <div className="s-sub">{feedSource ? "No current matches for your saved preferences. Try another role or check back later." : "Pick your preferred roles in the You tab — that’s what this feed runs on."}</div>
             <button className="btn primary" onClick={() => setView("you")}>Set preferred roles</button>
           </div>
         )}
