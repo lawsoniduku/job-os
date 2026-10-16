@@ -92,6 +92,8 @@ async function writeOne(row) {
   // without carrying it forward explicitly, every run of this backfill would
   // wipe the inferences and they would have to be bought again.
   if (row.elig_signals?.infer) signals.infer = row.elig_signals.infer;
+  // Verification is independently versioned; preserve closure and employer evidence.
+  if (row.elig_signals?.verification) signals.verification = row.elig_signals.verification;
   for (let a = 1; a <= 4; a++) {
     const { error } = await supabase.from("jobs")
       .update({ elig_signals: signals }).eq("id", row.id);

@@ -6,6 +6,7 @@
  * - Honest match scoring: location eligibility is MANDATORY, not a bonus
  */
 
+import { cleanText } from "../ingest/core/normalize.js";
 import { extractHiringScopes, scopeAllows, qualifiedAnywhereTargets } from "./hiringScope.js";
 
 export const ROLE_TAXONOMY = [
@@ -1599,7 +1600,8 @@ export function applyInference(infer, country, isAfrican) {
 // lean payload switches itself off in the meantime, so search stays correct
 // and merely gets slower. See .github/workflows/backfill-signals.yml.
 // v3 separates country/region hiring scope from worldwide evidence.
-export const SIGNALS_VERSION = 3;
+// v4 reads visible description text, never geography in HTML link attributes.
+export const SIGNALS_VERSION = 4;
 
 const NON_EN_DESC = [
   "estamos","nossa","nosso","você","trabalho","empresa","vaga","vagas","sobre",
@@ -1624,7 +1626,7 @@ const deglueText = (s) =>
 export function extractEligibilitySignals(job = {}) {
   const title = ` ${deglueText(job.title).toLowerCase()} `;
   const loc = deglueText(job.location).toLowerCase();
-  const desc = deglueText(job.description).toLowerCase();
+  const desc = deglueText(cleanText(job.description || "", Infinity)).toLowerCase();
   const region = (job.eligibility_region || "").toLowerCase();
   const titleDesc = ` ${title} ${desc} `;
   const all = ` ${loc} ${desc} ${region} `;
@@ -1694,6 +1696,7 @@ function signalsFor(job) {
   const s = job?.elig_signals;
   if (s && s.v === SIGNALS_VERSION) return { ...s, _degraded: !!s.descriptionMissing };
   const computed = extractEligibilitySignals(job);
+  if (s?.infer) computed.infer = s.infer;
   const desc = job?.description;
   if (typeof desc !== "string" || desc.length === 0) computed._degraded = true;
   return computed;

@@ -25,6 +25,11 @@ name: Backfill eligibility signals
 # eligibility inference across, so it never destroys work that cost model calls.
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - api/roleIntelligence.js
+      - ingest/core/normalize.js
   workflow_dispatch:
     inputs:
       concurrency:
@@ -35,6 +40,10 @@ on:
         description: "Force re-stamp EVERY row (rarely needed — a plain run already covers missing AND stale)"
         required: false
         default: "false"
+
+concurrency:
+  group: eligibility-signals-backfill
+  cancel-in-progress: false
 
 jobs:
   backfill:
