@@ -1903,7 +1903,7 @@ export function checkEligibility(job, country) {
   //    Nothing matched above → no positive signal this role is open to target.
   //    Require evidence; don't default to "possible".
   const l = loc.trim();
-  const bare = !l || ["remote","remote,","anywhere","n/a","-","not specified",
+  const bare = !l || ["remote","remote,","remote job","anywhere","n/a","-","not specified",
                       "remote worldwide","fully remote","global"].includes(l);
   if (!bare) return E("excluded", `Location tied to ${job.location}`, false);
 
