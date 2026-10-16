@@ -85,3 +85,21 @@ test('an old HTML-derived exclusion is recomputed from visible text', () => {
   assert.equal(checkEligibility(raw, 'nigeria').eligible, true);
   assert.equal(checkEligibility(raw, 'nigeria').confidence, 'possible');
 });
+
+test('JobHive Recruitee Remote job label reaches normal eligibility checks', () => {
+  for (const [description, eligible, confidence] of [
+    ['Build useful software. Work from anywhere.', true, 'certain'],
+    ['Build useful software.', true, 'possible'],
+    ['Candidates must reside in the United States.', false, 'excluded'],
+    ['Applicants must be based in Kenya.', false, 'excluded'],
+    ['This is an on-site position.', false, 'excluded'],
+  ]) {
+    const raw={title:'Software Engineer',location:'Remote job',description};
+    for(const candidate of [raw,{...raw,description:undefined,elig_signals:extractEligibilitySignals(raw)}]) {
+      const result=checkEligibility(candidate,'nigeria');
+      assert.equal(result.eligible,eligible,description);
+      assert.equal(result.confidence,confidence,description);
+    }
+  }
+  assert.equal(checkEligibility({title:'Software Engineer', location:'Remote job, United States', description:'Build software.'},'nigeria').eligible,false);
+});
