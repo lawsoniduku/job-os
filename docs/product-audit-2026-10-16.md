@@ -27,3 +27,9 @@ Guest Briefing and Pipeline correctly request sign-in. Authenticated candidate/e
 239 eligibility/search/import/verification regression checks passed locally; production frontend build and whitespace/syntax checks passed. Added fixed-clock age boundaries, stale/future examples, consistent recency parsing, and country-qualified Anywhere checks on both full descriptions and precomputed signals.
 
 Storage impact is prevention of old imports, not measured reclaimed disk space. No existing rows were deleted and no new source inventory was enabled.
+
+## Briefing follow-up
+
+The Briefing finding above is addressed in the follow-up patch: all selected roles are queried (two requests at a time), results are deduplicated and ordered by publication date, and only five latest matches are shown. A failure is no longer represented as an empty result; partial failures retain successful results and expose a retry. Request generation checks prevent stale responses from replacing a newer profile's feed. Guest/sign-in behavior is unchanged. Four focused tests and the UI build passed; authenticated production interaction remains untested.
+
+Production recheck later on 16 October returned 14 Nigerian data-analytics matches with no 2023/2024/2025 dates or Anywhere in France result. The scheduled verification workflow also completed successfully (run 38946095025).
