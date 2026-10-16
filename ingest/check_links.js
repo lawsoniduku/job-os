@@ -5,6 +5,7 @@
 
 import { verifyPosting, compactVerification, retainVerificationEvidence } from "../api/postingVerification.js";
 import dotenv from "dotenv";
+import { persistVerifications } from "./core/verificationWriter.js";
 import { createClient } from "@supabase/supabase-js";
 import { pathToFileURL } from "node:url";
 
@@ -175,11 +176,7 @@ export async function checkOne(url) {
 // Fails loudly and usefully if migration 010 hasn't been applied yet.
 async function assertLivenessColumns() {
   const { error } = await supabase.from("jobs").select("link_status").limit(1);
-  if (error) {
-    console.log(`\n❌ jobs.link_status is missing — run this first:`);
-    console.log(`   supabase/migrations/010_job_liveness.sql (Supabase Dashboard → SQL Editor)\n`);
-    process.exit(1);
-  }
+  if (error) throw new Error(`Cannot read jobs.link_status: ${error.message}`);
 }
 
 // Regions the search pre-filter actually surfaces to an African candidate
@@ -209,29 +206,7 @@ async function selectBatch(limit = Math.min(LIMIT, 500)) {
     console.log(`  ⚠️  select failed (attempt ${a}/4): ${error.message}`);
     await sleep(1500 * a);
   }
-  return [];
-}
-
-async function persist(rows) {
-  if (dryRun || rows.length === 0) return 0;
-  const now = new Date().toISOString();
-  let written = 0;
-  // Group by status so each status is one .in() update instead of N calls.
-  for (const status of ["ok", "dead", "unknown"]) {
-    const ids = rows.filter((r) => r.status === status).map((r) => r.id);
-    for (let i = 0; i < ids.length; i += 200) {
-      const slice = ids.slice(i, i + 200);
-      for (let a = 1; a <= 4; a++) {
-        const { error } = await supabase.from("jobs")
-          .update({ link_status: status, link_checked_at: now }).in("id", slice);
-        if (!error) { written += slice.length; break; }
-        console.log(`  ⚠️  update failed (attempt ${a}/4): ${error.message}`);
-        await sleep(1500 * a);
-      }
-      await sleep(80);
-    }
-  }
-  return written;
+  throw new Error("Could not select verification batch after 4 attempts");
 }
 
 async function run() {
@@ -251,25 +226,22 @@ async function run() {
         const row = queue.shift();
         const verification = retainVerificationEvidence(compactVerification(await verifyPosting(row, {timeoutMs: 12000})), row.elig_signals?.verification);
         const status = verification.status === 'ok' ? 'ok' : verification.status === 'dead' ? 'dead' : 'unknown';
-        if (!dryRun) {
-          const {error} = await supabase.from('jobs').update({
-            elig_signals: {...(row.elig_signals || {}), verification},
-          }).eq('id',row.id);
-          if (error) {console.error('Verification persistence failed:',error.message);process.exitCode=1;}
-        }
-        results.push({...row,status}); by[status]++; checked++;
+        results.push({...row,status,verification}); by[status]++; checked++;
       }
     }));
-    const count = await persist(results); written += count;
+    const outcome = dryRun ? { saved: 0, failedIds: [] } : await persistVerifications(supabase, results);
+    const count = outcome.saved;
+    written += count;
+    if (outcome.failedIds.length) console.error(`Verification persistence exhausted retries for ${outcome.failedIds.length} rows; these remain due for recheck.`);
     console.log(`Checked ${checked}/${LIMIT}: ${by.ok} current, ${by.dead} closed/non-vacancies, ${by.unknown} unverified`);
     if (dryRun || count !== results.length || process.exitCode) {
       if (!dryRun) process.exitCode=1;
       break;
     }
   }
-  console.log(`Verification complete: ${checked} checked, ${written} saved. Unknown listings stay out of verified search.`);
+  console.log(`Verification complete: ${checked} checked, ${written} saved. Unverified listings remain available with uncertainty labels.`);
   console.log("");
 }
 
 // Only auto-run when invoked directly, so `import { checkOne }` is safe.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) run();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) run().catch(error => { console.error(error.message); process.exitCode = 1; });

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { canonicalUrl, dedupe } from './core/dedup.js';
-import { rowToRaw, fastReject, parseRemoteFlag, JOBHIVE_KEEP_REGIONS } from './core/jobhive.js';
+import { rowToRaw, fastReject, parseRemoteFlag, recoverWorldwideJob, JOBHIVE_KEEP_REGIONS } from './core/jobhive.js';
 import { createJobhiveWriter } from './core/jobhiveWriter.js';
 import { normalizeJob } from './core/normalize.js';
 import { tagJob } from './core/tag.js';
@@ -120,4 +120,36 @@ test('source publication dates and source creation dates remain usable', () => {
   assert.equal(normalizeJob(raw).posted_at, '2026-10-14T00:00:00.000Z');
   assert.equal(normalizeJob({ ...raw, posted_at: null }).posted_at, '2026-09-01T00:00:00.000Z');
   assert.equal(normalizeJob({ ...raw, posted_at: 'invalid', created_at: 'invalid' }).posted_at, null);
+});
+
+function worldwideFixture(description, location = 'Worldwide') {
+  const raw = {title: 'Software Engineer', company: 'Example', location, description, apply_url: 'https://example.com/job'};
+  const tagged = tagJob(normalizeJob(raw, {source: 'jobhive'}));
+  return {before: tagged, after: recoverWorldwideJob(tagged, raw)};
+}
+
+test('worldwide role survives incidental customer geography without storing a longer description', () => {
+  const {before, after} = worldwideFixture('We serve customers in Kenya. Open to applicants worldwide.');
+  assert.equal(before.eligibility_region, 'Regional');
+  assert.equal(after.eligibility_region, 'Global');
+  assert.equal(after.description, before.description);
+  assert.equal(checkEligibility(after, 'nigeria').eligible, true);
+});
+
+test('worldwide recovery does not admit explicit foreign hiring requirements', () => {
+  for (const description of [
+    'We serve customers in Kenya. Applicants must be based in Kenya.',
+    'We serve customers in Kenya. Candidates must reside in the United States.',
+    'We serve customers in Kenya. ' + 'Build useful software. '.repeat(200) + ' Applicants must be based in Kenya.',
+  ]) {
+    const {before, after} = worldwideFixture(description);
+    assert.equal(after, before);
+  }
+});
+
+test('recovery does not widen generic remote, unknown or country-specific imports', () => {
+  for (const location of ['Remote', '', 'Kenya', 'United States', 'Remote, US']) {
+    const {before, after} = worldwideFixture('We serve customers in Kenya.', location);
+    assert.equal(after, before);
+  }
 });
