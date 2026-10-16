@@ -67,3 +67,9 @@ export function extractHiringScopes(text, countryTerms) {
 export function scopeAllows(targets, country) {
   return targets.some((target) => target === country || REGIONS[target]?.includes(country));
 }
+
+// "Anywhere in France" describes a country boundary, not global hiring.
+export function qualifiedAnywhereTargets(location, countryTerms) {
+  const m = String(location || '').toLowerCase().match(/\banywhere\s+(?:in|within|across)\s+(.+)/);
+  return m ? targetsIn(m[1], countryTerms) : [];
+}

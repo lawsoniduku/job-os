@@ -236,3 +236,15 @@ test('salary chip excludes unknown and below-floor pay while retaining qualifyin
  const rows=[job('Virtual Assistant',{id:'unknown'}),job('Virtual Assistant',{id:'low',salary_min:30000,salary_max:45000}),job('Virtual Assistant',{id:'qualifying',company:'Qualified',salary_min:65000,salary_max:80000})];
  assert.deepEqual(rankCandidates(rows,intent,filters).results.map(x=>x.id),['qualifying']);
 });
+
+test('freshness excludes old and future dates even when the source refreshed them today', () => {
+  const now = Date.parse('2026-10-16T12:00:00Z');
+  for (const posted_at of ['2025-12-31', '2024-06-19', '2023-10-04', '2027-01-01', 'invalid']) {
+    const row = job('Virtual Assistant', {posted_at, last_seen_at: new Date(now).toISOString()});
+    assert.equal(matchesFilters(row, {}, now), false);
+    assert.equal(rankCandidates([row], intent, {}, now).results.length, 0);
+  }
+  assert.equal(matchesFilters(job('Virtual Assistant', {posted_at: '2026-10-15'}), {}, now), true);
+  assert.equal(matchesFilters(job('Virtual Assistant', {posted_at: null}), {}, now), true);
+  assert.equal(matchesFilters(job('Virtual Assistant', {posted_at: null}), {maxAgeDays: 7}, now), false);
+});

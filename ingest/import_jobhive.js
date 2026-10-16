@@ -1,3 +1,4 @@
+import { publicationIsDiscoverable } from "../api/jobFreshness.js";
 /**
  * ingest/import_jobhive.js
  * ========================
@@ -159,7 +160,7 @@ async function run() {
   );
   sourceStream.on("error", (err) => parser.destroy(err));
 
-  let recoveredWorldwide = 0;
+  let recoveredWorldwide = 0, stalePublication = 0;
   let scanned = 0, notEnglish = 0, wrongRegion = 0, kept = 0, upserted = 0, failed = 0, fastRejected = 0, duplicate = 0;
   const failedRows = []; // rows that failed mid-stream, retried once more after stream ends
   let batch = [];
@@ -215,6 +216,7 @@ async function run() {
 
       let job = normalizeJob(raw, { source: "jobhive", ats, region: regionHint, countryIso: raw._country_iso });
       if (!job) continue;
+      if (!publicationIsDiscoverable(job)) { stalePublication++; continue; }
       job = tagJob(job);
       const recovered = recoverWorldwideJob(job, raw);
       if (recovered !== job) recoveredWorldwide++;
@@ -311,6 +313,7 @@ async function run() {
   console.log(`\n📊 DONE (${ats})`);
   console.log(`   scanned:        ${scanned}`);
   console.log(`   fast-rejected (foreign on-site): ${fastRejected}`);
+  console.log(`   dropped (publication age): ${stalePublication}`);
   console.log(`   dropped (lang): ${notEnglish}`);
   console.log(`   dropped (region): ${wrongRegion}`);
   console.log(`   dropped (duplicate): ${duplicate}`);

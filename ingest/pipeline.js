@@ -1,3 +1,4 @@
+import { publicationIsDiscoverable } from "../api/jobFreshness.js";
 /**
  * ingest/pipeline.js  (v3.1)
  * ==========================
@@ -67,6 +68,10 @@ async function run() {
     }
   });
   console.log(`\n📦 RAW (normalized): ${jobs.length}`);
+
+  const beforeFreshness = jobs.length;
+  jobs = jobs.filter(j => publicationIsDiscoverable(j));
+  console.log(`Publication age: retained ${jobs.length}; excluded ${beforeFreshness - jobs.length}`);
 
   // 2. LANGUAGE FILTER (kills non-English postings at the source)
   const before = jobs.length;
