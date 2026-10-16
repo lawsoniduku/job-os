@@ -6,7 +6,7 @@
  * - Honest match scoring: location eligibility is MANDATORY, not a bonus
  */
 
-import { extractHiringScopes, scopeAllows } from "./hiringScope.js";
+import { extractHiringScopes, scopeAllows, qualifiedAnywhereTargets } from "./hiringScope.js";
 
 export const ROLE_TAXONOMY = [
   {
@@ -1788,6 +1788,10 @@ export function checkEligibility(job, country) {
       return E("possible", "Eligibility not yet verified for this listing — posting details are missing");
     return softenForOnsite(softenForTimezone(verdict));
   };
+
+  const anywhereTargets = qualifiedAnywhereTargets(loc, COUNTRY_TERMS);
+  if (anywhereTargets.length && !scopeAllows(anywhereTargets, country))
+    return E("excluded", `Location limited to ${job.location}`, false);
 
   // 0. Verified US-residency-gated recruiting funnel — see comment at
   // US_RESIDENCY_GATED_COMPANIES above. The gate lives in the application

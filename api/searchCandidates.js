@@ -2,6 +2,8 @@ import { getAliasesForCluster, scoreJobLocally, SIGNALS_VERSION } from "./roleIn
 import { nonVacancyReason } from "./postingVerification.js";
 import { canonicalUrl } from "../ingest/core/dedup.js";
 
+import { publicationIsDiscoverable, publicationFilter } from "./jobFreshness.js";
+
 const PAGE_SIZE = 500;
 const DAY = 86400000;
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -52,7 +54,8 @@ export async function fetchCandidates({ db, intent, columns, lean, hasLiveness, 
       let after = null;
       for (;;) {
         let query = applyRoleQuery(db.from("jobs").select(columns), intent)
-          .or(`last_seen_at.is.null,last_seen_at.gte.${new Date(now - 28 * DAY).toISOString()}`);
+          .or(`last_seen_at.is.null,last_seen_at.gte.${new Date(now - 28 * DAY).toISOString()}`)
+          .or(publicationFilter(now));
         if (hasLiveness) query = query.or("link_status.is.null,link_status.neq.dead");
         if (after !== null) query = query.gt("id", after);
         else if (partition > 0) query = query.gte("id", boundary(partition));
@@ -107,6 +110,7 @@ export function sanitizeFilters(filters = {}) {
 }
 
 export function matchesFilters(job, filters, now = Date.now()) {
+  if (!publicationIsDiscoverable(job, now)) return false;
   const f = sanitizeFilters(filters);
   if (f.salFloor && ![job.salary_min, job.salary_max].some((s) => s != null && Number(s) >= f.salFloor)) return false;
   if (f.maxAgeDays && !(Date.parse(job.posted_at) >= now - f.maxAgeDays * DAY)) return false;

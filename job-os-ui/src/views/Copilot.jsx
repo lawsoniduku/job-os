@@ -647,7 +647,7 @@ function ResultsBlock({ m, isLatest, onLoadMore, onTailor, onReport, user, busy 
         </div>
       )}
 
-      {m.sort === "newest" && m.total > 0 && <p className="ai-text">Newest postings first · Listings without a posting date appear last.</p>}
+      {m.sort === "newest" && m.total > 0 && <p className="ai-text">Posted within the last 180 days · Newest first · Undated listings appear last.</p>}
 
       {m.total > 0 && m.locationUnconfirmed != null && <p className="ai-text">{m.locationConfirmed} have positive location evidence; {m.locationUnconfirmed} still need country confirmation. Unconfirmed roles are possibilities, not confirmed eligible matches.</p>}
 
@@ -777,7 +777,7 @@ function JobCard({ job, onTailor, onReport, user }) {
                 </p>
               ))}
               <div className="conf" style={{ marginTop: 6 }}>
-                Role fit and eligibility drive the score; recency and salary only nudge it — a strong match never loses to a merely newer, weaker one.
+                Role fit and location evidence drive this score. Matching results are ordered by newest posting first.
               </div>
             </div>
           )}

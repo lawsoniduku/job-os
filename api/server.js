@@ -20,6 +20,7 @@ import { config } from "dotenv";
 config();
 
 import express from "express";
+import { parseRecencyDays } from "./jobFreshness.js";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
 
@@ -110,19 +111,7 @@ const JOB_COLUMNS_FULL =
   "role_cluster, department, seniority, posted_at, created_at, salary_min, " +
   "salary_max, employment_type, remote_type, eligibility_region, elig_signals";
 
-// ── Reported-dead suppression ────────────────────────────────────────────
-// job_reports was write-only: the UI said "✓ Thanks — flagged for review"
-// and nothing ever read the table, so a job a user had already flagged as
-// gone kept being served to everyone else. (Confirmed: HR Generalist @
-// ineventapp was reported 'expired', independently verified as a 404, and
-// still surfaced afterwards.) This makes that promise true.
-//
-// Rule: an 'expired' report suppresses on its own — the user is telling us
-// the posting is gone, which is self-evident and cheap to honour. Any other
-// single reason needs corroboration (2+ reports), since one person can
-// misread an eligibility verdict they merely disagree with.
-const SUPPRESS_TTL_MS = 5 * 60_000;
-let _suppress = { ids: new Set(), at: 0, loading: null };
+// Reports are review hints, not proof of closure. Public inserts cannot hide jobs globally.
 
 // ── Liveness column probe ────────────────────────────────────────────────
 // The liveness gate depends on migration 010 having been run in Supabase.
@@ -192,40 +181,11 @@ async function useLeanColumns() {
   return _lean.on;
 }
 
-async function suppressedJobIds() {
-  const now = Date.now();
-  if (now - _suppress.at < SUPPRESS_TTL_MS) return _suppress.ids;
-  if (_suppress.loading) return _suppress.loading;      // in-flight: don't stampede
-  _suppress.loading = (async () => {
-    try {
-      const { data, error } = await supabase
-        .from("job_reports").select("job_id, reason").not("job_id", "is", null);
-      if (error) throw new Error(error.message);
-      const counts = new Map();
-      const ids = new Set();
-      for (const r of data || []) {
-        if (r.reason === "expired") ids.add(r.job_id);
-        counts.set(r.job_id, (counts.get(r.job_id) || 0) + 1);
-      }
-      for (const [id, n] of counts) if (n >= 2) ids.add(id);
-      _suppress = { ids, at: Date.now(), loading: null };
-      return ids;
-    } catch (e) {
-      // Never fail a search because the reports table hiccuped — reuse the
-      // last known set (possibly empty) and try again on the next request.
-      console.log("⚠️  suppression refresh failed:", e.message);
-      _suppress = { ..._suppress, at: Date.now() - SUPPRESS_TTL_MS + 30_000, loading: null };
-      return _suppress.ids;
-    }
-  })();
-  return _suppress.loading;
-}
-
 async function searchPool(intent) {
-  const [lean, hasLiveness, suppressed] = await Promise.all([
-    useLeanColumns(), livenessAvailable(), suppressedJobIds(),
+  const [lean, hasLiveness] = await Promise.all([
+    useLeanColumns(), livenessAvailable(),
   ]);
-  return fetchCandidates({ db: supabase, intent, lean, hasLiveness, suppressed,
+  return fetchCandidates({ db: supabase, intent, lean, hasLiveness,
     columns: lean ? JOB_COLUMNS_LEAN : JOB_COLUMNS_FULL });
 }
 
@@ -290,7 +250,7 @@ app.get("/ai/search", searchLimit, async (req, res) => {
     console.log(`🔍 "${q}" -> cluster=${intent.cluster} country=${intent.locationCountry} remote=${intent.remoteOnly}`);
 
     const rawJobs = await searchPool(intent);
-    const searchFilters = sanitizeFilters({ salFloor: parseSalaryFloor(q) });
+    const searchFilters = sanitizeFilters({ salFloor: parseSalaryFloor(q), maxAgeDays: parseRecencyDays(q) });
     const ranked = await verifiedRanking(rawJobs, intent, searchFilters);
     const eligible = ranked.results;
     const excludedCount = ranked.excluded;
@@ -902,12 +862,7 @@ app.post("/ai/refine", searchLimit, async (req, res) => {
     else if (/\bworkable\b/.test(r)) sourceFilter = "workable";
 
     // 4. Recency (days)
-    let maxAgeDays = null;
-    if (/today|24 hours/.test(r)) maxAgeDays = 1;
-    else if (/this week|last 7|past week/.test(r)) maxAgeDays = 7;
-    else if (/last 3 days|past 3/.test(r)) maxAgeDays = 3;
-    else if (/last 14|two weeks|past two/.test(r)) maxAgeDays = 14;
-    else if (/this month|last 30|past month/.test(r)) maxAgeDays = 30;
+    let maxAgeDays = parseRecencyDays(r);
 
     // 5. Employment type
     let employmentFilter = null;
