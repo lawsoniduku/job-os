@@ -1,7 +1,7 @@
 name: Verify current job postings
 
 # Refresh current posting content and availability, not just HTTP status.
-# Unknown/blocked pages never qualify for verified search; recheck daily.
+# Unknown/blocked pages retain uncertainty labels; recheck daily.
 on:
   schedule:
     - cron: "30 2 * * *"    # 02:30 UTC, before the 03:00 jobhive import
@@ -12,6 +12,10 @@ on:
         description: "How many listings to check this run"
         required: false
         default: "12000"
+
+concurrency:
+  group: posting-verification-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   link-check:

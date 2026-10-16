@@ -14,7 +14,7 @@
     "test:eligibility": "node ingest/test_scoring.js && node ingest/test_eligibility_inference.js && node --test ingest/test_eligibility_guardrails.js",
     "test:jobhive": "node --test ingest/test_jobhive.js",
     "test:search": "node --test ingest/test_search.js",
-    "test:verification": "node --test ingest/test_posting_verification.js"
+    "test:verification": "node --test ingest/test_posting_verification.js ingest/test_verification_writer.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.108.0",

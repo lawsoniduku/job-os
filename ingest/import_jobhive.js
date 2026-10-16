@@ -61,7 +61,7 @@ import { normalizeJob } from "./core/normalize.js";
 import { tagJob } from "./core/tag.js";
 import { looksEnglishJob } from "./core/language.js";
 import { canonicalUrl, contentKey } from "./core/dedup.js";
-import { rowToRaw, fastReject, JOBHIVE_KEEP_REGIONS as KEEP_REGIONS } from "./core/jobhive.js";
+import { rowToRaw, fastReject, recoverWorldwideJob, JOBHIVE_KEEP_REGIONS as KEEP_REGIONS } from "./core/jobhive.js";
 
 dotenv.config();
 
@@ -159,6 +159,7 @@ async function run() {
   );
   sourceStream.on("error", (err) => parser.destroy(err));
 
+  let recoveredWorldwide = 0;
   let scanned = 0, notEnglish = 0, wrongRegion = 0, kept = 0, upserted = 0, failed = 0, fastRejected = 0, duplicate = 0;
   const failedRows = []; // rows that failed mid-stream, retried once more after stream ends
   let batch = [];
@@ -215,6 +216,9 @@ async function run() {
       let job = normalizeJob(raw, { source: "jobhive", ats, region: regionHint, countryIso: raw._country_iso });
       if (!job) continue;
       job = tagJob(job);
+      const recovered = recoverWorldwideJob(job, raw);
+      if (recovered !== job) recoveredWorldwide++;
+      job = recovered;
 
       regionTally[job.eligibility_region] = (regionTally[job.eligibility_region] || 0) + 1;
 
@@ -311,6 +315,7 @@ async function run() {
   console.log(`   dropped (region): ${wrongRegion}`);
   console.log(`   dropped (duplicate): ${duplicate}`);
   console.log(`   KEPT candidates: ${kept}`);
+  console.log(`   worldwide candidates recovered before dedup: ${recoveredWorldwide}`);
   console.log(`   region split before dedup:`, regionTally);
   console.log(`   region split of kept:`, keptRegionTally);
   if (dryRun) console.log(`   (dry run — nothing written)`);

@@ -1,3 +1,7 @@
+import { detectEligibilityRegion } from "./tag.js";
+import { cleanText } from "./normalize.js";
+import { checkEligibility, extractEligibilitySignals } from "../../api/roleIntelligence.js";
+
 // JobHive conversion and import policy, kept pure for offline regression tests.
 export const JOBHIVE_KEEP_REGIONS = new Set(["Africa", "Nigeria", "Global", "Remote", "EMEA"]);
 
@@ -60,3 +64,17 @@ export function fastReject(raw) {
   return true;                                // concrete foreign + on-site -> drop
 }
 
+
+// Recover only explicit worldwide locations rejected by the coarse region tag.
+// Re-evaluate full source text so restrictions beyond the stored excerpt count.
+// This does not admit generic Remote/Unknown or widen the source inventory.
+export function recoverWorldwideJob(job, raw) {
+  if (JOBHIVE_KEEP_REGIONS.has(job.eligibility_region)) return job;
+  if (detectEligibilityRegion("", job.location, null, job.country_iso) !== "Global") return job;
+  const candidate = { ...job, eligibility_region: "Global", description: cleanText(raw.description, Infinity) };
+  candidate.elig_signals = extractEligibilitySignals(candidate);
+  const verdict = checkEligibility(candidate, "nigeria");
+  if (!verdict.eligible || !["certain", "likely"].includes(verdict.confidence)) return job;
+  // Keep storage bounded; retain compact signals from the complete source text.
+  return { ...job, eligibility_region: "Global", elig_signals: candidate.elig_signals };
+}
