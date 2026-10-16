@@ -84,6 +84,17 @@ export async function fetchCandidates({ db, intent, columns, lean, hasLiveness, 
   return rows;
 }
 
+// Shared by initial searches and refinements; spacing/currency must not turn
+// a salary request into an unrelated new search.
+export function parseSalaryFloor(text = '') {
+  const s = String(text).toLowerCase();
+  const m = s.match(/(?:\b(?:above|over|minimum|at least)\b|>)\s*\$?\s*([\d,]+(?:\.\d+)?)\s*(k)?/)
+    || s.match(/\$\s*([\d,]+(?:\.\d+)?)\s*(k)?\s*\+/);
+  if (!m) return null;
+  const n = Number(m[1].replace(/,/g, ''));
+  return Number.isFinite(n) && n > 0 ? n * (m[2] || n < 1000 ? 1000 : 1) : null;
+}
+
 export function sanitizeFilters(filters = {}) {
   const oneOf = (value, values) => values.includes(value) ? value : null;
   return {

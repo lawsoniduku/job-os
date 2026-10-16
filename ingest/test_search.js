@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { parseIntent, scoreJobLocally, extractEligibilitySignals, SIGNALS_VERSION, getAliasesForCluster } from "../api/roleIntelligence.js";
-import { titlePattern, applyRoleQuery, fetchCandidates, rankCandidates, matchesFilters, compareSearchResults } from "../api/searchCandidates.js";
+import { parseSalaryFloor, titlePattern, applyRoleQuery, fetchCandidates, rankCandidates, matchesFilters, compareSearchResults } from "../api/searchCandidates.js";
 
 const intent = parseIntent("virtual assistant jobs open to nigeria");
 const job = (title, extra = {}) => ({ id: title, title, company: "Example", location: "Lagos, Nigeria", description: "Administrative support for our team in Nigeria.", posted_at: new Date().toISOString(), ...extra });
@@ -219,4 +219,20 @@ test("availability fallback cannot restore closed, restricted or unrelated roles
     job('Virtual Assistant - Internal Vacancy Only', {verification:{status:'unknown'}}),
   ], intent, {}, Date.now(), true);
   assert.equal(result.results.length, 0);
+});
+
+for (const [phrase,expected] of [['Only above $60k',60000],['Only above $80k',80000],['over $80,000',80000],['at least $65.5k',65500],['$70k+',70000],['above 60k',60000],['Posted this week',null]]) {
+ test(`salary parser: ${phrase}`,()=>assert.equal(parseSalaryFloor(phrase),expected));
+}
+for (const title of ['Video Data Annotator','Senior Benefits Analyst','Data Engineers','Junior Crypto Analyst & Trader','Compliance Analyst / Senior Compliance Analyst (Special Investigations)','GEOINT Analyst, Scams','Data Collection Specialist','Compensation & Analytics Partner']) {
+ test(`data analyst excludes ${title}`,()=>assert.equal(scoreJobLocally(job(title,{role_cluster:'Data Analytics'}),parseIntent('remote data analyst jobs Nigeria')).offTarget,true));
+}
+for (const title of ['Data Analyst','Senior Data Analyst','Product Analyst','Analyst, GTM Analytics','Business Intelligence Analyst','Power BI Developer','Head of BI & Analytics','Analytics Engineer']) {
+ test(`data analyst retains ${title}`,()=>assert.equal(scoreJobLocally(job(title),parseIntent('data analyst jobs Nigeria')).offTarget,false));
+}
+
+test('salary chip excludes unknown and below-floor pay while retaining qualifying role',()=>{
+ const filters={salFloor:parseSalaryFloor('Only above $60k')};
+ const rows=[job('Virtual Assistant',{id:'unknown'}),job('Virtual Assistant',{id:'low',salary_min:30000,salary_max:45000}),job('Virtual Assistant',{id:'qualifying',company:'Qualified',salary_min:65000,salary_max:80000})];
+ assert.deepEqual(rankCandidates(rows,intent,filters).results.map(x=>x.id),['qualifying']);
 });

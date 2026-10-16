@@ -3,7 +3,7 @@ import { GREENHOUSE_COMPANIES } from '../ingest/connectors/registry.js';
 import { cleanText } from '../ingest/core/normalize.js';
 import { extractEligibilitySignals } from './roleIntelligence.js';
 
-export const VERIFICATION_VERSION = 1;
+export const VERIFICATION_VERSION = 2;
 const TTL = 6 * 60 * 60 * 1000;
 const cache = new Map();
 const boardCache = new Map();
@@ -72,7 +72,7 @@ async function readResponse(url, fetcher, signal) {
   }
   throw new Error('Too many redirects');
 }
-export async function verifyPosting(job, {fetcher=fetch, now=Date.now(), timeoutMs=6000}={}) {
+export async function verifyPosting(job, {fetcher=fetch, now=Date.now(), timeoutMs=12000}={}) {
   const at = new Date(now).toISOString();
   const unknown = reason => ({v:VERIFICATION_VERSION,status:'unknown',checked_at:at,reason});
   const ctrl = new AbortController(), timer = setTimeout(()=>ctrl.abort(),timeoutMs);
@@ -203,7 +203,7 @@ export function applyVerification(job, incoming) {
 }
 // Bounded work per request. Unknown availability is separate from location eligibility.
 // The scheduled checker persists this same evidence and progressively warms it.
-export async function verifyCandidates(rows,{db,verify=verifyPosting,now=Date.now(),budgetMs=14000,concurrency=8}={}) {
+export async function verifyCandidates(rows,{db,verify=verifyPosting,now=Date.now(),budgetMs=20000,concurrency=8}={}) {
   const output=new Array(rows.length), queue=[]; let cursor=0;
   const fresh=v=>v?.v===VERIFICATION_VERSION && now-Date.parse(v.checked_at)>=0 && now-Date.parse(v.checked_at)<(v.status==='unknown'?300000:TTL);
   rows.forEach((job,i)=>{
@@ -215,7 +215,7 @@ export async function verifyCandidates(rows,{db,verify=verifyPosting,now=Date.no
   await Promise.all(Array.from({length:concurrency},async()=>{
     while(cursor<queue.length && Date.now()<deadline) {
       const {job,i}=queue[cursor++];
-      const checked=await verify(job,{now,timeoutMs:Math.max(100,Math.min(6000,deadline-Date.now()))});
+      const checked=await verify(job,{now,timeoutMs:Math.max(100,Math.min(12000,deadline-Date.now()))});
       const previous = retainVerificationEvidence(cache.get(job.apply_url) || {status:'pending'},job.elig_signals?.verification);
       const v=retainVerificationEvidence(compactVerification(checked),previous);
       if(cache.size>5000)cache.delete(cache.keys().next().value);

@@ -34,7 +34,7 @@ import {
 import { generateJSON, generateText, isLLMHealthy, llmConfig, llmState } from "../lib/llm.js";
 import { makeRequireAuth, makeRequireEmployer, makeOptionalAuth } from "./auth.js";
 import { verifyCandidates } from "./postingVerification.js";
-import { fetchCandidates, rankCandidates, sanitizeFilters, compareSearchResults } from "./searchCandidates.js";
+import { parseSalaryFloor, fetchCandidates, rankCandidates, sanitizeFilters, compareSearchResults } from "./searchCandidates.js";
 import { employerRouter } from "./employer.js";
 
 // Friendly message for when a structured call comes back empty.
@@ -241,6 +241,8 @@ async function verifiedRanking(rawJobs, intent, filters = {}) {
     excluded: preliminary.excluded + ranked.excluded,
     duplicates: preliminary.duplicates + ranked.duplicates,
     verificationPending: ranked.results.filter(j => j.verification?.status !== 'ok').length,
+    locationConfirmed: ranked.results.filter(j => ['certain','likely'].includes(j.eligibility.confidence)).length,
+    locationUnconfirmed: ranked.results.filter(j => j.eligibility.confidence === 'possible').length,
   };
   if (rankingCache.size >= 100) rankingCache.delete(rankingCache.keys().next().value);
   rankingCache.set(key, { at: Date.now(), value });
@@ -288,7 +290,8 @@ app.get("/ai/search", searchLimit, async (req, res) => {
     console.log(`🔍 "${q}" -> cluster=${intent.cluster} country=${intent.locationCountry} remote=${intent.remoteOnly}`);
 
     const rawJobs = await searchPool(intent);
-    const ranked = await verifiedRanking(rawJobs, intent);
+    const searchFilters = sanitizeFilters({ salFloor: parseSalaryFloor(q) });
+    const ranked = await verifiedRanking(rawJobs, intent, searchFilters);
     const eligible = ranked.results;
     const excludedCount = ranked.excluded;
     console.log(`✅ matches=${eligible.length} ❌ excluded=${excludedCount}`);
@@ -314,18 +317,20 @@ app.get("/ai/search", searchLimit, async (req, res) => {
     const results = finalResults.slice(offset, offset + limit);
     const hasMore = offset + limit < totalAvailable;   // is there another page after this one?
 
-    const locPart = intent.locationCountry ? ` open to ${intent.locationCountry} candidates`
+    const locPart = intent.locationCountry ? ` for candidates in ${intent.locationCountry}`
       : intent.remoteOnly ? " that are remote" : "";
     const filteredPart = excludedCount > 0 ? ` (${excludedCount} excluded by eligibility or role)` : "";
     const summary = totalAvailable === 0
       ? `No matching roles for "${q}". Try broader terms.`
-      : `Found ${totalAvailable} ${intent.cluster || "matching"} role${totalAvailable !== 1 ? "s" : ""}${locPart}${filteredPart}.`;
+      : `Found ${totalAvailable} ${intent.cluster || "matching"} role${totalAvailable !== 1 ? "s" : ""}${locPart}${filteredPart}. ${ranked.locationConfirmed} have positive location evidence; ${ranked.locationUnconfirmed} need country confirmation.`;
 
     res.json({
       query: q,
       sort: "newest",
       verification_pending: ranked.verificationPending,
-      intent: publicIntent(intent),
+      location_confirmed: ranked.locationConfirmed,
+      location_unconfirmed: ranked.locationUnconfirmed,
+      intent: publicIntent(intent, searchFilters),
       total: totalAvailable, offset, limit, has_more: hasMore,
       excluded_count: excludedCount, summary, data: results,
       evaluated: ranked.evaluated,
@@ -882,12 +887,7 @@ app.post("/ai/refine", searchLimit, async (req, res) => {
     // 1. Salary floor — "$70k", "above 60k", "over $80,000".
     //    Numbers under 1000 are treated as thousands (70 -> 70000)
     //    because salaries in the jobs table are stored as annual figures.
-    const salMatch = r.match(/(?:above|over|>\s*|minimum\s*|at least\s*)\$?\s*([\d,]+)\s*k?/);
-    let salFloor = null;
-    if (salMatch) {
-      const n = parseInt(salMatch[1].replace(/,/g, ""), 10);
-      if (!Number.isNaN(n)) salFloor = n < 1000 ? n * 1000 : n;
-    }
+    let salFloor = parseSalaryFloor(r);
 
     // 2. Seniority
     let seniorityFilter = null;
@@ -965,6 +965,8 @@ app.post("/ai/refine", searchLimit, async (req, res) => {
       type: "refined",
       sort: "newest",
       verification_pending: ranked.verificationPending,
+      location_confirmed: ranked.locationConfirmed,
+      location_unconfirmed: ranked.locationUnconfirmed,
       description,
       total: ranked.results.length, offset, limit,
       has_more: offset + limit < ranked.results.length,
