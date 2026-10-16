@@ -241,10 +241,12 @@ export default function Copilot({ shared, active, initialQuery, onInitialConsume
         jobs: res.data || [],
         offset: (res.data || []).length,
         hasMore: !!res.has_more,
-        activeFilters: {},
+        activeFilters: res.intent?.filters || {},
         searchIntent: res.intent,
         duplicates: res.duplicate_count || 0,
         verificationPending: res.verification_pending || 0,
+        locationConfirmed: res.location_confirmed,
+        locationUnconfirmed: res.location_unconfirmed,
         sort: res.sort,
       }, (next) => persistThread(next, q, res.intent));
     } catch (err) {
@@ -282,6 +284,8 @@ export default function Copilot({ shared, active, initialQuery, onInitialConsume
           scanned: res.evaluated || 0,
           duplicates: res.duplicate_count || 0,
         verificationPending: res.verification_pending || 0,
+        locationConfirmed: res.location_confirmed,
+        locationUnconfirmed: res.location_unconfirmed,
           sort: res.sort,
           searchIntent: res.intent,
           jobs: res.data || [],
@@ -337,6 +341,8 @@ export default function Copilot({ shared, active, initialQuery, onInitialConsume
         offset: m.offset + (res.data || []).length,
         total: res.total,
         verificationPending: res.verification_pending || 0,
+        locationConfirmed: res.location_confirmed,
+        locationUnconfirmed: res.location_unconfirmed,
         hasMore: !!res.has_more,
       }), true);
     } catch (err) {
@@ -642,6 +648,8 @@ function ResultsBlock({ m, isLatest, onLoadMore, onTailor, onReport, user, busy 
       )}
 
       {m.sort === "newest" && m.total > 0 && <p className="ai-text">Newest postings first · Listings without a posting date appear last.</p>}
+
+      {m.total > 0 && m.locationUnconfirmed != null && <p className="ai-text">{m.locationConfirmed} have positive location evidence; {m.locationUnconfirmed} still need country confirmation. Unconfirmed roles are possibilities, not confirmed eligible matches.</p>}
 
       {m.verificationPending > 0 && <p className="ai-text">{m.verificationPending} matching listings have not had their current availability confirmed. Check the posting before applying.</p>}
 

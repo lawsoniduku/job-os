@@ -12,6 +12,7 @@
 
 // ── GREENHOUSE ────────────────────────────────────────────────
 export const GREENHOUSE_COMPANIES = [
+  { slug: "affirm", name: "Affirm" }, // Confirmed public employer board, October 2026
   // Nigerian / African ✅
   { slug: "jumia",             name: "Jumia",       region: "Africa"  },
   { slug: "carbon",            name: "Carbon",      region: "Nigeria" },

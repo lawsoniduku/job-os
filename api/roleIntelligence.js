@@ -1872,6 +1872,9 @@ export function checkEligibility(job, country) {
 
   // 2. Explicit target in LOCATION field → certain.
   const locField = ` ${loc} `;
+  // Structured location codes are not the pronoun "us" in a description.
+  if (country === "us" && /\bUS\b/.test(job.location || ""))
+    return soften(E("certain", "Location mentions United States"));
   if (country === "africa") {
     if (hasAny(locField, AFRICA_TERMS)) return soften(E("certain", "Location mentions Africa"));
   } else if (REGION_POSITIVE[country]) {
@@ -2120,9 +2123,16 @@ export function scoreJobLocally(job, intent) {
   // Stored labels and descriptions can mention other roles (e.g. who this
   // person reports to), so neither can admit an unrelated title. Same-department
   // roles and unknown titles also need positive evidence, not just no conflict.
-  const roleMatch = intent.cluster
+  let roleMatch = intent.cluster
     ? titleCluster === intent.cluster || (titleAliasHit && !titleCluster)
     : (intent.keywords || []).length > 0 && intent.keywords.every((k) => hasPhrase(titleNorm, k));
+  if (intent.cluster === "Data Analytics") {
+    // Bare data/analyst hints route queries, but cannot establish title relevance.
+    // Preserve real analyst/BI aliases and inverted titles such as Analyst, GTM Analytics.
+    const analyticsTitle = titleAliasHit || /\b(?:analytics|business intelligence|bi)\b/i.test(titleNorm);
+    const otherProfession = /\b(?:benefits|compensation|compliance|geoint|crypto|trader|annotation|annotator|collection)\b/i.test(titleNorm);
+    roleMatch = (!!analyticsTitle && !otherProfession) || exactTitleHit;
+  }
   const offTarget = !roleMatch;
 
   // query keyword overlap on the TITLE (rewards on-target titles)

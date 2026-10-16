@@ -141,3 +141,13 @@ test('unverified board worldwide label stays discoverable but unconfirmed', () =
  assert.equal(rankCandidates([uncertain],parseIntent('virtual assistant Nigeria'),{},Date.now(),true).results.length,1);
  assert.equal(checkEligibility(applyVerification({...row,description:'Open to candidates worldwide.'},{status:'unknown'}),'nigeria').confidence,'certain');
 });
+
+test('Affirm aggregator copy resolves to employer US restriction',async()=>{
+ const row={...job,title:'Administrative Assistant IV',company:'Affirm',apply_url:'https://weworkremotely.com/remote-jobs/affirm-administrative-assistant-iv'};
+ const v=await verifyPosting(row,{fetcher:async url=>response(url.endsWith('/7850544003')
+ ? {id:7850544003,title:row.title,location:{name:'Remote US'},content:'Administrative support for our engineering team.'}
+ : {jobs:[{id:7850544003,title:row.title,absolute_url:'https://job-boards.greenhouse.io/affirm/jobs/7850544003'}]})});
+ assert.equal(v.provider,'employer');
+ assert.equal(checkEligibility(applyVerification(row,compactVerification(v)),'nigeria').eligible,false);
+ assert.equal(checkEligibility(applyVerification(row,compactVerification(v)),'us').eligible,true);
+});
