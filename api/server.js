@@ -20,6 +20,7 @@ import { config } from "dotenv";
 config();
 
 import express from "express";
+import { createSearchCache } from "./searchCache.js";
 import { parseRecencyDays } from "./jobFreshness.js";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
@@ -189,27 +190,26 @@ async function searchPool(intent) {
     columns: lean ? JOB_COLUMNS_LEAN : JOB_COLUMNS_FULL });
 }
 
-const rankingCache = new Map();
-async function verifiedRanking(rawJobs, intent, filters = {}) {
+const cachedRanking = createSearchCache();
+async function verifiedRanking(intent, filters = {}) {
   const key = JSON.stringify([intent, filters]);
-  const cached = rankingCache.get(key);
-  if (cached && Date.now() - cached.at < 180000) return cached.value;
-  const preliminary = rankCandidates(rawJobs, intent, filters);
-  const checked = await verifyCandidates(preliminary.results, { db: supabase });
-  const ranked = rankCandidates(checked, intent, filters, Date.now(), true);
-  const exclusionReasons={...preliminary.exclusionReasons};
-  for(const [reason,count] of Object.entries(ranked.exclusionReasons)) exclusionReasons[reason]=(exclusionReasons[reason]||0)+count;
-  console.log('Search exclusions:',exclusionReasons);
-  const value = { ...ranked, exclusionReasons, evaluated: rawJobs.length,
-    excluded: preliminary.excluded + ranked.excluded,
-    duplicates: preliminary.duplicates + ranked.duplicates,
-    verificationPending: ranked.results.filter(j => j.verification?.status !== 'ok').length,
-    locationConfirmed: ranked.results.filter(j => ['certain','likely'].includes(j.eligibility.confidence)).length,
-    locationUnconfirmed: ranked.results.filter(j => j.eligibility.confidence === 'possible').length,
-  };
-  if (rankingCache.size >= 100) rankingCache.delete(rankingCache.keys().next().value);
-  rankingCache.set(key, { at: Date.now(), value });
-  return value;
+  return cachedRanking(key,async()=>{
+    const rawJobs=await searchPool(intent);
+    const preliminary = rankCandidates(rawJobs, intent, filters);
+    const checked = await verifyCandidates(preliminary.results, { db: supabase });
+    const ranked = rankCandidates(checked, intent, filters, Date.now(), true);
+    const exclusionReasons={...preliminary.exclusionReasons};
+    for(const [reason,count] of Object.entries(ranked.exclusionReasons)) exclusionReasons[reason]=(exclusionReasons[reason]||0)+count;
+    console.log('Search exclusions:',exclusionReasons);
+    const value = { ...ranked, exclusionReasons, evaluated: rawJobs.length,
+      excluded: preliminary.excluded + ranked.excluded,
+      duplicates: preliminary.duplicates + ranked.duplicates,
+      verificationPending: ranked.results.filter(j => j.verification?.status !== 'ok').length,
+      locationConfirmed: ranked.results.filter(j => ['certain','likely'].includes(j.eligibility.confidence)).length,
+      locationUnconfirmed: ranked.results.filter(j => j.eligibility.confidence === 'possible').length,
+    };
+    return value;
+  });
 }
 
 function publicIntent(intent, filters = {}) {
@@ -252,9 +252,8 @@ app.get("/ai/search", searchLimit, async (req, res) => {
 
     console.log(`🔍 "${q}" -> cluster=${intent.cluster} country=${intent.locationCountry} remote=${intent.remoteOnly}`);
 
-    const rawJobs = await searchPool(intent);
     const searchFilters = sanitizeFilters({ salFloor: parseSalaryFloor(q), maxAgeDays: parseRecencyDays(q) });
-    const ranked = await verifiedRanking(rawJobs, intent, searchFilters);
+    const ranked = await verifiedRanking(intent, searchFilters);
     const eligible = ranked.results;
     const excludedCount = ranked.excluded;
     console.log(`✅ matches=${eligible.length} ❌ excluded=${excludedCount}`);
@@ -907,7 +906,7 @@ app.post("/ai/refine", searchLimit, async (req, res) => {
     });
     ({ salFloor, seniorityFilter, sourceFilter, maxAgeDays, employmentFilter } = filters);
     if (seniorityFilter) intent.seniority = seniorityFilter;
-    const ranked = await verifiedRanking(await searchPool(intent), intent, filters);
+    const ranked = await verifiedRanking(intent, filters);
     const results = ranked.results.slice(offset, offset + limit);
 
     // Human-readable description of what changed.

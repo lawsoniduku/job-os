@@ -13,7 +13,7 @@
     "test:employer": "node --env-file=.env ingest/test_employer_loop.js",
     "test:eligibility": "node ingest/test_scoring.js && node ingest/test_eligibility_inference.js && node --test ingest/test_eligibility_guardrails.js",
     "test:jobhive": "node --test ingest/test_jobhive.js ingest/test_jobhive_refresh.js ingest/test_jobhive_importer.mjs",
-    "test:search": "node --test ingest/test_search.js ingest/test_discovery_policy.js",
+    "test:search": "node --test ingest/test_search.js ingest/test_discovery_policy.js ingest/test_search_cache.js",
     "test:verification": "node --test ingest/test_posting_verification.js ingest/test_verification_writer.js ingest/test_job_signals_writer.js"
   },
   "dependencies": {
