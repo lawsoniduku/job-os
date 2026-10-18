@@ -1,5 +1,6 @@
 import { detectEligibilityRegion } from "./tag.js";
 import { cleanText } from "./normalize.js";
+import { createHash } from "node:crypto";
 import { checkEligibility, extractEligibilitySignals } from "../../api/roleIntelligence.js";
 
 // JobHive conversion and import policy, kept pure for offline regression tests.
@@ -34,6 +35,8 @@ export function rowToRaw(record) {
     salary_max: g("salary_max") || null,
     isRemote: parseRemoteFlag(g("is_remote")),
     _country_iso: g("country_iso").toUpperCase(),
+    _fetched_at: g("fetched_at"),
+    _application_deadline: g("application_deadline"),
   };
 }
 
@@ -65,16 +68,55 @@ export function fastReject(raw) {
 }
 
 
-// Recover only explicit worldwide locations rejected by the coarse region tag.
+// Recover explicit worldwide hiring evidence rejected by the coarse region tag.
 // Re-evaluate full source text so restrictions beyond the stored excerpt count.
 // This does not admit generic Remote/Unknown or widen the source inventory.
 export function recoverWorldwideJob(job, raw) {
   if (JOBHIVE_KEEP_REGIONS.has(job.eligibility_region)) return job;
-  if (detectEligibilityRegion("", job.location, null, job.country_iso) !== "Global") return job;
   const candidate = { ...job, eligibility_region: "Global", description: cleanText(raw.description, Infinity) };
   candidate.elig_signals = extractEligibilitySignals(candidate);
+  const worldwideLocation = detectEligibilityRegion("", job.location, null, job.country_iso) === "Global";
+  const genericLocation = /^(?:remote(?:\s+job)?|fully remote|work from home)?$/i.test((job.location || "").trim());
+  if (!worldwideLocation && !(genericLocation && candidate.elig_signals.worldwideDesc)) return job;
   const verdict = checkEligibility(candidate, "nigeria");
   if (!verdict.eligible || !["certain", "likely"].includes(verdict.confidence)) return job;
-  // Keep storage bounded; retain compact signals from the complete source text.
   return { ...job, eligibility_region: "Global", elig_signals: candidate.elig_signals };
+}
+
+function sourceDate(value) {
+  const text = String(value || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/.test(text)) return null;
+  const dateOnly = text.slice(0, 10);
+  const midnight = new Date(`${dateOnly}T00:00:00Z`);
+  if (!Number.isFinite(midnight.getTime()) || midnight.toISOString().slice(0, 10) !== dateOnly) return null;
+  const qualified = text.length === 10 ? `${text}T00:00:00Z` : /(?:Z|[+-]\d{2}:?\d{2})$/.test(text) ? text : `${text.replace(" ", "T")}Z`;
+  const date = new Date(qualified);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+}
+
+export function sourceObservation(raw, now = Date.now()) {
+  const fetchedAt = sourceDate(raw._fetched_at);
+  let deadline = sourceDate(raw._application_deadline);
+  // A date without a time remains open through that UTC calendar day.
+  if (deadline && /^\d{4}-\d{2}-\d{2}$/.test(raw._application_deadline || "")) {
+    deadline = new Date(Date.parse(deadline) + 86400000 - 1).toISOString();
+  }
+  const hash = createHash("sha256").update(JSON.stringify([raw.title, raw.location, cleanText(raw.description, Infinity), raw._country_iso, raw.isRemote])).digest("hex");
+  const source = { fetched_at: fetchedAt, application_deadline: deadline, hash };
+  if (fetchedAt && Date.parse(fetchedAt) < now - 28 * 86400000) return { source, rejection: "upstream_stale" };
+  if (fetchedAt && Date.parse(fetchedAt) > now + 86400000) return { source, rejection: "upstream_future" };
+  if (deadline && Date.parse(deadline) < now) return { source, rejection: "deadline_expired" };
+  return { source, rejection: null };
+}
+
+export function createRejectionLedger(sampleLimit = 3) {
+  const counts = {}, samples = {};
+  return {
+    counts, samples,
+    record(reason, raw = {}) {
+      counts[reason] = (counts[reason] || 0) + 1;
+      const bucket = samples[reason] ||= [];
+      if (bucket.length < sampleLimit) bucket.push({ title: String(raw.title || "").slice(0, 100), location: String(raw.location || "").slice(0, 100) });
+    },
+  };
 }

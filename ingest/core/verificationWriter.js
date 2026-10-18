@@ -1,3 +1,4 @@
+import { updateJobSignals, mergePostingObservation } from './jobSignalsWriter.js';
 // Save each observation atomically: evidence and liveness must agree.
 // Separate DB concurrency from outbound posting-check concurrency.
 export async function persistVerifications(db, rows, {
@@ -11,22 +12,13 @@ export async function persistVerifications(db, rows, {
   await Promise.all(Array.from({ length: concurrency }, async () => {
     while (queue.length) {
       const row = queue.shift();
-      const payload = {
-        elig_signals: { ...(row.elig_signals || {}), verification: row.verification },
-        link_status: row.status,
-        link_checked_at: now(),
-      };
-      let success = false;
-      for (let attempt = 1; attempt <= attempts; attempt++) {
-        try {
-          const { error } = await db.from('jobs').update(payload).eq('id', row.id);
-          if (error) throw new Error(error.message);
-          success = true;
-          break;
-        } catch {
-          if (attempt < attempts) await sleep(1500 * attempt);
-        }
-      }
+      const result = await updateJobSignals(db,row.id,current=>({...current,
+        verification:mergePostingObservation(current.verification,row.verification)}), {
+        snapshot:{id:row.id,elig_signals:row.elig_signals},attempts,sleep,
+        patch:(_latest,signals)=>({link_status:signals.verification.status || row.status,
+          link_checked_at:signals.verification.checked_at || now()}),
+      });
+      const success=result.saved;
       if (success) saved++;
       else failedIds.push(row.id);
     }

@@ -153,3 +153,26 @@ test('recovery does not widen generic remote, unknown or country-specific import
     assert.equal(after, before);
   }
 });
+
+// Coarse tags scan company/customer copy too; explicit worldwide hiring text
+// must survive that incidental geography, including generic remote locations.
+for (const location of ['Remote', 'Remote job', '']) {
+  test(`worldwide hiring body recovers ${JSON.stringify(location)} despite customer geography`, () => {
+    const { before, after } = worldwideFixture('We serve customers in Kenya. Work from anywhere in the world.', location);
+    assert.equal(before.eligibility_region, 'Regional');
+    assert.equal(after.eligibility_region, 'Global');
+    assert.equal(checkEligibility(after, 'nigeria').eligible, true);
+  });
+}
+
+test('worldwide body recovery still rejects foreign residency requirements', () => {
+  const { before, after } = worldwideFixture('We serve customers in Kenya. Work from anywhere. Candidates must reside in the United States.', 'Remote job');
+  assert.equal(after, before);
+});
+
+test('different countries sharing a remote location prefix remain separate', () => {
+  const role = { company: 'Example', title: 'Engineer' };
+  const rows = ['Remote, Nigeria', 'Remote, UK', 'Remote, Kenya'].map((location, i) => ({ ...role, location, apply_url: `https://example.com/${i}` }));
+  assert.equal(dedupe(rows).length, 3);
+  assert.equal(dedupe([rows[0], { ...rows[0], location: ' REMOTE ,  NIGERIA ', apply_url: 'https://example.com/another' }]).length, 1);
+});

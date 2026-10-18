@@ -13,6 +13,7 @@
  */
 
 import dotenv from "dotenv";
+import { updateJobSignals } from "./core/jobSignalsWriter.js";
 import { createClient } from "@supabase/supabase-js";
 import { tagJob } from "./core/tag.js";
 import { cleanText } from "./core/normalize.js";
@@ -24,20 +25,18 @@ const PAGE = 1000;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function updateWithRetry(id, patch, tries = 5) {
-  for (let a = 0; a < tries; a++) {
-    try {
-      const { error } = await supabase.from("jobs").update(patch).eq("id", id);
-      if (!error) return true;
-      throw new Error(error.message);
-    } catch (e) {
-      if (a === tries - 1) { console.log(`  ❌ ${id}: ${e.message}`); return false; }
-      // exponential backoff: 0.8s, 1.6s, 2.4s, 3.2s — gives a dropped
-      // connection time to recover before the next attempt.
-      await sleep(800 * (a + 1));
-    }
-  }
-  return false;
+async function updateWithRetry(id) {
+  const result = await updateJobSignals(supabase, id, (current, latest) => latest.source === 'employer' ? undefined : ({
+    ...current, ...tagJob(latest).elig_signals,
+  }), {columns:'id,source,title,description,location,country_iso,elig_signals', patch:latest => {
+    const tagged=tagJob(latest);
+    return {role_cluster:tagged.role_cluster,department:tagged.department,
+      seniority:tagged.seniority,remote_type:tagged.remote_type,
+      eligibility_region:tagged.eligibility_region,
+      description:cleanText(latest.description || '', Infinity)};
+  }});
+  if (result.error) console.log(`  ❌ ${id}: ${result.error.message}`);
+  return result.saved || result.skipped;
 }
 
 async function run() {
@@ -60,7 +59,7 @@ async function run() {
     for (let attempt = 1; attempt <= 5; attempt++) {
       const { data, error } = await supabase
         .from("jobs")
-        .select("id, title, description, location, role_cluster, eligibility_region, country_iso, elig_signals")
+        .select("id, source, title, description, location, role_cluster, eligibility_region, country_iso, elig_signals")
         // .order() is required for .range() pagination to be stable — without
         // it Postgres/PostgREST doesn't guarantee row order is consistent
         // across separate page fetches, and this script UPDATEs rows between
@@ -86,6 +85,7 @@ async function run() {
     if (!rows || rows.length === 0) break;
 
     for (const row of rows) {
+      if (row.source === 'employer') continue;
       const before = row.role_cluster || "null";
       clusterBefore[before] = (clusterBefore[before] || 0) + 1;
 
@@ -95,7 +95,7 @@ async function run() {
 
       // Also clean stored HTML descriptions (old rows from RemoteOK/WWR contain
       // raw <p>/<div>/<img> markup). cleanText strips HTML but keeps paragraphs.
-      const cleanedDesc = cleanText(row.description || "", 6000);
+      const cleanedDesc = cleanText(row.description || "", Infinity);
       const descChanged = cleanedDesc && cleanedDesc !== row.description;
 
       const regionChanged = tagged.eligibility_region !== row.eligibility_region;
@@ -105,16 +105,7 @@ async function run() {
       const signalsStale = !row.elig_signals || row.elig_signals.v !== tagged.elig_signals?.v;
       const labelChanged = after !== row.role_cluster || regionChanged;
       if (labelChanged || descChanged || signalsStale) {
-        const patch = {
-          role_cluster: tagged.role_cluster,
-          department: tagged.department,
-          seniority: tagged.seniority,
-          remote_type: tagged.remote_type,
-          eligibility_region: tagged.eligibility_region,
-          elig_signals: tagged.elig_signals,
-        };
-        if (descChanged) patch.description = cleanedDesc;
-        const okUpdate = await updateWithRetry(row.id, patch);
+        const okUpdate = await updateWithRetry(row.id);
         if (okUpdate && labelChanged) changed++;
         if (!okUpdate) failed++;
         await sleep(60); // gentle pacing so we don't saturate the connection

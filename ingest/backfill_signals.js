@@ -30,6 +30,7 @@
  */
 
 import dotenv from "dotenv";
+import { updateJobSignals } from "./core/jobSignalsWriter.js";
 import { createClient } from "@supabase/supabase-js";
 import { extractEligibilitySignals, SIGNALS_VERSION } from "../api/roleIntelligence.js";
 
@@ -84,24 +85,11 @@ async function fetchPage() {
 let lastError = null;   // surfaced in the progress line — silent failures hid
                         // a 44% error rate behind a plausible-looking counter
 async function writeOne(row) {
-  const signals = extractEligibilitySignals(row);
-  // PRESERVE THE INFERENCE. extractEligibilitySignals derives everything from
-  // the posting text; infer is the one key it cannot regenerate, because it
-  // came from a model call that cost money and time (see
-  // ingest/infer_pending.js). This update replaces the whole jsonb column, so
-  // without carrying it forward explicitly, every run of this backfill would
-  // wipe the inferences and they would have to be bought again.
-  if (row.elig_signals?.infer) signals.infer = row.elig_signals.infer;
-  // Verification is independently versioned; preserve closure and employer evidence.
-  if (row.elig_signals?.verification) signals.verification = row.elig_signals.verification;
-  for (let a = 1; a <= 4; a++) {
-    const { error } = await supabase.from("jobs")
-      .update({ elig_signals: signals }).eq("id", row.id);
-    if (!error) return true;
-    lastError = error.message;
-    await sleep(700 * a);
-  }
-  return false;
+  const result = await updateJobSignals(supabase, row.id, (current, latest) => ({
+    ...current, ...extractEligibilitySignals(latest),
+  }), {snapshot:row, columns:'id,title,location,description,eligibility_region,elig_signals'});
+  if (result.error) lastError = result.error.message;
+  return result.saved || result.skipped;
 }
 
 async function run() {
@@ -111,14 +99,15 @@ async function run() {
     .select("*", { count: "exact", head: true }).or(STALE_OR_MISSING);
   console.log(`   total rows: ${total} · needing backfill (missing or stale): ${missing}\n`);
 
-  let done = 0, failed = 0;
+  let done = 0, failed = 0, stoppedEarly = false;
   const started = Date.now();
 
   while (true) {
     const page = await fetchPage();
-    if (page === null) { console.log("   ❌ giving up — fetch kept failing"); break; }
+    if (page === null) { console.log("   ❌ giving up — fetch kept failing"); stoppedEarly = true; break; }
     if (page.length === 0) break;
 
+    const before = done;
     const queue = [...page];
     await Promise.all(Array.from({ length: CONCURRENCY }, async () => {
       while (queue.length) {
@@ -136,6 +125,8 @@ async function run() {
       console.log(`      or run the GitHub Action, which has a datacenter connection.\n`);
     }
 
+    if (done === before) {stoppedEarly=true; console.error('No backfill progress; stopping instead of retrying the same rows indefinitely.'); break;}
+
     // --all has no shrinking predicate to page through, so stop after one pass.
     if (ALL) break;
   }
@@ -145,6 +136,7 @@ async function run() {
   const covered = total > 0 ? (1 - (stillMissing || 0) / total) * 100 : 0;
   console.log(`\n✅ written ${done} · failed ${failed}`);
   console.log(`   coverage: ${covered.toFixed(1)}% (${stillMissing} rows still pending)`);
+  if (stoppedEarly || stillMissing > 0) process.exitCode = 1;
   console.log(covered >= 95
     ? `   search will switch to the lean payload within 10 minutes (no redeploy needed).\n`
     : `   below the 95% threshold — search stays on the full-description path. Re-run to finish.\n`);

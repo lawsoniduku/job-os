@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { evidenceDb } from './test_support/evidenceDb.js';
 import { persistVerifications } from './core/verificationWriter.js';
 
 const row = id => ({id, status: 'unknown', elig_signals: {version: 3}, verification: {status: 'unknown', last_known: {status: 'ok'}}});
-const db = handler => ({from: () => ({update: payload => ({eq: (_key, id) => handler(id, payload)})})});
+const db = handler => evidenceDb(['a','good','bad',...Array.from({length:24},(_,i)=>String(i))].map(id=>({id,elig_signals:{version:3}})),handler);
 const options = {sleep: async () => {}, now: () => '2026-10-16T09:00:00Z'};
 
 test('returned and thrown network failures retry before saving all evidence together', async () => {

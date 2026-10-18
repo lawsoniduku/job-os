@@ -647,7 +647,7 @@ function ResultsBlock({ m, isLatest, onLoadMore, onTailor, onReport, user, busy 
         </div>
       )}
 
-      {m.sort === "newest" && m.total > 0 && <p className="ai-text">Posted within the last 180 days · Newest first · Undated listings appear last.</p>}
+      {m.sort === "newest" && m.total > 0 && <p className="ai-text">Newest first · Older listings appear when recently confirmed open · Undated listings appear last.</p>}
 
       {m.total > 0 && m.locationUnconfirmed != null && <p className="ai-text">{m.locationConfirmed} have positive location evidence; {m.locationUnconfirmed} still need country confirmation. Unconfirmed roles are possibilities, not confirmed eligible matches.</p>}
 

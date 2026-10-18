@@ -197,7 +197,10 @@ async function verifiedRanking(rawJobs, intent, filters = {}) {
   const preliminary = rankCandidates(rawJobs, intent, filters);
   const checked = await verifyCandidates(preliminary.results, { db: supabase });
   const ranked = rankCandidates(checked, intent, filters, Date.now(), true);
-  const value = { ...ranked, evaluated: rawJobs.length,
+  const exclusionReasons={...preliminary.exclusionReasons};
+  for(const [reason,count] of Object.entries(ranked.exclusionReasons)) exclusionReasons[reason]=(exclusionReasons[reason]||0)+count;
+  console.log('Search exclusions:',exclusionReasons);
+  const value = { ...ranked, exclusionReasons, evaluated: rawJobs.length,
     excluded: preliminary.excluded + ranked.excluded,
     duplicates: preliminary.duplicates + ranked.duplicates,
     verificationPending: ranked.results.filter(j => j.verification?.status !== 'ok').length,
@@ -292,7 +295,7 @@ app.get("/ai/search", searchLimit, async (req, res) => {
       location_unconfirmed: ranked.locationUnconfirmed,
       intent: publicIntent(intent, searchFilters),
       total: totalAvailable, offset, limit, has_more: hasMore,
-      excluded_count: excludedCount, summary, data: results,
+      excluded_count: excludedCount, exclusion_breakdown: ranked.exclusionReasons, summary, data: results,
       evaluated: ranked.evaluated,
       duplicate_count: ranked.duplicates,
     });
@@ -927,6 +930,7 @@ app.post("/ai/refine", searchLimit, async (req, res) => {
       has_more: offset + limit < ranked.results.length,
       evaluated: ranked.evaluated,
       excluded_count: ranked.excluded,
+      exclusion_breakdown: ranked.exclusionReasons,
       duplicate_count: ranked.duplicates,
       data: results, filters, intent: publicIntent(intent, filters),
     });

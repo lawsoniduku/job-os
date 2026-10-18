@@ -4,7 +4,7 @@
  * The same role shows up on RemoteOK, the company's Greenhouse board, and an
  * aggregator. URL-only dedup (the old approach) misses these. We dedup on BOTH:
  *   1. canonical apply_url (query/hash stripped)
- *   2. a content key: company + normalized-title + first location token
+ *   2. a content key: company + normalized-title + full normalized location
  * First occurrence wins; later duplicates are dropped.
  */
 
@@ -42,7 +42,8 @@ export function canonicalUrl(url = "") {
 export function contentKey(job) {
   const company = (job.company || "").toLowerCase().trim();
   const title = (job.title || "").toLowerCase().replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ").trim();
-  const loc = (job.location || "").toLowerCase().split(/[,/|]/)[0].trim();
+  // "Remote, UK" and "Remote, Nigeria" are separate hiring markets.
+  const loc = (job.location || "").toLowerCase().replace(/\s+/g, " ").replace(/\s*([,/|])\s*/g, "$1").trim();
   return `${company}::${title}::${loc}`;
 }
 
