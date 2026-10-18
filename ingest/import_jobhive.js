@@ -130,17 +130,19 @@ async function run() {
     negativeSaved += result.saved; negativeSkipped += result.skipped; negativeFailed += result.failed;
     rejectedObservations.clear();
   }
-  let recoveredWorldwide = 0, stalePublication = 0, inserted = 0, updated = 0, collisions = 0, budgetSkipped = 0, partialSkipped = 0, staleSkipped = 0, ineligibleSkipped = 0;
-  function collectWrite(result) {
+  let recoveredWorldwide = 0, stalePublication = 0, inserted = 0, updated = 0, collisions = 0, budgetSkipped = 0, partialSkipped = 0, staleSkipped = 0, ineligibleSkipped = 0, existingMissing = 0;
+  function collectWrite(result, existingOnly = false) {
     upserted += result.accepted; inserted += result.inserted; updated += result.updated;
     collisions += result.collisions; budgetSkipped += result.budgetSkipped;
     partialSkipped += result.partialSkipped;
     staleSkipped += result.staleSkipped; ineligibleSkipped += result.ineligibleSkipped;
-    failedRows.push(...result.failedRows);
+    existingMissing += result.existingMissing;
+    (existingOnly ? failedExistingRows : failedRows).push(...result.failedRows);
   }
   let scanned = 0, notEnglish = 0, wrongRegion = 0, kept = 0, upserted = 0, failed = 0, fastRejected = 0, duplicate = 0;
   const failedRows = []; // rows that failed mid-stream, retried once more after stream ends
-  let batch = [];
+  const failedExistingRows = [];
+  let batch = [], existingBatch = [];
   const regionTally = {};
   const keptRegionTally = {};
 
@@ -166,6 +168,7 @@ async function run() {
 
       const raw = rowToRaw(record);
       if (!raw.title || !raw.apply_url) { rejections.record("missing_identity", raw); continue; }
+      const existingOwned = observationIndex.has(raw.apply_url);
       const observation = sourceObservation(raw);
       if (observation.rejection) {
         rejections.record(observation.rejection, raw);
@@ -179,10 +182,10 @@ async function run() {
 
       // 0) CHEAP pre-filter on country_iso — kills the bulk (on-site US/EU/Asia)
       //    before we spend CPU on language + classification.
-      if (fastReject(raw)) { fastRejected++; rejections.record("foreign_onsite", raw); continue; }
+      if (!existingOwned && fastReject(raw)) { fastRejected++; rejections.record("foreign_onsite", raw); continue; }
 
       // 1) English gate (reuse pipeline logic)
-      if (!looksEnglishJob(raw)) { notEnglish++; rejections.record("language", raw); continue; }
+      if (!existingOwned && !looksEnglishJob(raw)) { notEnglish++; rejections.record("language", raw); continue; }
 
       // 2) normalize + tag (gives us eligibility_region using YOUR existing rules)
       // Only Nigeria gets a hard regionHint here. We used to also collapse
@@ -201,7 +204,7 @@ async function run() {
       let job = normalizeJob(raw, { source: "jobhive", ats, region: regionHint, countryIso: raw._country_iso });
       if (!job) continue;
       job.elig_signals = { source: observation.source };
-      if (!publicationMayBeImported(job)) { stalePublication++; rejections.record("publication_age", raw); continue; }
+      if (!existingOwned && !publicationMayBeImported(job)) { stalePublication++; rejections.record("publication_age", raw); continue; }
       job = tagJob(job);
       const recovered = recoverWorldwideJob(job, raw);
       if (recovered !== job) recoveredWorldwide++;
@@ -210,15 +213,15 @@ async function run() {
       regionTally[job.eligibility_region] = (regionTally[job.eligibility_region] || 0) + 1;
 
       // 3) eligibility gate — keep only regions a Nigerian candidate can pursue
-      if (!KEEP_REGIONS.has(job.eligibility_region)) { wrongRegion++; rejections.record("region", raw); continue; }
+      if (!existingOwned && !KEEP_REGIONS.has(job.eligibility_region)) { wrongRegion++; rejections.record("region", raw); continue; }
 
       // 4) de-dup — same content key (company + normalized title + location)
       // or same canonical URL as a row we've already kept this run.
       const dedupUrl = canonicalUrl(job.apply_url);
       const dedupKey = contentKey(job);
-      if (seenUrls.has(dedupUrl) || seenContent.has(dedupKey)) { duplicate++; rejections.record("duplicate", raw); continue; }
+      if (seenUrls.has(dedupUrl) || (!existingOwned && seenContent.has(dedupKey))) { duplicate++; rejections.record("duplicate", raw); continue; }
       seenUrls.add(dedupUrl);
-      seenContent.add(dedupKey);
+      if (!existingOwned) seenContent.add(dedupKey);
 
       keptRegionTally[job.eligibility_region] = (keptRegionTally[job.eligibility_region] || 0) + 1;
       kept++;
@@ -231,7 +234,15 @@ async function run() {
       // Upstream collection time is stronger evidence than our download time.
       // Missing collection dates are explicitly recorded as unknown metadata.
       row.last_seen_at = observation.source.fetched_at || new Date().toISOString();
-      batch.push(row);
+      // Admission policy governs NEW records only. Existing owned URLs must
+      // receive changed country/language/on-site requirements even when they
+      // no longer qualify for import, so stale global signals are replaced.
+      (existingOwned ? existingBatch : batch).push(row);
+      if (existingBatch.length >= BATCH) {
+        collectWrite(await upsertBatch(existingBatch, { existingOnly: true }), true);
+        existingBatch = [];
+        await sleep(SLEEP_MS);
+      }
 
       if (batch.length >= BATCH) {
         const ok = await upsertBatch(batch);
@@ -254,6 +265,9 @@ async function run() {
 
   await flushRejectedObservations();
 
+  if (existingBatch.length) {
+    collectWrite(await upsertBatch(existingBatch, { existingOnly: true }), true);
+  }
   if (batch.length) {
     const ok = await upsertBatch(batch);
     collectWrite(ok);
@@ -262,18 +276,22 @@ async function run() {
   // FINAL RETRY PASS: once the download is fully done, the connection is no
   // longer split between "streaming a big file" and "writing to Supabase" —
   // so failures that were really just bandwidth contention often succeed now.
-  if (failedRows.length > 0 && !dryRun) {
-    console.log(`\n🔁 Retrying ${failedRows.length} rows that failed mid-stream (stream is done, bandwidth is free now)...`);
-    for (let i = 0; i < failedRows.length; i += BATCH) {
-      const slice = failedRows.slice(i, i + BATCH);
-      const ok = await upsertBatch(slice);
-      upserted += ok.accepted; inserted += ok.inserted; updated += ok.updated;
-      collisions += ok.collisions; budgetSkipped += ok.budgetSkipped;
-      partialSkipped += ok.partialSkipped;
-      staleSkipped += ok.staleSkipped; ineligibleSkipped += ok.ineligibleSkipped;
-      failed += ok.failedRows.length;
-      await sleep(SLEEP_MS);
+  for (const retry of [{ rows: failedRows, existingOnly: false }, { rows: failedExistingRows, existingOnly: true }]) {
+    if (retry.rows.length > 0 && !dryRun) {
+      console.log(`\n🔁 Retrying ${retry.rows.length} rows that failed mid-stream (stream is done, bandwidth is free now)...`);
+      for (let i = 0; i < retry.rows.length; i += BATCH) {
+        const slice = retry.rows.slice(i, i + BATCH);
+        const ok = await upsertBatch(slice, { existingOnly: retry.existingOnly });
+        upserted += ok.accepted; inserted += ok.inserted; updated += ok.updated;
+        collisions += ok.collisions; budgetSkipped += ok.budgetSkipped;
+        partialSkipped += ok.partialSkipped;
+        staleSkipped += ok.staleSkipped; ineligibleSkipped += ok.ineligibleSkipped;
+        existingMissing += ok.existingMissing;
+        failed += ok.failedRows.length;
+        await sleep(SLEEP_MS);
+      }
     }
+
   }
 
   console.log(`\n📊 DONE (${ats})`);
@@ -292,7 +310,7 @@ async function run() {
   console.log(`   region split before dedup:`, regionTally);
   console.log(`   region split of kept:`, keptRegionTally);
   if (dryRun) console.log(`   (dry run — nothing written)`);
-  else console.log(`   inserted: ${inserted} | refreshed: ${updated} | other-owner collisions: ${collisions} | incomplete observations skipped: ${partialSkipped} | older observations skipped: ${staleSkipped} | new location-ineligible rows skipped: ${ineligibleSkipped} | new rows skipped by budget: ${budgetSkipped} | failed: ${failed}`);
+  else console.log(`   inserted: ${inserted} | refreshed: ${updated} | other-owner collisions: ${collisions} | incomplete observations skipped: ${partialSkipped} | older observations skipped: ${staleSkipped} | new location-ineligible rows skipped: ${ineligibleSkipped} | new rows skipped by budget: ${budgetSkipped} | missing existing rows: ${existingMissing} | failed: ${failed}`);
   console.log(`\n   ⚠️  Check Supabase DB size before importing a larger slice.\n`);
   if (streamError || failed > 0 || negativeFailed > 0) process.exitCode = 1;
 }
