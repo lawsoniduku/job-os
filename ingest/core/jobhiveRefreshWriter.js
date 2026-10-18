@@ -67,7 +67,7 @@ export function createJobhiveRefreshWriter(db, {
     }
     return 'failed';
   }
-  async function writeOne(row) {
+  async function writeOne(row, existingOnly) {
     const insertRow = { ...row, elig_signals: { ...row.elig_signals, source: {
       ...row.elig_signals?.source,
       changed_at: row.elig_signals?.source?.fetched_at || row.last_seen_at,
@@ -80,6 +80,9 @@ export function createJobhiveRefreshWriter(db, {
           if (reservedBytes) { admittedRows--; admittedBytes -= reservedBytes; reservedBytes = 0; }
           return await refresh(row, existing);
         }
+        // A row present in the initial inventory can disappear mid-import.
+        // Refresh-only observations must never resurrect it as a new record.
+        if (existingOnly) return 'missing';
         if (!admitNew(row)) return 'ineligible';
         if (!reservedBytes) {
           const bytes = Buffer.byteLength(JSON.stringify(insertRow), 'utf8');
@@ -101,19 +104,20 @@ export function createJobhiveRefreshWriter(db, {
     if (reservedBytes) { admittedRows--; admittedBytes -= reservedBytes; }
     return 'failed';
   }
-  return async rows => {
-    const result = { accepted: 0, inserted: 0, updated: 0, collisions: 0, budgetSkipped: 0, partialSkipped: 0, staleSkipped: 0, ineligibleSkipped: 0, failedRows: [] };
+  return async (rows, { existingOnly = false } = {}) => {
+    const result = { accepted: 0, inserted: 0, updated: 0, collisions: 0, budgetSkipped: 0, partialSkipped: 0, staleSkipped: 0, ineligibleSkipped: 0, existingMissing: 0, failedRows: [] };
     if (dryRun) return { ...result, accepted: rows.length };
     const queue = [...rows];
     await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
       while (queue.length) {
-        const row = queue.shift(), status = await writeOne(row);
+        const row = queue.shift(), status = await writeOne(row, existingOnly);
         if (status === 'inserted' || status === 'updated') { result[status]++; result.accepted++; }
         else if (status === 'collision') result.collisions++;
         else if (status === 'budget') result.budgetSkipped++;
         else if (status === 'partial') result.partialSkipped++;
         else if (status === 'stale') result.staleSkipped++;
         else if (status === 'ineligible') result.ineligibleSkipped++;
+        else if (status === 'missing') result.existingMissing++;
         else result.failedRows.push(row);
       }
     }));

@@ -332,3 +332,75 @@ test('a later positive observation cannot erase an existing explicit deadline by
  await writer(db)([{...role,last_seen_at:'2026-10-18T11:00:00Z',elig_signals:{v:5,source:{fetched_at:'2026-10-18T10:00:00Z',application_deadline:null}}}]);
  assert.equal(db.rows.get(role.apply_url).elig_signals.source.application_deadline,deadline);
 });
+
+test('existing-only refresh cannot insert an observation deleted after inventory loading', async () => {
+  const db = fakeDb();
+  const result = await writer(db)([role], { existingOnly: true });
+  assert.equal(result.existingMissing, 1);
+  assert.equal(result.inserted, 0);
+  assert.equal(db.writes, 0);
+  assert.equal(db.rows.size, 0);
+});
+
+test('existing-only observations still respect ownership and preserve restriction changes', async () => {
+  const existing = { ...role, id: 'old' };
+  const db = fakeDb([existing]);
+  const write = writer(db, { maxNewRows: 0, admitNew: () => false });
+  const changed = { ...role, description: 'Applicants must reside in the United States.', location: 'New York, United States', country_iso: 'US', remote: false, eligibility_region: 'US' };
+  const result = await write([changed], { existingOnly: true });
+  assert.equal(result.updated, 1);
+  assert.equal(result.inserted, 0);
+  assert.equal(db.rows.get(role.apply_url).description, changed.description);
+  const protectedDb = fakeDb([{ ...existing, source: 'employer' }]);
+  const protectedResult = await writer(protectedDb)([changed], { existingOnly: true });
+  assert.equal(protectedResult.collisions, 1);
+  assert.equal(protectedDb.writes, 0);
+});
+
+import { spawnSync } from 'node:child_process';
+test('streamed importer refreshes owned URLs despite foreign on-site policy and shared content keys', () => {
+  const now = Date.now(), fetched_at = new Date(now - 3600000).toISOString();
+  const urls = ['https://example.recruitee.com/o/owned-one', 'https://example.recruitee.com/o/owned-two'];
+  const existing = urls.map((apply_url, i) => ({ ...role, id: `owned-${i}`, apply_url, remote: true, country_iso: 'US', elig_signals: { v: 5, worldwideDesc: true, source: { fetched_at: new Date(now - 86400000).toISOString() } } }));
+  const headers = ['title', 'company', 'url', 'description', 'location', 'country_iso', 'is_remote', 'posted_at', 'fetched_at'];
+  const raw = { title: 'Software Engineer', company: 'Example', description: 'Candidates must reside in the United States. This job requires working on-site in our New York office.', location: 'New York, United States', country_iso: 'US', is_remote: 'false', posted_at: fetched_at, fetched_at };
+  const rows = [...urls, 'https://example.recruitee.com/o/new-foreign'].map(url => ({ ...raw, url }));
+  const quote = value => '"' + String(value ?? '').replaceAll('"', '""') + '"';
+  const csv = [headers.join(','), ...rows.map(row => headers.map(key => quote(row[key])).join(','))].join('\n');
+  const preload = `
+    const records = new Map(${JSON.stringify(existing)}.map(row => [row.apply_url, row]));
+    let patches = 0;
+    globalThis.fetch = async (input, options = {}) => {
+      const url = new URL(String(input));
+      const json = value => new Response(JSON.stringify(value), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url.host === 'storage.stapply.ai') return new Response(${JSON.stringify(csv)}, { status: 200 });
+      if (url.host !== 'jobhive-test.invalid') throw Error('Unexpected network: ' + url);
+      const method = options.method || 'GET';
+      if (method === 'GET' && url.searchParams.has('order')) return json([...records.values()]);
+      if (method === 'GET') {
+        const sought = url.searchParams.get('apply_url')?.slice(3);
+        const row = sought ? records.get(sought) : [...records.values()].find(row => 'eq.' + row.id === url.searchParams.get('id'));
+        return json(row || null);
+      }
+      if (method === 'PATCH') {
+        const row = [...records.values()].find(row => 'eq.' + row.id === url.searchParams.get('id'));
+        if (!row) throw Error('Unknown update');
+        Object.assign(row, JSON.parse(options.body)); patches++;
+        return json([{ id: row.id }]);
+      }
+      throw Error('Unexpected insert or request: ' + method);
+    };
+    process.on('exit', () => {
+      if (patches !== 2 || records.size !== 2 || [...records.values()].some(row => row.eligibility_region !== 'US' || row.remote !== false || !row.description.includes('must reside'))) {
+        console.error('Owned refresh assertions failed', patches, [...records.values()]); process.exitCode = 1;
+      }
+    });`;
+  const result = spawnSync(process.execPath, ['--import', 'data:text/javascript,' + encodeURIComponent(preload), 'ingest/import_jobhive.js', 'recruitee'], {
+    cwd: new URL('..', import.meta.url), encoding: 'utf8', timeout: 20000,
+    env: { ...process.env, SUPABASE_URL: 'https://jobhive-test.invalid', SUPABASE_KEY: 'test-public-key' },
+  });
+  assert.equal(result.status, 0, result.stderr + '\n' + result.stdout);
+  assert.match(result.stdout, /refreshed: 2/);
+  assert.match(result.stdout, /inserted: 0/);
+  assert.match(result.stdout, /foreign_onsite:\s*1/);
+});
