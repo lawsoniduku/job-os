@@ -1,60 +1,19 @@
-import { publicationIsDiscoverable } from "../api/jobFreshness.js";
+import { publicationMayBeImported } from "../api/jobFreshness.js";
 /**
- * ingest/import_jobhive.js
- * ========================
- * ONE-OFF / OCCASIONAL bulk importer for the open-source jobhive dataset
- * (https://data.stapply.ai — MIT licensed, aggregated from 49 ATS platforms
- * including Workday, Oracle, SuccessFactors, iCIMS that our own pipeline
- * cannot reach directly).
- *
- * WHY THIS IS SEPARATE FROM pipeline.js:
- *   The jobhive per-ATS files are large (Workday ~3.9GB CSV). Our twice-daily
- *   GitHub Action runs in a 15-min window on small feeds — bolting a multi-GB
- *   download into it would blow the time and memory budget. So this is a
- *   standalone script you run MANUALLY (or on a separate, infrequent schedule),
- *   one ATS slice at a time.
- *
- * WHAT IT DOES (memory-safe):
- *   1. STREAMS a chosen ATS CSV (never loads the whole file into memory).
- *   2. Filters HARD as it streams — English + eligibility gate — so we only
- *      keep rows a Nigerian/African candidate could realistically pursue.
- *      The vast majority of rows (US-only, in-office) are discarded on the fly.
- *   3. Truncates descriptions (normalizeJob caps at 3000 chars) to protect the
- *      500MB Supabase budget.
- *   4. Upserts survivors in batches, same onConflict logic as pipeline.js.
- *
- * USAGE:
- *   node --env-file=.env ingest/import_jobhive.js <ats> [--limit N] [--dry-run] [--repair-regions]
- *     <ats>              one of: ashby greenhouse lever workable icims workday oracle successfactors ...
- *     --limit N          stop after N rows KEPT (good for a first test)
- *     --dry-run          filter + count only, write nothing
- *     --repair-regions   ONE-OFF REPAIR MODE: overwrite existing rows instead of
- *                        skipping them. Use this to fix historical rows whose
- *                        eligibility_region was wrongly tagged before the
- *                        country_iso region-hint fix (2026-07-22) — normal runs
- *                        use ignoreDuplicates:true and silently skip anything
- *                        already in the DB, so a plain re-run does NOT correct
- *                        old rows. This flag is the only way to actually fix them,
- *                        because country_iso only exists in the source CSV, not
- *                        in our jobs table — reclassify.js cannot do this either.
- *
- * RECOMMENDED FIRST RUN (smallest, safest slice, dry run):
- *   node --env-file=.env ingest/import_jobhive.js ashby --limit 200 --dry-run
- *
- * FIX HISTORICAL ROWS (run once per ATS type you've already imported):
- *   node --env-file=.env ingest/import_jobhive.js icims --repair-regions
- *   node --env-file=.env ingest/import_jobhive.js phenom --repair-regions
- *   node --env-file=.env ingest/import_jobhive.js recruitee --repair-regions
- *   node --env-file=.env ingest/import_jobhive.js ycombinator --repair-regions
- *   node --env-file=.env ingest/import_jobhive.js bamboohr --repair-regions
- *   node --env-file=.env ingest/import_jobhive.js teamtailor --repair-regions
- *   (...and any other ATS types you've run through the batch runner)
- *
- * Then check DB size in Supabase before running larger slices.
+ * Stream one JobHive ATS slice. Refresh only JobHive-owned rows from the same
+ * ATS; preserve employer/native ownership and concurrent verification evidence.
+ * Full descriptions remain available for eligibility reclassification.
+ * New storage is bounded per invocation; existing rows refresh after the cap.
+ * Usage: node ingest/import_jobhive.js <ats> [--limit N] [--dry-run]
+ *   [--max-new-rows N] [--max-new-bytes N]
+ * --repair-regions is retained as a compatibility alias: safe refresh is now
+ * always enabled and never overwrites another source's row.
  */
 
 import dotenv from "dotenv";
-import { createJobhiveWriter } from "./core/jobhiveWriter.js";
+import { checkEligibility } from "../api/roleIntelligence.js";
+import { createJobhiveRefreshWriter } from "./core/jobhiveRefreshWriter.js";
+import { loadJobhiveObservationIndex, persistRejectedJobhiveObservations } from "./core/jobhiveObservations.js";
 import { createClient } from "@supabase/supabase-js";
 import { parse } from "csv-parse";
 import { Readable } from "node:stream";
@@ -62,7 +21,7 @@ import { normalizeJob } from "./core/normalize.js";
 import { tagJob } from "./core/tag.js";
 import { looksEnglishJob } from "./core/language.js";
 import { canonicalUrl, contentKey } from "./core/dedup.js";
-import { rowToRaw, fastReject, recoverWorldwideJob, JOBHIVE_KEEP_REGIONS as KEEP_REGIONS } from "./core/jobhive.js";
+import { rowToRaw, fastReject, recoverWorldwideJob, sourceObservation, createRejectionLedger, JOBHIVE_KEEP_REGIONS as KEEP_REGIONS } from "./core/jobhive.js";
 
 dotenv.config();
 
@@ -84,13 +43,15 @@ const dryRun = args.includes("--dry-run");
 const supabase = dryRun ? null : createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 const limitIdx = args.indexOf("--limit");
 const keepLimit = limitIdx > -1 ? parseInt(args[limitIdx + 1], 10) : Infinity;
-// One-off repair mode: overwrite existing rows (matched by apply_url) instead
-// of silently skipping them. Needed because eligibility_region can only be
-// correctly re-derived from country_iso, which lives in the SOURCE CSV, not
-// in our DB — so fixing already-imported rows requires re-reading the source
-// and actually updating, not just re-classifying what's already stored.
-const repairMode = args.includes("--repair-regions");
-const upsertBatch = createJobhiveWriter(supabase, { dryRun, repairMode, sleep });
+function numericArg(name, fallback) {
+  const index = args.indexOf(name);
+  const value = index < 0 ? fallback : Number(args[index + 1]);
+  if (!Number.isSafeInteger(value) || value < 0) throw new Error(`${name} requires a non-negative integer`);
+  return value;
+}
+const maxNewRows = numericArg("--max-new-rows", 500);
+const maxNewBytes = numericArg("--max-new-bytes", 10 * 1024 * 1024);
+const upsertBatch = createJobhiveRefreshWriter(supabase, { dryRun, sleep, maxNewRows, maxNewBytes, admitNew:row => checkEligibility(row,"nigeria").eligible !== false });
 
 if (!ats || ats.startsWith("--")) {
   console.error("Usage: node --env-file=.env ingest/import_jobhive.js <ats> [--limit N] [--dry-run]");
@@ -103,9 +64,7 @@ if (!ats || ats.startsWith("--")) {
 // a small hand-picked list (e.g. 38 Greenhouse companies), while jobhive's
 // per-ATS files cover THOUSANDS of companies on the same ATS (4,966 on
 // Greenhouse, 2,856 on Ashby). So we do NOT block these — the coverage gap
-// is real and worth having. Overlap is harmless: upsertBatch uses
-// onConflict:"apply_url", ignoreDuplicates:true, so any job we already have
-// from our own connector is silently skipped here, not duplicated.
+// is real and worth having. Existing native/employer records retain ownership and are never overwritten.
 //
 // remoteok is the one true BAN — its apply links are paywalled, which is
 // exactly why we removed it as a live source. Not importing it from anywhere.
@@ -123,6 +82,7 @@ async function run() {
   console.log(`   source: ${url}`);
   console.log(`   keep regions: ${[...KEEP_REGIONS].join(", ")}${keepLimit !== Infinity ? ` · limit ${keepLimit}` : ""}\n`);
 
+  const observationIndex = dryRun ? new Map() : await loadJobhiveObservationIndex(supabase, ats);
   let res;
   try {
     res = await fetch(url);
@@ -160,13 +120,27 @@ async function run() {
   );
   sourceStream.on("error", (err) => parser.destroy(err));
 
-  let recoveredWorldwide = 0, stalePublication = 0;
+  const rejections = createRejectionLedger();
+  const rejectedObservations = new Map();
+  const observedNegativeUrls = new Set();
+  let negativeSaved = 0, negativeSkipped = 0, negativeFailed = 0;
+  async function flushRejectedObservations() {
+    if (!rejectedObservations.size) return;
+    const result = await persistRejectedJobhiveObservations(supabase, ats, rejectedObservations.values());
+    negativeSaved += result.saved; negativeSkipped += result.skipped; negativeFailed += result.failed;
+    rejectedObservations.clear();
+  }
+  let recoveredWorldwide = 0, stalePublication = 0, inserted = 0, updated = 0, collisions = 0, budgetSkipped = 0, partialSkipped = 0, staleSkipped = 0, ineligibleSkipped = 0;
+  function collectWrite(result) {
+    upserted += result.accepted; inserted += result.inserted; updated += result.updated;
+    collisions += result.collisions; budgetSkipped += result.budgetSkipped;
+    partialSkipped += result.partialSkipped;
+    staleSkipped += result.staleSkipped; ineligibleSkipped += result.ineligibleSkipped;
+    failedRows.push(...result.failedRows);
+  }
   let scanned = 0, notEnglish = 0, wrongRegion = 0, kept = 0, upserted = 0, failed = 0, fastRejected = 0, duplicate = 0;
   const failedRows = []; // rows that failed mid-stream, retried once more after stream ends
   let batch = [];
-  const keptUrls = []; // every apply_url kept this run, new AND already-existing —
-  // powers the last_seen_at touch pass below, since ignoreDuplicates:true means
-  // the upsert itself never refreshes last_seen_at on rows we've already seen.
   const regionTally = {};
   const keptRegionTally = {};
 
@@ -191,14 +165,24 @@ async function run() {
       }
 
       const raw = rowToRaw(record);
-      if (!raw.title || !raw.apply_url) continue;
+      if (!raw.title || !raw.apply_url) { rejections.record("missing_identity", raw); continue; }
+      const observation = sourceObservation(raw);
+      if (observation.rejection) {
+        rejections.record(observation.rejection, raw);
+        if (["upstream_stale", "deadline_expired"].includes(observation.rejection) && observationIndex.has(raw.apply_url) && !observedNegativeUrls.has(raw.apply_url)) {
+          observedNegativeUrls.add(raw.apply_url);
+          rejectedObservations.set(raw.apply_url, { snapshot: observationIndex.get(raw.apply_url), source: observation.source });
+          if (rejectedObservations.size >= BATCH) await flushRejectedObservations();
+        }
+        continue;
+      }
 
       // 0) CHEAP pre-filter on country_iso — kills the bulk (on-site US/EU/Asia)
       //    before we spend CPU on language + classification.
-      if (fastReject(raw)) { fastRejected++; continue; }
+      if (fastReject(raw)) { fastRejected++; rejections.record("foreign_onsite", raw); continue; }
 
       // 1) English gate (reuse pipeline logic)
-      if (!looksEnglishJob(raw)) { notEnglish++; continue; }
+      if (!looksEnglishJob(raw)) { notEnglish++; rejections.record("language", raw); continue; }
 
       // 2) normalize + tag (gives us eligibility_region using YOUR existing rules)
       // Only Nigeria gets a hard regionHint here. We used to also collapse
@@ -216,7 +200,8 @@ async function run() {
 
       let job = normalizeJob(raw, { source: "jobhive", ats, region: regionHint, countryIso: raw._country_iso });
       if (!job) continue;
-      if (!publicationIsDiscoverable(job)) { stalePublication++; continue; }
+      job.elig_signals = { source: observation.source };
+      if (!publicationMayBeImported(job)) { stalePublication++; rejections.record("publication_age", raw); continue; }
       job = tagJob(job);
       const recovered = recoverWorldwideJob(job, raw);
       if (recovered !== job) recoveredWorldwide++;
@@ -225,13 +210,13 @@ async function run() {
       regionTally[job.eligibility_region] = (regionTally[job.eligibility_region] || 0) + 1;
 
       // 3) eligibility gate — keep only regions a Nigerian candidate can pursue
-      if (!KEEP_REGIONS.has(job.eligibility_region)) { wrongRegion++; continue; }
+      if (!KEEP_REGIONS.has(job.eligibility_region)) { wrongRegion++; rejections.record("region", raw); continue; }
 
       // 4) de-dup — same content key (company + normalized title + location)
       // or same canonical URL as a row we've already kept this run.
       const dedupUrl = canonicalUrl(job.apply_url);
       const dedupKey = contentKey(job);
-      if (seenUrls.has(dedupUrl) || seenContent.has(dedupKey)) { duplicate++; continue; }
+      if (seenUrls.has(dedupUrl) || seenContent.has(dedupKey)) { duplicate++; rejections.record("duplicate", raw); continue; }
       seenUrls.add(dedupUrl);
       seenContent.add(dedupKey);
 
@@ -242,18 +227,15 @@ async function run() {
       // fix as pipeline.js line ~107. Without this, EVERY row fails upsert
       // with "Could not find the '_region_hint' column of 'jobs' in the schema cache".
       const { _region_hint, ...row } = job;  // country_iso now persists
-      // Stamp last_seen_at explicitly on first insert — normalizeJob() doesn't
-      // set this column. The touch pass below (after the main loop) re-stamps
-      // it on every subsequent run this row is still seen, insert or not, so
-      // it never silently ages out just because the upsert skipped a conflict.
-      row.last_seen_at = new Date().toISOString();
+      row.elig_signals = { ...row.elig_signals, source: observation.source };
+      // Upstream collection time is stronger evidence than our download time.
+      // Missing collection dates are explicitly recorded as unknown metadata.
+      row.last_seen_at = observation.source.fetched_at || new Date().toISOString();
       batch.push(row);
-      keptUrls.push(row.apply_url);
 
       if (batch.length >= BATCH) {
         const ok = await upsertBatch(batch);
-        upserted += ok.accepted;
-        failedRows.push(...ok.failedRows);
+        collectWrite(ok);
         batch = [];
         await sleep(SLEEP_MS);
       }
@@ -270,10 +252,11 @@ async function run() {
     console.log(`   Progress so far is reported below. Re-run to continue/retry.`);
   }
 
+  await flushRejectedObservations();
+
   if (batch.length) {
     const ok = await upsertBatch(batch);
-    upserted += ok.accepted;
-    failedRows.push(...ok.failedRows);
+    collectWrite(ok);
   }
 
   // FINAL RETRY PASS: once the download is fully done, the connection is no
@@ -284,28 +267,11 @@ async function run() {
     for (let i = 0; i < failedRows.length; i += BATCH) {
       const slice = failedRows.slice(i, i + BATCH);
       const ok = await upsertBatch(slice);
-      upserted += ok.accepted;
+      upserted += ok.accepted; inserted += ok.inserted; updated += ok.updated;
+      collisions += ok.collisions; budgetSkipped += ok.budgetSkipped;
+      partialSkipped += ok.partialSkipped;
+      staleSkipped += ok.staleSkipped; ineligibleSkipped += ok.ineligibleSkipped;
       failed += ok.failedRows.length;
-      await sleep(SLEEP_MS);
-    }
-  }
-
-  // TOUCH last_seen_at for EVERY apply_url kept this run (new or already-existing).
-  // Same fix as pipeline.js's step 6 — without this, a job still live in jobhive's
-  // upstream feed every single day never gets its last_seen_at refreshed (the
-  // upsert above uses ignoreDuplicates:true, so it silently no-ops on conflict),
-  // meaning it silently ages out of the search freshness gate ~28 days after
-  // it was FIRST imported, even though it's still actually open.
-  let touched = 0, touchFailed = 0;
-  if (!dryRun) {
-    const nowIso = new Date().toISOString();
-    for (let i = 0; i < keptUrls.length; i += BATCH) {
-      const slice = keptUrls.slice(i, i + BATCH);
-      try {
-        const { error } = await supabase.from("jobs").update({ last_seen_at: nowIso }).in("apply_url", slice);
-        if (!error) touched += slice.length;
-        else { touchFailed += slice.length; console.error(`  ❌ freshness update failed: ${error.message}`); }
-      } catch (e) { touchFailed += slice.length; console.error(`  ❌ freshness update failed: ${e.message}`); }
       await sleep(SLEEP_MS);
     }
   }
@@ -317,14 +283,18 @@ async function run() {
   console.log(`   dropped (lang): ${notEnglish}`);
   console.log(`   dropped (region): ${wrongRegion}`);
   console.log(`   dropped (duplicate): ${duplicate}`);
+  console.log(`   rejection reasons:`, rejections.counts);
+  console.log(`   bounded rejection samples:`, rejections.samples);
+  console.log(`   existing negative observations: saved ${negativeSaved} | skipped ${negativeSkipped} | failed ${negativeFailed}`);
+  console.log(`   new-row budget: ${maxNewRows} rows / ${maxNewBytes} serialized payload bytes`);
   console.log(`   KEPT candidates: ${kept}`);
   console.log(`   worldwide candidates recovered before dedup: ${recoveredWorldwide}`);
   console.log(`   region split before dedup:`, regionTally);
   console.log(`   region split of kept:`, keptRegionTally);
   if (dryRun) console.log(`   (dry run — nothing written)`);
-  else console.log(`   ✅ write requests accepted (includes existing rows): ${upserted} | ❌ failed: ${failed} | 🕒 freshness update requests accepted: ${touched} | freshness failures: ${touchFailed}`);
+  else console.log(`   inserted: ${inserted} | refreshed: ${updated} | other-owner collisions: ${collisions} | incomplete observations skipped: ${partialSkipped} | older observations skipped: ${staleSkipped} | new location-ineligible rows skipped: ${ineligibleSkipped} | new rows skipped by budget: ${budgetSkipped} | failed: ${failed}`);
   console.log(`\n   ⚠️  Check Supabase DB size before importing a larger slice.\n`);
-  if (streamError || failed > 0 || touchFailed > 0) process.exitCode = 1;
+  if (streamError || failed > 0 || negativeFailed > 0) process.exitCode = 1;
 }
 
 run().catch((e) => { console.error(e); process.exit(1); });

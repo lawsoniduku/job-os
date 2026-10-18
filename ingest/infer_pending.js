@@ -133,10 +133,12 @@ async function run() {
       // Store even "unclear" and "low". It costs nothing extra, it stops us
       // paying to ask the same question next run, and it is the only record of
       // where the prompt is weak.
-      const { error: upErr } = await supabase.from("jobs")
-        .update({ elig_signals: { ...sig, infer } })
-        .eq("id", job.id);
-      if (upErr) failed++; else written++;
+      const result = await updateJobSignals(supabase, job.id, (current, latest) => {
+        // A model answer is valid only for the posting text it was asked about.
+        if (['title','location','description'].some(key => latest[key] !== job[key])) return undefined;
+        return {...current, ...extractEligibilitySignals(latest), infer};
+      }, {snapshot:job, columns:'id,title,location,description,elig_signals'});
+      if (result.error || result.skipped) failed++; else written++;
 
       if (written % 25 === 0 && written) process.stdout.write(`   …${written} written\n`);
       await sleep(PACE_MS);

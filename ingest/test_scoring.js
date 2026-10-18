@@ -28,8 +28,9 @@ const C = (job) => checkEligibility(job, "nigeria").confidence;
 // non-English local-market roles → drop
 check("Portuguese body dropped", E({ title:"Analytics Engineer", location:"Anywhere in the World", description:"Estamos revolucionando. Buscamos uma pessoa que combine excelência técnica e ambição." }), false);
 
-// location field lies "Anywhere" but body ties to a foreign country → drop
-check("Mexico HQ body dropped", E({ title:"Business Analyst", location:"Anywhere in the World", description:"Headquarters Mexico. CRM Mexico City Mexico remote available must speak english." }), false);
+// Explicit applicant residency overrides a generated worldwide location.
+check("Mexico residency body dropped", E({ title:"Business Analyst", location:"Anywhere in the World", description:"Headquarters Mexico. Applicants must reside in Mexico. Remote available; must speak English." }), false);
+check("Mexico HQ is not applicant residency", E({ title:"Business Analyst", location:"Anywhere in the World", description:"Headquarters Mexico. CRM Mexico City Mexico remote available must speak english." }), true);
 check("Remote, UK body dropped", E({ title:"Data Analyst", location:"Remote,", description:"Job title Data Analyst Location Remote, UK Full-time Permanent." }), false);
 
 // real-world glued/mojibake scraped text ("UKFull-time", "AnalystLocation")

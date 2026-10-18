@@ -248,3 +248,24 @@ test('freshness excludes old and future dates even when the source refreshed the
   assert.equal(matchesFilters(job('Virtual Assistant', {posted_at: null}), {}, now), true);
   assert.equal(matchesFilters(job('Virtual Assistant', {posted_at: null}), {maxAgeDays: 7}, now), false);
 });
+
+
+test('cached employer evidence is consulted before obsolete source geography rejects a role', () => {
+  const now=Date.parse('2026-10-18T12:00:00Z');
+  const raw=job('Virtual Assistant',{id:'cached-live',location:'United States',description:'Candidates must reside in the United States.',posted_at:'2026-10-17'});
+  raw.elig_signals={...extractEligibilitySignals(raw),verification:{v:3,status:'ok',checked_at:'2026-10-18T11:00:00Z',title:'Virtual Assistant',location:'Worldwide',remote:true,signals:extractEligibilitySignals({title:'Virtual Assistant',location:'Worldwide',description:'Work from anywhere.'})}};
+  assert.equal(rankCandidates([raw],intent,{},now).results.length,1);
+  raw.elig_signals.source={application_deadline:'2026-10-18T10:00:00Z'};
+  assert.equal(rankCandidates([raw],intent,{},now).results.length,0);
+});
+
+test('older current-year employer-confirmed roles survive both ranking passes without changing explicit recency', () => {
+  const now=Date.parse('2026-10-18T12:00:00Z');
+  const raw=job('Virtual Assistant',{id:'older-live',posted_at:'2026-02-01'});
+  raw.elig_signals={...extractEligibilitySignals(raw),verification:{v:3,status:'ok',checked_at:'2026-10-18T11:00:00Z',title:'Virtual Assistant',location:'Worldwide',remote:true,signals:extractEligibilitySignals({title:'Virtual Assistant',location:'Worldwide',description:'Work from anywhere.'})}};
+  const preliminary=rankCandidates([raw],intent,{},now);
+  assert.equal(preliminary.results.length,1);
+  assert.equal(rankCandidates(preliminary.results,intent,{},now,true).results.length,1);
+  assert.equal(rankCandidates([raw],intent,{maxAgeDays:7},now).results.length,0);
+  assert.equal(rankCandidates([{...raw,posted_at:'2025-12-01'}],intent,{},now).results.length,0);
+});

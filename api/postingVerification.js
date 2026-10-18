@@ -1,14 +1,16 @@
 // Current, public posting evidence. No model guesses and no arbitrary URL fetches.
+import { updateJobSignals, mergePostingObservation } from '../ingest/core/jobSignalsWriter.js';
 import { GREENHOUSE_COMPANIES } from '../ingest/connectors/registry.js';
 import { cleanText } from '../ingest/core/normalize.js';
 import { extractEligibilitySignals, SIGNALS_VERSION } from './roleIntelligence.js';
 
-export const VERIFICATION_VERSION = 2;
+export const VERIFICATION_VERSION = 3;
 const TTL = 6 * 60 * 60 * 1000;
 const cache = new Map();
 const boardCache = new Map();
+const recruiteeTenant = hostname => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.recruitee\.com$/i.test(hostname);
 const hosts = ['bamboohr.com', 'apply.workable.com', 'jobs.ashbyhq.com', 'api.ashbyhq.com', 'job-boards.greenhouse.io', 'boards.greenhouse.io', 'boards-api.greenhouse.io', 'boards-api.eu.greenhouse.io', 'api.lever.co', 'jobs.lever.co', 'weworkremotely.com', 'jobicy.com', 'himalayas.app', 'myjobmag.com', 'www.myjobmag.com', 'canonical.com'];
-const allowed = (u) => u.protocol === 'https:' && !u.username && !u.password && (!u.port || u.port === '443') && hosts.some(h => u.hostname === h || (h === 'bamboohr.com' && u.hostname.endsWith('.bamboohr.com')));
+const allowed = (u) => u.protocol === 'https:' && !u.username && !u.password && (!u.port || u.port === '443') && (recruiteeTenant(u.hostname) || hosts.some(h => u.hostname === h || (h === 'bamboohr.com' && u.hostname.endsWith('.bamboohr.com'))));
 const list = v => v == null ? [] : Array.isArray(v) ? v : [v];
 function countryName(v) {
   const name = typeof v === 'object' ? v?.name : v;
@@ -52,13 +54,14 @@ export function parseJobPosting(html) {
   }
   return found;
 }
-async function readResponse(url, fetcher, signal) {
+async function readResponse(url, fetcher, signal, expectedOrigin) {
   let current = new URL(url);
   for(let i=0;i<5;i++) {
-    if(!allowed(current)) throw new Error('Unsupported posting host');
+    if(!allowed(current) || (expectedOrigin && current.origin !== expectedOrigin)) throw new Error('Unsupported posting host');
     const r = await fetcher(current.href, {redirect:'manual',signal,headers:{'User-Agent':'JobCopilotVerification/1.0','Accept':'application/json,text/html'}});
     if ([301,302,303,307,308].includes(r.status)) {
       const next = new URL(r.headers.get('location'),current);
+      if(expectedOrigin && next.origin !== expectedOrigin) throw new Error('Unexpected employer redirect');
       if(redirectedToIndex(url,next.href)) return {status:'dead',reason:'Posting redirects to a listings index'};
       current = next; continue;
     }
@@ -72,6 +75,17 @@ async function readResponse(url, fetcher, signal) {
   }
   throw new Error('Too many redirects');
 }
+// Recruitee emits UTC timestamps with spaces. Accept only explicit time zones;
+// a malformed or ambiguous deadline cannot prove that a vacancy is closed.
+function explicitTimestamp(value) {
+  if(typeof value !== 'string') return NaN;
+  const normalized=value.trim().replace(/ UTC$/, 'Z').replace(' ', 'T');
+  const m=normalized.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/);
+  if(!m) return NaN;
+  const [,year,month,day,hour,minute,second]=m.map(Number);
+  if(year<1000 || month<1 || month>12 || day<1 || day>new Date(Date.UTC(year,month,0)).getUTCDate() || hour>23 || minute>59 || second>59) return NaN;
+  return Date.parse(normalized);
+}
 export async function verifyPosting(job, {fetcher=fetch, now=Date.now(), timeoutMs=12000}={}) {
   const at = new Date(now).toISOString();
   const unknown = reason => ({v:VERIFICATION_VERSION,status:'unknown',checked_at:at,reason});
@@ -80,6 +94,9 @@ export async function verifyPosting(job, {fetcher=fetch, now=Date.now(), timeout
     let u = new URL(job.apply_url);
     if(!allowed(u)) return unknown('Source cannot yet be verified');
     let path = u.pathname, provider = 'structured posting', payload;
+    const recruitee=recruiteeTenant(u.hostname);
+    const offerPath=path.match(/^\/o\/([a-z0-9][a-z0-9-]*)(?:\/c\/new)?\/?$/i);
+    if(recruitee && !offerPath) return unknown('Unsupported employer vacancy URL');
     // Known employer identities are curated in the ingestion registry. Resolve
     // board copies to an exact, unique current employer title when available.
     const employer=GREENHOUSE_COMPANIES.find(c=>c.name.toLowerCase()===String(job.company||'').trim().toLowerCase());
@@ -108,7 +125,25 @@ export async function verifyPosting(job, {fetcher=fetch, now=Date.now(), timeout
     }
     const gh=path.match(/^\/([^/]+)\/jobs\/(\d+)/);
     const lever=path.match(/^\/([^/]+)\/([a-f0-9-]+)(?:\/apply)?\/?$/i);
-    if(['job-boards.greenhouse.io','boards.greenhouse.io'].includes(u.hostname) && gh) {
+    if(recruitee) {
+      const slug=offerPath[1];
+      const r=await readResponse(`${u.origin}/api/offers/${slug}`,fetcher,ctrl.signal,u.origin);
+      if(r.status)return {...r,v:VERIFICATION_VERSION,checked_at:at};
+      const j=JSON.parse(r.text)?.offer;
+      const normalizedTitle=s=>cleanText(decode(s),Infinity).toLowerCase().replace(/[^\p{L}\p{N}]/gu,'');
+      if(!j || j.slug!==slug || !((typeof j.id==='number' && j.id>0) || (typeof j.id==='string' && /^\d+$/.test(j.id))) || typeof j.title!=='string' || !normalizedTitle(j.title) || normalizedTitle(j.title)!==normalizedTitle(job.title)) return unknown('Exact employer vacancy could not be verified');
+      if(['draft','closed','archived','unpublished','internal'].includes(j.status)) return {v:VERIFICATION_VERSION,status:'dead',checked_at:at,reason:'Vacancy is not published'};
+      if(j.status!=='published') return unknown('Employer vacancy status unavailable');
+      if(explicitTimestamp(j.close_at)<now) return {v:VERIFICATION_VERSION,status:'dead',checked_at:at,reason:'Posting has expired'};
+      if(typeof j.description!=='string' || !cleanText(decode(j.description),Infinity)) return unknown('Posting description is missing');
+      if(j.requirements!=null && typeof j.requirements!=='string') return unknown('Employer requirements unavailable');
+      provider='employer';
+      // For remote vacancies, country/city/locations describe office metadata,
+      // not applicant residency. The full body still supplies hiring limits.
+      const remote=j.remote===true;
+      const location=typeof j.location==='string' ? j.location.trim() : '';
+      payload={title:j.title,description:[j.description,typeof j.requirements==='string'?j.requirements:''].filter(Boolean).join('\n'),location:location || (remote?'Remote':list(j.locations).map(locationText).filter(Boolean).join('; ') || locationText(j)),remote};
+    } else if(['job-boards.greenhouse.io','boards.greenhouse.io'].includes(u.hostname) && gh) {
       const r=await readResponse(`https://boards-api.greenhouse.io/v1/boards/${gh[1]}/jobs/${gh[2]}`,fetcher,ctrl.signal);
       if(r.status)return {...r,v:VERIFICATION_VERSION,checked_at:at};
       const j=JSON.parse(r.text);
@@ -186,13 +221,26 @@ export function applyVerification(job, incoming) {
   const evidence = v.status === 'ok' || v.status === 'dead' ? v : v.last_known;
   if (evidence?.status === 'dead') return {...job, verification: {...v, status:'dead'}};
   if (evidence?.status === 'ok') {
+    const changedAt=Date.parse(job.elig_signals?.source?.changed_at);
+    if (Number.isFinite(changedAt) && changedAt > (Date.parse(evidence.checked_at) || 0)) {
+      // Preserve the old observation for retries, but it cannot override newer
+      // source requirements. Positive source claims stay unconfirmed until rechecked.
+      return {...job,elig_signals:{...(job.elig_signals || extractEligibilitySignals(job)),descriptionMissing:true,verification:v},
+        verification:{status:'pending',checked_at:v.checked_at,reason:'Posting content changed; employer recheck required'}};
+    }
     const fresh={...job,title:evidence.title,description:evidence.description,location:evidence.location,remote:evidence.remote,apply_url:evidence.apply_url || job.apply_url};
     // Discard stored model inference in favour of the last complete posting evidence.
-    fresh.elig_signals=evidence.signals || extractEligibilitySignals(fresh);
-    // v3 employer checks already extracted from cleanText() output. The v4
-    // source-HTML fix does not invalidate that evidence or its restrictions.
-    if (fresh.elig_signals.v === 3 && SIGNALS_VERSION === 4)
-      fresh.elig_signals={...fresh.elig_signals, v:SIGNALS_VERSION};
+    const signals=evidence.signals;
+    if(signals?.v===SIGNALS_VERSION) fresh.elig_signals=signals;
+    else if(typeof evidence.description==='string' && evidence.description.trim()) fresh.elig_signals=extractEligibilitySignals(fresh);
+    // Compact old checks have no full body to re-extract. Retain their known
+    // restrictions across failures, but mark positives unconfirmed until the
+    // new verifier obtains the complete current employer posting.
+    else fresh.elig_signals=signals ? {...signals,v:SIGNALS_VERSION,descriptionMissing:true} : extractEligibilitySignals(fresh);
+    // Keep source deadlines/observation metadata and the complete cache record
+    // when projecting employer content into a search result.
+    fresh.elig_signals={...fresh.elig_signals,
+      ...(job.elig_signals?.source ? {source:job.elig_signals.source} : {}), verification:v};
     return {...fresh,verification:{status:v.status,checked_at:v.checked_at,provider:evidence.provider,evidence_checked_at:evidence.checked_at}};
   }
   // Generic aggregator labels alone are not proof of worldwide hiring. Keep the
@@ -209,11 +257,11 @@ export function applyVerification(job, incoming) {
 // The scheduled checker persists this same evidence and progressively warms it.
 export async function verifyCandidates(rows,{db,verify=verifyPosting,now=Date.now(),budgetMs=20000,concurrency=8}={}) {
   const output=new Array(rows.length), queue=[]; let cursor=0;
-  const fresh=v=>v?.v===VERIFICATION_VERSION && now-Date.parse(v.checked_at)>=0 && now-Date.parse(v.checked_at)<(v.status==='unknown'?300000:TTL);
+  const fresh=(v,job)=>v?.v===VERIFICATION_VERSION && !(Date.parse(job?.elig_signals?.source?.changed_at)>Date.parse(v.checked_at)) && now-Date.parse(v.checked_at)>=0 && now-Date.parse(v.checked_at)<(v.status==='unknown'?300000:TTL);
   rows.forEach((job,i)=>{
     const cached=cache.get(job.apply_url);
-    const v=fresh(cached) ? cached : job.elig_signals?.verification;
-    if(fresh(v))output[i]=applyVerification(job,v); else queue.push({job,i});
+    const v=fresh(cached,job) ? cached : job.elig_signals?.verification;
+    if(fresh(v,job))output[i]=applyVerification(job,v); else queue.push({job,i});
   });
   const deadline=Date.now()+budgetMs;
   await Promise.all(Array.from({length:concurrency},async()=>{
@@ -225,9 +273,9 @@ export async function verifyCandidates(rows,{db,verify=verifyPosting,now=Date.no
       if(cache.size>5000)cache.delete(cache.keys().next().value);
       cache.set(job.apply_url,v); output[i]=applyVerification(job,v);
       if(db && job.id) {
-        const signals={...(job.elig_signals||{}),verification:v};
-        // Cache only in JSONB; don't overwrite the source record or human edits.
-        const {error}=await db.from('jobs').update({elig_signals:signals}).eq('id',job.id);
+        // Merge into the latest evidence, not the search snapshot read seconds ago.
+        const {error}=await updateJobSignals(db,job.id,current=>({...current,
+          verification:mergePostingObservation(current.verification,v)}));
         if(error)console.warn('Posting verification cache write failed:',error.message);
       }
     }

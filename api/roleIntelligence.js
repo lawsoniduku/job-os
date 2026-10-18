@@ -1352,9 +1352,8 @@ const NON_ENGLISH_MARKERS = [
   "votre mission", "rejoignez", "buscamos", "nuestro equipo",
 ];
 
-// COUNTRIES only (no cities) — scanned in the DESCRIPTION of bare-"Remote" jobs
-// to catch roles whose location field is just "Remote" but whose body ties them
-// to a specific country (e.g. "Headquarters: Cluj-Napoca, Romania").
+// Country mentions are retained as a descriptive signal only. A mention of
+// headquarters or customer markets is not evidence of applicant residency.
 const FOREIGN_COUNTRIES = [
   "united states", "usa", "u.s.", "united kingdom", "uk", "u.k.", "canada", "germany", "france",
   "spain", "italy", "netherlands", "ireland", "poland", "portugal", "romania",
@@ -1601,7 +1600,8 @@ export function applyInference(infer, country, isAfrican) {
 // and merely gets slower. See .github/workflows/backfill-signals.yml.
 // v3 separates country/region hiring scope from worldwide evidence.
 // v4 reads visible description text, never geography in HTML link attributes.
-export const SIGNALS_VERSION = 4;
+// v5 uses applicant/role geography, not company or customer country mentions.
+export const SIGNALS_VERSION = 5;
 
 const NON_EN_DESC = [
   "estamos","nossa","nosso","você","trabalho","empresa","vaga","vagas","sobre",
@@ -1609,8 +1609,6 @@ const NON_EN_DESC = [
   "nuestra","nuestro","buscamos","trabajo","empresa","experiencia","conocimiento",
   "responsable","equipo","habilidades","requisitos","ofrecemos","únete",
 ];
-const LOC_CUES = ["location", "based", "headquarters", "hq", "office", "reside",
-  "authorized to work", "eligible to work", "must be", "candidates in", "role is in"];
 
 // Same de-gluing checkEligibility applies, so precomputed and live paths see
 // identical text ("AnalystLocation" -> "Analyst Location").
@@ -1631,40 +1629,32 @@ export function extractEligibilitySignals(job = {}) {
   const titleDesc = ` ${title} ${desc} `;
   const all = ` ${loc} ${desc} ${region} `;
 
-  // First matching hard-exclusion phrase, so the reason string is preserved.
-  let hardExclusion = null;
-  for (const ex of HARD_EXCLUSIONS) {
-    if (hasPhrase(`${title} ${all}`, ex)) { hardExclusion = ex; break; }
-  }
+  // Preserve every explicit hard phrase: contextualising a country list must
+  // never conceal a separate clearance or foreign-only requirement.
+  const hardExclusions = HARD_EXCLUSIONS.filter((ex) => hasPhrase(`${title} ${all}`, ex));
+  const hardExclusion = hardExclusions[0] || null;
 
   let nonEnHits = 0;
   for (const w of NON_EN_DESC) if (hasPhrase(desc, w)) nonEnHits++;
   const diac = (desc.match(/[àâãäçéêíóôõúñ]/g) || []).length;
   const diacRatio = diac / Math.max(desc.length, 1);
 
-  // Every foreign country the BODY ties itself to, in FOREIGN_COUNTRIES order
-  // — order matters because the live check returns the first match, and the
-  // search-time step skips whichever one is the user's own target.
-  const tiedCountries = [];
-  for (const c of FOREIGN_COUNTRIES) {
-    if (!hasPhrase(desc, c)) continue;
-    const idx = desc.indexOf(c);
-    if (idx === -1) continue;
-    const window = desc.slice(Math.max(0, idx - 60), idx + 60);
-    if (LOC_CUES.some((cue) => window.includes(cue))) tiedCountries.push(c);
-  }
+  // Body geography is evaluated through candidate-focused hiring scopes.
+  // Proximity to "office", "based" or "HQ" cannot establish applicant residency.
+  const hiringScopes = extractHiringScopes(`${title} ${desc}`, COUNTRY_TERMS);
 
   const lock = detectJurisdictionLock(`${title} ${desc}`);
 
   return {
     v: SIGNALS_VERSION,
     hardExclusion,
-    hiringScopes: extractHiringScopes(`${title} ${desc}`, COUNTRY_TERMS),
+    hardExclusions,
+    hiringScopes,
     descriptionMissing: !desc.trim(),
     nonEnglishMarkers: hasAny(titleDesc, NON_ENGLISH_MARKERS),
     nonEnglishLocal: nonEnHits >= 3 || diacRatio > 0.015,
-    restricted: hasAny(titleDesc, RESTRICTION_PHRASES),
-    tiedCountries,
+    restricted: hasAny(title, RESTRICTION_PHRASES),
+    tiedCountries: [],
     worldwideDesc: hasAny(desc, WORLDWIDE_DESC_STRONG),
     descMentionsForeign: hasAny(desc, FOREIGN_COUNTRIES),
     insuranceLicensing: hasAny(desc, INSURANCE_LICENSING_SIGNAL),
@@ -1802,12 +1792,21 @@ export function checkEligibility(job, country) {
   if (isUsResidencyGatedCompany(job.company))
     return E("excluded", "Application requires US residency (verified)", false);
 
+  // A country requirement can list alternatives. Do not let a legacy phrase
+  // such as "must be based in the US" discard the matching "or Nigeria".
+  // Only the exact requirement evidence can contextualise its own phrase;
+  // a separate "US only" or clearance statement still wins.
+  const scopes = sig.hiringScopes || [];
+  const hardPhrases = sig.hardExclusions || (sig.hardExclusion ? [sig.hardExclusion] : []);
+  const hardExclusion = hardPhrases.find((phrase) => !scopes.some((scope) => scope.required
+    && scopeAllows(scope.targets, country) && scope.evidence.includes(phrase)));
+
   // 1. Hard exclusions anywhere in text kill the job. Scans the TITLE too:
   // `all` is location+description+region only, so a restriction stated in the
   // title — "AI Adoption Specialist | Top Secret Required", "Engineer (US
   // Only)" — slipped through every check below and surfaced as merely
   // "region unconfirmed".
-  if (sig.hardExclusion) return E("excluded", `Restricted: "${sig.hardExclusion}"`, false);
+  if (hardExclusion) return E("excluded", `Restricted: "${hardExclusion}"`, false);
 
   // 1b. Non-English posting → drop.
   if (sig.nonEnglishMarkers) return E("excluded", "Non-English posting", false);
@@ -1819,7 +1818,6 @@ export function checkEligibility(job, country) {
   // Explicit candidate requirements outrank board-provided worldwide tags
   // and a matching city in the title. A country-scoped invitation is never
   // evidence of worldwide hiring.
-  const scopes = sig.hiringScopes || [];
   const incompatibleScope = scopes.find((scope) => scope.required && !scopeAllows(scope.targets, country));
   if (incompatibleScope)
     return E("excluded", `Hiring location requirement: "${incompatibleScope.evidence}"`, false);
@@ -1922,9 +1920,8 @@ export function checkEligibility(job, country) {
   // Bare "Remote": read description for positive signal or country tie.
   // A strong worldwide phrase in the body ("work from anywhere", "open to
   // candidates worldwide") is as definitive as a worldwide location field, so
-  // it's "certain" — but only if the body doesn't ALSO tie it to a country.
+  // it's "certain" after the applicant requirements above have been checked.
   if (sig.worldwideDesc) {
-    if (sig.descMentionsForeign) return E("likely", "Remote, worldwide language but a country is mentioned");
     // A role that dangles US insurance licensing ("we'll get you licensed in
     // life and health insurance") is regulated state-by-state in the US and
     // effectively never open outside it, even though "work from anywhere"
@@ -1935,7 +1932,6 @@ export function checkEligibility(job, country) {
       return E("possible", "JD says \"open to anyone\", but role requires a US insurance license — confirm eligibility before applying");
     return soften(E("certain", "JD: open to anyone, anywhere"));
   }
-  if (sig.descMentionsForeign) return E("excluded", "Remote, but body ties it to a specific country", false);
 
   // Last check before we'd otherwise shrug and call it "region unconfirmed":
   // does the posting name a statutory benefit/tax instrument that only exists

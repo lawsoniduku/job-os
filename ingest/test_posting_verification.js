@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {verifyPosting,applyVerification,compactVerification,verifyCandidates,nonVacancyReason,redirectedToIndex,parseJobPosting,locationText,retainVerificationEvidence} from '../api/postingVerification.js';
-import {checkEligibility,parseIntent} from '../api/roleIntelligence.js';
+import {checkEligibility,parseIntent,SIGNALS_VERSION,extractEligibilitySignals} from '../api/roleIntelligence.js';
 import {rankCandidates} from '../api/searchCandidates.js';
 import {normalizeJob} from './core/normalize.js';
 const job={id:'1',title:'Administrative Assistant',apply_url:'https://example.bamboohr.com/careers/1',location:'Worldwide',remote:true,description:'Open to candidates worldwide.'};
@@ -159,4 +159,95 @@ test('v3 clean employer evidence keeps restrictions after source signals upgrade
  assert.equal(checkEligibility(applied,'nigeria').eligible,false);
  const unknown=applyVerification(job,{v:2,status:'unknown',last_known:checked});
  assert.equal(checkEligibility(unknown,'nigeria').eligible,false);
+});
+test('old compact employer scopes survive pending and unknown while old positives become unconfirmed',async()=>{
+ const known={v:2,status:'ok',title:job.title,location:'Remote',remote:true,checked_at:'2026-10-15T10:00:00Z',signals:{v:4,descriptionMissing:false,worldwideDesc:true,hiringScopes:[{targets:['us'],required:true,evidence:'Applicants must be based in the United States.'}]}};
+ for(const incoming of [known,{v:3,status:'unknown',checked_at:'2026-10-18T10:00:00Z',last_known:known},{status:'pending',last_known:known}]) {
+  const applied=applyVerification(job,incoming);
+  assert.equal(applied.elig_signals.v,SIGNALS_VERSION);assert.equal(applied.elig_signals.descriptionMissing,true);
+  assert.equal(checkEligibility(applied,'nigeria').eligible,false);
+ }
+ const positive={...known,signals:{v:4,descriptionMissing:false,worldwideDesc:true,hiringScopes:[]}};
+ assert.equal(checkEligibility(applyVerification(job,positive),'nigeria').confidence,'possible');
+ const pending=await verifyCandidates([{...job,apply_url:'https://example.recruitee.com/o/old',elig_signals:{verification:known}}],{budgetMs:0});
+ assert.equal(pending[0].verification.status,'pending');assert.equal(checkEligibility(pending[0],'nigeria').eligible,false);
+ const fresh=applyVerification(job,{...known,description:'Open to candidates worldwide.',signals:{v:4,hardExclusion:'us only'}});
+ assert.equal(checkEligibility(fresh,'nigeria').eligible,true);assert.equal(fresh.elig_signals.v,SIGNALS_VERSION);
+});
+
+const recruiteeJob={...job,title:'People Operations Specialist',apply_url:'https://example.recruitee.com/o/people-operations-specialist/c/new'};
+const recruiteeOffer=(extra={})=>({offer:{id:2750730,slug:'people-operations-specialist',title:recruiteeJob.title,status:'published',description:'<p>People operations support. Open to candidates worldwide.</p>',requirements:'<p>Experience supporting remote teams.</p>',remote:true,location:'Remote job',country:'Czechia',country_code:'CZ',city:'Prague',locations:[{city:'Prague',country:'Czechia'}],close_at:null,...extra}});
+test('Recruitee reads the exact tenant offer and does not turn office metadata into remote residency',async()=>{
+ for(const suffix of ['', '/', '/c/new', '/c/new/']) {
+  const row={...recruiteeJob,apply_url:'https://example.recruitee.com/o/people-operations-specialist'+suffix+'?source=jobhive'};
+  let calls=0;
+  const v=await verifyPosting(row,{fetcher:async url=>{
+   calls++;assert.equal(url,'https://example.recruitee.com/api/offers/people-operations-specialist');return response(recruiteeOffer());
+  }});
+  assert.equal(calls,1);assert.equal(v.status,'ok');assert.equal(v.provider,'employer');assert.equal(v.location,'Remote job');assert.equal(v.remote,true);
+  assert.match(v.description,/Experience supporting remote teams/);
+  const applied=applyVerification(row,compactVerification(v));
+  assert.equal(checkEligibility(applied,'nigeria').eligible,true);assert.equal(checkEligibility(applied,'nigeria').confidence,'certain');
+ }
+});
+test('Recruitee generic remote remains unconfirmed while full requirements retain residency restrictions',async()=>{
+ const v=await verifyPosting(recruiteeJob,{fetcher:async()=>response(recruiteeOffer({description:'People operations support.',requirements:'Remote team administration.'}))});
+ assert.equal(checkEligibility(applyVerification(recruiteeJob,compactVerification(v)),'nigeria').confidence,'possible');
+ const restricted=await verifyPosting(recruiteeJob,{fetcher:async()=>response(recruiteeOffer({requirements:'Required experience. '.repeat(400)+'Applicants must be based in the United States.'}))});
+ assert.equal(restricted.status,'ok');assert.match(restricted.description,/Applicants must be based in the United States/);
+ assert.equal(checkEligibility(applyVerification(recruiteeJob,compactVerification(restricted)),'nigeria').eligible,false);
+ const onsite=await verifyPosting(recruiteeJob,{fetcher:async()=>response(recruiteeOffer({remote:false,location:'',description:'Work in our Prague office.'}))});
+ assert.equal(onsite.location,'Prague, Czechia');assert.equal(onsite.remote,false);
+ assert.equal(checkEligibility(applyVerification(recruiteeJob,compactVerification(onsite)),'nigeria').eligible,false);
+});
+test('Recruitee requires exact identity, known status and usable full description',async()=>{
+ for(const extra of [{slug:'another-role'},{title:'Software Engineer'},{id:null},{status:undefined},{status:'surprise'},{description:null},{description:'<p></p>'},{requirements:{text:'Applicants must be based in the United States.'}}]) {
+  assert.equal((await verifyPosting(recruiteeJob,{fetcher:async()=>response(recruiteeOffer(extra))})).status,'unknown');
+ }
+ for(const body of [{},{offer:[]},'<html>Verify you are human</html>']) {
+  assert.equal((await verifyPosting(recruiteeJob,{fetcher:async()=>response(body)})).status,'unknown');
+ }
+ for(const status of ['draft','closed','archived','unpublished','internal']) {
+  assert.equal((await verifyPosting(recruiteeJob,{fetcher:async()=>response(recruiteeOffer({status}))})).status,'dead');
+ }
+});
+test('Recruitee closes only unambiguous valid expired deadlines',async()=>{
+ const now=Date.parse('2026-10-18T12:00:00Z');
+ for(const close_at of ['2026-10-17T12:00:00Z','2026-10-17 12:00:00 UTC','2026-10-17T15:00:00+03:00']) {
+  assert.equal((await verifyPosting(recruiteeJob,{now,fetcher:async()=>response(recruiteeOffer({close_at}))})).status,'dead');
+ }
+ for(const close_at of [null,0,'yesterday','2026-02-30T12:00:00Z','2026-10-17','2026-10-17 12:00:00','2026-10-19T12:00:00Z']) {
+  assert.equal((await verifyPosting(recruiteeJob,{now,fetcher:async()=>response(recruiteeOffer({close_at}))})).status,'ok');
+ }
+});
+test('Recruitee blocked and transient checks are unknown and preserve last conclusive evidence',async()=>{
+ const known=compactVerification(await verifyPosting(recruiteeJob,{fetcher:async()=>response(recruiteeOffer({requirements:'Applicants must be based in the United States.'}))}));
+ for(const status of [403,429,500]) {
+  const v=await verifyPosting(recruiteeJob,{fetcher:async()=>response('',status)});
+  assert.equal(v.status,'unknown');
+  assert.equal(checkEligibility(applyVerification({...recruiteeJob,elig_signals:{verification:known}},v),'nigeria').eligible,false);
+ }
+ assert.equal((await verifyPosting(recruiteeJob,{fetcher:async()=>{throw new Error('network');}})).status,'unknown');
+ for(const status of [404,410])assert.equal((await verifyPosting(recruiteeJob,{fetcher:async()=>response('',status)})).status,'dead');
+});
+test('Recruitee rejects unsupported paths, misleading hosts and cross-tenant redirects',async()=>{
+ for(const apply_url of ['https://recruitee.com/o/people-operations-specialist','https://nested.example.recruitee.com/o/people-operations-specialist','https://example.recruitee.com.evil.test/o/people-operations-specialist','https://example.recruitee.com/api/offers/people-operations-specialist','https://user:password@example.recruitee.com/o/people-operations-specialist']) {
+  let calls=0;
+  assert.equal((await verifyPosting({...recruiteeJob,apply_url},{fetcher:async()=>{calls++;return response(recruiteeOffer());}})).status,'unknown');assert.equal(calls,0);
+ }
+ let calls=0;
+ const v=await verifyPosting(recruiteeJob,{fetcher:async()=>{calls++;return response('',302,{location:'https://other.recruitee.com/api/offers/people-operations-specialist'});}});
+ assert.equal(v.status,'unknown');assert.equal(calls,1);
+});
+
+test('new source restrictions outrank old positive evidence until a fresh employer check',async()=>{
+ const changed='2026-10-18T11:00:00Z';
+ const source={...job,description:'Candidates must reside in the UK.',location:'Remote',elig_signals:{...extractEligibilitySignals({title:job.title,description:'Candidates must reside in the UK.',location:'Remote'}),source:{changed_at:changed}}};
+ const old={v:3,status:'ok',checked_at:'2026-10-18T10:00:00Z',title:job.title,location:'Worldwide',remote:true,signals:extractEligibilitySignals({title:job.title,description:'Work from anywhere.',location:'Worldwide'})};
+ const applied=applyVerification(source,old);
+ assert.equal(checkEligibility(applied,'nigeria').eligible,false);
+ const changedGlobal={...source,description:'Work from anywhere.',elig_signals:{...extractEligibilitySignals({title:job.title,description:'Work from anywhere.',location:'Remote'}),source:{changed_at:changed}}};
+ assert.equal(checkEligibility(applyVerification(changedGlobal,old),'nigeria').confidence,'possible');
+ const fresh={...old,checked_at:'2026-10-18T12:00:00Z'};
+ assert.equal(checkEligibility(applyVerification(changedGlobal,fresh),'nigeria').confidence,'certain');
 });

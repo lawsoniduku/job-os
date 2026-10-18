@@ -1,8 +1,8 @@
 import { getAliasesForCluster, scoreJobLocally, SIGNALS_VERSION } from "./roleIntelligence.js";
-import { nonVacancyReason } from "./postingVerification.js";
+import { applyVerification, nonVacancyReason } from "./postingVerification.js";
 import { canonicalUrl } from "../ingest/core/dedup.js";
 
-import { publicationIsDiscoverable, publicationFilter } from "./jobFreshness.js";
+import { publicationIsDiscoverable, publicationFilter, sourceVisibilityFilter } from "./jobFreshness.js";
 
 const PAGE_SIZE = 500;
 const DAY = 86400000;
@@ -54,7 +54,7 @@ export async function fetchCandidates({ db, intent, columns, lean, hasLiveness, 
       let after = null;
       for (;;) {
         let query = applyRoleQuery(db.from("jobs").select(columns), intent)
-          .or(`last_seen_at.is.null,last_seen_at.gte.${new Date(now - 28 * DAY).toISOString()}`)
+          .or(sourceVisibilityFilter(now))
           .or(publicationFilter(now));
         if (hasLiveness) query = query.or("link_status.is.null,link_status.neq.dead");
         if (after !== null) query = query.gt("id", after);
@@ -140,11 +140,22 @@ export function compareSearchResults(a, b) {
 }
 
 export function rankCandidates(rows, intent, filters = {}, now = Date.now(), postingChecksApplied = false) {
-  const scored = rows.map((job) => {
+  const scored = rows.map((sourceJob) => {
+    // Consult persisted employer evidence before source text can exclude the job.
+    // This also retains confirmed restrictions/closure through transient failures.
+    const job = sourceJob.verification ? sourceJob : sourceJob.elig_signals?.verification
+      ? applyVerification(sourceJob, sourceJob.elig_signals.verification) : sourceJob;
     const r = scoreJobLocally(job, intent);
     return { ...job, score: r.score, eligibility: r.eligibility, offTarget: r.offTarget, match_breakdown: r.breakdown, match_reason: r.eligibility.reason };
   });
-  const matching = scored.filter((j) => j.eligibility.eligible !== false && !j.offTarget && !nonVacancyReason(j) && (!postingChecksApplied || j.verification?.status !== "dead") && matchesFilters(j, filters, now));
+  const exclusionReasons = {};
+  const matching = scored.filter((j) => {
+    const reason = j.verification?.status === 'dead' ? 'closed'
+      : j.offTarget ? 'role_mismatch' : j.eligibility.eligible === false ? 'location_eligibility'
+      : nonVacancyReason(j) ? 'non_vacancy' : !matchesFilters(j,filters,now) ? 'filters_or_freshness' : null;
+    if (reason) exclusionReasons[reason]=(exclusionReasons[reason] || 0)+1;
+    return !reason;
+  });
   matching.sort(compareSearchResults);
   const urls = new Set(), contents = new Set();
   const results = matching.filter((j) => {
@@ -156,5 +167,5 @@ export function rankCandidates(rows, intent, filters = {}, now = Date.now(), pos
     if (key) contents.add(key);
     return true;
   });
-  return { results, evaluated: scored.length, excluded: scored.length - matching.length, duplicates: matching.length - results.length };
+  return { results, evaluated: scored.length, excluded: scored.length - matching.length, duplicates: matching.length - results.length, exclusionReasons };
 }
