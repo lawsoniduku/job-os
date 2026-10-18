@@ -41,6 +41,9 @@ export function createJobhiveRefreshWriter(db, {
       const signals = { ...(existing.elig_signals || {}), ...(row.elig_signals || {}) };
       const unchanged = sameInput(existing, row);
       signals.source = { ...(row.elig_signals?.source || {}) };
+      // A missing upstream deadline is not evidence that a known deadline was extended.
+      if (!signals.source.application_deadline && existing.elig_signals?.source?.application_deadline)
+        signals.source.application_deadline = existing.elig_signals.source.application_deadline;
       if (unchanged) {
         if (existing.elig_signals?.source?.changed_at) signals.source.changed_at = existing.elig_signals.source.changed_at;
         else delete signals.source.changed_at;

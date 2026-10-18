@@ -324,3 +324,11 @@ test('a changed structured remote flag invalidates inference and older positive 
  assert.equal(saved.elig_signals.source.changed_at,'2026-10-18T10:00:00Z');
  assert.equal(saved.elig_signals.verification.status,'ok');
 });
+
+test('a later positive observation cannot erase an existing explicit deadline by omitting it',async()=>{
+ const deadline='2026-10-18T09:00:00Z';
+ const existing={...role,id:'deadline-preserved',elig_signals:{v:5,source:{fetched_at:'2026-10-18T08:00:00Z',application_deadline:deadline}}};
+ const db=fakeDb([existing]);
+ await writer(db)([{...role,last_seen_at:'2026-10-18T11:00:00Z',elig_signals:{v:5,source:{fetched_at:'2026-10-18T10:00:00Z',application_deadline:null}}}]);
+ assert.equal(db.rows.get(role.apply_url).elig_signals.source.application_deadline,deadline);
+});
