@@ -1,4 +1,6 @@
 import { ACTIVE_JOB_SOURCES } from "../api/sourcePolicy.js";
+import { verificationQuery } from "./core/verificationQueue.js";
+import { recordVerificationSummary, printVerificationSummary } from "./core/verificationDiagnostics.js";
 /** Scheduled verification of current public postings, with bounded batches.
  * Stores compact evidence in existing elig_signals JSONB; no schema change.
  * A blocked/unsupported source is unknown, never falsely marked closed.
@@ -23,6 +25,9 @@ const num = (flag, dflt) => {
 const LIMIT = num("--limit", 500);
 const RECHECK_DAYS = num("--recheck-days", 7);
 const CONCURRENCY = num("--concurrency", 8);
+const sourceIndex=args.indexOf('--source');
+const source=sourceIndex>=0?args[sourceIndex+1]:null;
+if(source && !ACTIVE_JOB_SOURCES.includes(source)) throw new Error(`Unsupported --source: ${source}`);
 const TIMEOUT_MS = 12000;
 
 // A 200 response whose body says the posting is closed. Kept to phrases that
@@ -189,21 +194,12 @@ async function assertLivenessColumns() {
 const SEARCHABLE_REGIONS = ["Nigeria", "Africa", "Global", "Remote", "EMEA", "Unknown"];
 
 async function selectBatch(limit = Math.min(LIMIT, 500)) {
-  const staleBefore = new Date(Date.now() - RECHECK_DAYS * 864e5).toISOString();
-  const liveCutoff = new Date(Date.now() - 28 * 864e5).toISOString();
   for (let a = 1; a <= 4; a++) {
     // Only rows the search can actually surface today — no point spending
     // requests on listings already gated out by freshness or by region.
-    let q = supabase
-      .from("jobs")
-      .select("id, apply_url, title, company, link_status, link_checked_at, elig_signals")
-      .in("source", ACTIVE_JOB_SOURCES)
-      .gte("last_seen_at", liveCutoff)
-      .or(`link_checked_at.is.null,link_checked_at.lt.${staleBefore}`);
+    // Persist each batch before selecting the next: rows leave the due queue.
     // Country filters are applied at search time; check every region.
-    const { data, error } = await q
-      .order("link_checked_at", { ascending: true, nullsFirst: true })
-      .limit(limit);
+    const { data, error } = await verificationQuery(supabase,{limit,source,recheckDays:RECHECK_DAYS});
     if (!error) return data || [];
     console.log(`  ⚠️  select failed (attempt ${a}/4): ${error.message}`);
     await sleep(1500 * a);
@@ -216,6 +212,7 @@ async function run() {
   await assertLivenessColumns();
   let checked = 0, written = 0;
   const by = { ok: 0, dead: 0, unknown: 0 };
+  const diagnostics={};
   const deadline = Date.now() + 44 * 60 * 1000;
   while (checked < LIMIT && Date.now() < deadline) {
     // Persist each batch before selecting again, so PostgREST's response row
@@ -228,6 +225,7 @@ async function run() {
         const row = queue.shift();
         const verification = retainVerificationEvidence(compactVerification(await verifyPosting(row, {timeoutMs: 12000})), row.elig_signals?.verification);
         const status = verification.status === 'ok' ? 'ok' : verification.status === 'dead' ? 'dead' : 'unknown';
+        recordVerificationSummary(diagnostics,row,verification);
         results.push({...row,status,verification}); by[status]++; checked++;
       }
     }));
@@ -242,6 +240,7 @@ async function run() {
     }
   }
   console.log(`Verification complete: ${checked} checked, ${written} saved. Unverified listings remain available with uncertainty labels.`);
+  printVerificationSummary(diagnostics);
   console.log("");
 }
 

@@ -2,13 +2,19 @@
 import { updateJobSignals, mergePostingObservation } from '../ingest/core/jobSignalsWriter.js';
 import { cleanText } from '../ingest/core/normalize.js';
 import { extractEligibilitySignals, SIGNALS_VERSION } from './roleIntelligence.js';
+import { OBSERVED_POSTING_HOSTS } from './postingHosts.js';
 
-export const VERIFICATION_VERSION = 3;
+// v4 requires exact posting identity and records the actual HTTP evidence.
+export const VERIFICATION_VERSION = 4;
 const TTL = 6 * 60 * 60 * 1000;
 const cache = new Map();
 const recruiteeTenant = hostname => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.recruitee\.com$/i.test(hostname);
+const icimsTenant = hostname => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.icims\.com$/i.test(hostname);
+const customRecruitee = hostname => Object.hasOwn(OBSERVED_POSTING_HOSTS.recruitee, hostname);
+const phenomHost = hostname => Object.hasOwn(OBSERVED_POSTING_HOSTS.phenom, hostname);
+const myjobmagHost = hostname => ['myjobmag.com','www.myjobmag.com'].includes(hostname);
 const hosts = ['bamboohr.com', 'apply.workable.com', 'jobs.ashbyhq.com', 'api.ashbyhq.com', 'job-boards.greenhouse.io', 'boards.greenhouse.io', 'boards-api.greenhouse.io', 'boards-api.eu.greenhouse.io', 'api.lever.co', 'jobs.lever.co', 'canonical.com'];
-const allowed = (u) => u.protocol === 'https:' && !u.username && !u.password && (!u.port || u.port === '443') && (recruiteeTenant(u.hostname) || hosts.some(h => u.hostname === h || (h === 'bamboohr.com' && u.hostname.endsWith('.bamboohr.com'))));
+const allowed = (u) => u.protocol === 'https:' && !u.username && !u.password && (!u.port || u.port === '443') && (recruiteeTenant(u.hostname) || icimsTenant(u.hostname) || customRecruitee(u.hostname) || phenomHost(u.hostname) || myjobmagHost(u.hostname) || hosts.some(h => u.hostname === h || (h === 'bamboohr.com' && u.hostname.endsWith('.bamboohr.com'))));
 const list = v => v == null ? [] : Array.isArray(v) ? v : [v];
 function countryName(v) {
   const name = typeof v === 'object' ? v?.name : v;
@@ -37,6 +43,48 @@ export function redirectedToIndex(original, final) {
 function decode(s) {
   return String(s || '').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 }
+const normalizedTitle = s => cleanText(decode(s),Infinity).toLowerCase().replace(/[^\p{L}\p{N}]/gu,'');
+function postingRoute(u) {
+  if (icimsTenant(u.hostname)) return u.pathname.match(/^\/jobs\/(\d+)\/(?:[^/]+\/)?job\/?$/i)?.[1] || null;
+  if (phenomHost(u.hostname)) return u.pathname.match(/^\/(?:(?:global|[a-z]{2}(?:-[a-z]{2})?)\/){0,2}job\/([a-z0-9_-]+)(?:\/[^/]+)?\/?$/i)?.[1] || null;
+  if (customRecruitee(u.hostname)) return u.pathname.match(/^\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?o\/([a-z0-9][a-z0-9-]*)(?:\/c\/new)?\/?$/i)?.[1] || null;
+  if (myjobmagHost(u.hostname)) return u.pathname.match(/^\/job\/([a-z0-9][a-z0-9-]*)\/?$/i)?.[1] || null;
+  return null;
+}
+function exactStructuredIdentity(posting, requested, current) {
+  // A recommended vacancy can have the same title. Its URL must still identify
+  // this vacancy on this origin. Ignore tracking queries only on ID-bound paths.
+  const urls=list(posting.url || posting.mainEntityOfPage).map(v=>typeof v==='object'?v?.['@id']:v).filter(Boolean);
+  if(urls.length) return urls.some(value=>{
+    try {
+      const u=new URL(value,current);
+      return allowed(u) && u.origin===current.origin && postingRoute(u)===postingRoute(requested);
+    } catch {return false;}
+  });
+  // iCIMS/Phenom also expose their requisition identifier in structured data.
+  // Never use this fallback when an explicit, conflicting URL was provided.
+  if(!icimsTenant(requested.hostname) && !phenomHost(requested.hostname)) return false;
+  return list(posting.identifier).some(value=>String(typeof value==='object'?value?.value:value)===postingRoute(requested));
+}
+function exactExistingStructuredIdentity(posting, requested, current) {
+  const normalizedPath=u=>u.pathname.replace(/\/(?:application|apply)\/?$/i,'').replace(/\/$/,'');
+  return list(posting.url || posting.mainEntityOfPage).some(value=>{
+    try {
+      const u=new URL(typeof value==='object'?value?.['@id']:value,current);
+      return allowed(u) && u.origin===current.origin && normalizedPath(u)===normalizedPath(requested) && u.search===requested.search;
+    } catch {return false;}
+  });
+}
+function structuredExpiration(value) {
+  if(typeof value!=='string') return NaN;
+  const date=value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if(!date) return explicitTimestamp(value);
+  const [,year,month,day]=date.map(Number);
+  if(year<1000 || month<1 || month>12 || day<1 || day>new Date(Date.UTC(year,month,0)).getUTCDate())return NaN;
+  // A date-only deadline includes that full calendar day (UTC); do not close
+  // it at midnight at the start of the advertised deadline.
+  return Date.UTC(year,month-1,day+1);
+}
 export function parseJobPosting(html) {
   const found = [];
   const visit = v => { if (!v || typeof v !== 'object') return; if (list(v['@type']).includes('JobPosting')) found.push(v); if (Array.isArray(v)) v.forEach(visit); if(v['@graph']) visit(v['@graph']); };
@@ -52,19 +100,25 @@ export function parseJobPosting(html) {
   }
   return found;
 }
-async function readResponse(url, fetcher, signal, expectedOrigin) {
+async function readResponse(url, fetcher, signal, expectedOrigin=new URL(url).origin, observe=()=>{}) {
   let current = new URL(url);
+  const originMatches=u=>u.origin===expectedOrigin || (myjobmagHost(new URL(expectedOrigin).hostname) && myjobmagHost(u.hostname));
   for(let i=0;i<5;i++) {
-    if(!allowed(current) || (expectedOrigin && current.origin !== expectedOrigin)) throw new Error('Unsupported posting host');
+    if(!allowed(current) || !originMatches(current)) throw new Error('Unsupported posting host');
+    // No response exists yet for this endpoint. A redirected request that
+    // fails must not inherit the prior endpoint's redirect HTTP status.
+    observe({checked_url:current.href,http_status:undefined});
     const r = await fetcher(current.href, {redirect:'manual',signal,headers:{'User-Agent':'JobCopilotVerification/1.0','Accept':'application/json,text/html'}});
+    observe({checked_url:current.href,http_status:r.status});
     if ([301,302,303,307,308].includes(r.status)) {
       const next = new URL(r.headers.get('location'),current);
-      if(expectedOrigin && next.origin !== expectedOrigin) throw new Error('Unexpected employer redirect');
+      if(!allowed(next) || !originMatches(next)) throw new Error('Unexpected employer redirect');
+      if(/\/(?:login|sign-in|signin)(?:\/|$)/i.test(next.pathname)) throw new Error('Unexpected employer redirect to sign-in');
       if(redirectedToIndex(url,next.href)) return {status:'dead',reason:'Posting redirects to a listings index'};
       current = next; continue;
     }
     if([404,410].includes(r.status)) return {status:'dead',reason:'Posting removed'};
-    if(!r.ok) throw new Error('Posting could not be checked');
+    if(!r.ok) throw new Error(r.status===403 || r.status===429 ? `Source access blocked (HTTP ${r.status})` : `Source returned HTTP ${r.status}`);
     // Bound body size and keep the abort signal active while consuming it.
     let text = ''; const reader = r.body?.getReader();
     if(reader) { const decoder = new TextDecoder(); let size=0; for(;;) { const {value,done}=await reader.read(); if(done)break; size+=value.length; if(size>2_000_000){await reader.cancel();throw new Error('Posting too large');} text+=decoder.decode(value,{stream:true}); } text+=decoder.decode(); }
@@ -86,7 +140,10 @@ function explicitTimestamp(value) {
 }
 export async function verifyPosting(job, {fetcher=fetch, now=Date.now(), timeoutMs=12000, signal}={}) {
   const at = new Date(now).toISOString();
-  const unknown = reason => ({v:VERIFICATION_VERSION,status:'unknown',checked_at:at,reason});
+  let observation={evidence_url:job.apply_url};
+  const observe=details=>{observation={...observation,...details};};
+  const unknown = reason => ({v:VERIFICATION_VERSION,status:'unknown',checked_at:at,...observation,reason});
+  const closed = result => ({...result,v:VERIFICATION_VERSION,checked_at:at,...observation});
   const ctrl = new AbortController(), timer = setTimeout(()=>ctrl.abort(),timeoutMs);
   const abort=()=>ctrl.abort();
   if(signal?.aborted) ctrl.abort();
@@ -95,21 +152,23 @@ export async function verifyPosting(job, {fetcher=fetch, now=Date.now(), timeout
     let u = new URL(job.apply_url);
     if(!allowed(u)) return unknown('Source cannot yet be verified');
     let path = u.pathname, provider = 'structured posting', payload;
+    const read=(url,origin=new URL(url).origin)=>readResponse(url,fetcher,ctrl.signal,origin,observe);
+    const strictStructured=icimsTenant(u.hostname) || phenomHost(u.hostname) || customRecruitee(u.hostname) || myjobmagHost(u.hostname);
+    if(strictStructured && !postingRoute(u)) return unknown('Unsupported employer vacancy URL');
     const recruitee=recruiteeTenant(u.hostname);
-    const offerPath=path.match(/^\/o\/([a-z0-9][a-z0-9-]*)(?:\/c\/new)?\/?$/i);
+    const offerPath=path.match(/^\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?o\/([a-z0-9][a-z0-9-]*)(?:\/c\/new)?\/?$/i);
     if(recruitee && !offerPath) return unknown('Unsupported employer vacancy URL');
     const gh=path.match(/^\/([^/]+)\/jobs\/(\d+)/);
     const lever=path.match(/^\/([^/]+)\/([a-f0-9-]+)(?:\/apply)?\/?$/i);
     if(recruitee) {
       const slug=offerPath[1];
-      const r=await readResponse(`${u.origin}/api/offers/${slug}`,fetcher,ctrl.signal,u.origin);
-      if(r.status)return {...r,v:VERIFICATION_VERSION,checked_at:at};
+      const r=await read(`${u.origin}/api/offers/${slug}`,u.origin);
+      if(r.status)return closed(r);
       const j=JSON.parse(r.text)?.offer;
-      const normalizedTitle=s=>cleanText(decode(s),Infinity).toLowerCase().replace(/[^\p{L}\p{N}]/gu,'');
       if(!j || j.slug!==slug || !((typeof j.id==='number' && j.id>0) || (typeof j.id==='string' && /^\d+$/.test(j.id))) || typeof j.title!=='string' || !normalizedTitle(j.title) || normalizedTitle(j.title)!==normalizedTitle(job.title)) return unknown('Exact employer vacancy could not be verified');
-      if(['draft','closed','archived','unpublished','internal'].includes(j.status)) return {v:VERIFICATION_VERSION,status:'dead',checked_at:at,reason:'Vacancy is not published'};
+      if(['draft','closed','archived','unpublished','internal'].includes(j.status)) return closed({status:'dead',reason:'Vacancy is not published'});
       if(j.status!=='published') return unknown('Employer vacancy status unavailable');
-      if(explicitTimestamp(j.close_at)<now) return {v:VERIFICATION_VERSION,status:'dead',checked_at:at,reason:'Posting has expired'};
+      if(explicitTimestamp(j.close_at)<now) return closed({status:'dead',reason:'Posting has expired'});
       if(typeof j.description!=='string' || !cleanText(decode(j.description),Infinity)) return unknown('Posting description is missing');
       if(j.requirements!=null && typeof j.requirements!=='string') return unknown('Employer requirements unavailable');
       provider='employer';
@@ -119,59 +178,72 @@ export async function verifyPosting(job, {fetcher=fetch, now=Date.now(), timeout
       const location=typeof j.location==='string' ? j.location.trim() : '';
       payload={title:j.title,description:[j.description,typeof j.requirements==='string'?j.requirements:''].filter(Boolean).join('\n'),location:location || (remote?'Remote':list(j.locations).map(locationText).filter(Boolean).join('; ') || locationText(j)),remote};
     } else if(['job-boards.greenhouse.io','boards.greenhouse.io'].includes(u.hostname) && gh) {
-      const r=await readResponse(`https://boards-api.greenhouse.io/v1/boards/${gh[1]}/jobs/${gh[2]}`,fetcher,ctrl.signal);
-      if(r.status)return {...r,v:VERIFICATION_VERSION,checked_at:at};
+      const r=await read(`https://boards-api.greenhouse.io/v1/boards/${gh[1]}/jobs/${gh[2]}`);
+      if(r.status)return closed(r);
       const j=JSON.parse(r.text);
-      if(!j.id || !j.content)return unknown('Employer vacancy details unavailable');
+      if(String(j.id)!==gh[2] || !j.content)return unknown('Exact employer vacancy could not be verified');
       provider='employer';
       payload={title:j.title,description:j.content,location:j.location?.name||'',remote:/remote|home[- ]?based|worldwide|anywhere/i.test(j.location?.name||'')};
     } else if(u.hostname==='jobs.lever.co' && lever) {
-      const r=await readResponse(`https://api.lever.co/v0/postings/${lever[1]}/${lever[2]}?mode=json`,fetcher,ctrl.signal);
-      if(r.status)return {...r,v:VERIFICATION_VERSION,checked_at:at};
+      const r=await read(`https://api.lever.co/v0/postings/${lever[1]}/${lever[2]}?mode=json`);
+      if(r.status)return closed(r);
       const j=JSON.parse(r.text);
-      if(!j.id || !j.text)return unknown('Employer vacancy details unavailable');
+      if(String(j.id).toLowerCase()!==lever[2].toLowerCase() || !j.text)return unknown('Exact employer vacancy could not be verified');
       provider='employer';
       payload={title:j.text,description:[j.description,...(j.lists||[]).map(l=>l.content),j.additional].filter(Boolean).join('\n'),location:j.categories?.location||'',remote:j.workplaceType==='remote'};
     } else if(u.hostname.endsWith('.bamboohr.com') && /^\/careers\/\d+\/?$/.test(path)) {
-      const r = await readResponse(u.origin + path.replace(/\/$/,'') + '/detail',fetcher,ctrl.signal);
-      if(r.status) return {...r,v:VERIFICATION_VERSION,checked_at:at};
+      const r = await read(u.origin + path.replace(/\/$/,'') + '/detail');
+      if(r.status) return closed(r);
       const j=JSON.parse(r.text)?.result?.jobOpening;
       if(!j) return unknown('No current vacancy details');
-      if(j.jobOpeningStatus !== 'Open') return {v:VERIFICATION_VERSION,status:'dead',checked_at:at,reason:'Vacancy is not open'};
+      if(!normalizedTitle(j.jobOpeningName) || normalizedTitle(j.jobOpeningName)!==normalizedTitle(job.title)) return unknown('Exact employer vacancy could not be verified');
+      if(['Closed','Draft','Archived'].includes(j.jobOpeningStatus)) return closed({status:'dead',reason:'Vacancy is not open'});
+      if(j.jobOpeningStatus !== 'Open') return unknown('Employer vacancy status unavailable');
       provider='employer';
       payload={title:j.jobOpeningName,description:j.description,location:locationText(j.atsLocation || j.location),remote:String(j.locationType)==='1'};
     } else {
-      const r=await readResponse(u.href,fetcher,ctrl.signal);
-      if(r.status) return {...r,v:VERIFICATION_VERSION,checked_at:at};
+      const r=await read(u.href);
+      if(r.status) return closed(r);
       u=new URL(r.url);
       const wm=u.pathname.match(/^\/([^/]+)\/j\/([A-Z0-9]+)(?:\/apply)?\/?$/i);
       if(u.hostname==='apply.workable.com' && wm) {
-        const d=await readResponse(`${u.origin}/api/v2/accounts/${wm[1]}/jobs/${wm[2]}`,fetcher,ctrl.signal);
-        if(d.status)return {...d,v:VERIFICATION_VERSION,checked_at:at};
+        const d=await read(`${u.origin}/api/v2/accounts/${wm[1]}/jobs/${wm[2]}`);
+        if(d.status)return closed(d);
         const j=JSON.parse(d.text);
-        if(j.state !== 'published' || j.isInternal) return {v:VERIFICATION_VERSION,status:'dead',checked_at:at,reason:j.isInternal?'Internal applicants only':'Vacancy is not published'};
+        if(!normalizedTitle(j.title) || normalizedTitle(j.title)!==normalizedTitle(job.title)) return unknown('Exact employer vacancy could not be verified');
+        if(['closed','draft','archived','unpublished'].includes(j.state) || j.isInternal===true) return closed({status:'dead',reason:j.isInternal?'Internal applicants only':'Vacancy is not published'});
+        if(j.state !== 'published') return unknown('Employer vacancy status unavailable');
         provider='employer';
         payload={title:j.title,description:[j.description,j.requirements,j.benefits].filter(Boolean).join('\n'),location:list(j.locations?.length?j.locations:j.location).map(locationText).filter(Boolean).join('; '),remote:j.remote===true};
       } else {
-        if(/verify you are human|checking your browser|just a moment/i.test(r.text.slice(0,5000))) return unknown('Source verification blocked');
+        if(/verify you are human|checking your browser|just a moment|attention required|enable javascript and cookies|performing security verification/i.test(r.text.slice(0,5000))) return unknown('Source verification blocked');
         const postings=parseJobPosting(r.text);
-        const normalize=s=>cleanText(decode(s),Infinity).toLowerCase().replace(/[^a-z0-9]/g,'');
-        const j=postings.find(j=>normalize(j.title)===normalize(job.title));
+        const requested=new URL(job.apply_url);
+        const j=postings.find(j=>normalizedTitle(j.title)===normalizedTitle(job.title) && (strictStructured ? exactStructuredIdentity(j,requested,u) : exactExistingStructuredIdentity(j,requested,u)));
         if(!j) return unknown('Exact vacancy could not be verified');
-        if(j.validThrough && Date.parse(j.validThrough)<now) return {v:VERIFICATION_VERSION,status:'dead',checked_at:at,reason:'Posting has expired'};
-        const loc=list(j.applicantLocationRequirements?.length?j.applicantLocationRequirements:j.applicantLocationRequirements || j.jobLocation).map(locationText).filter(Boolean).join('; ');
+        if(j.validThrough && structuredExpiration(j.validThrough)<now) return closed({status:'dead',reason:'Posting has expired'});
+        let loc=list(j.applicantLocationRequirements?.length?j.applicantLocationRequirements:j.applicantLocationRequirements || j.jobLocation).map(locationText).filter(Boolean).join('; ');
         const description=cleanText(decode(j.description),Infinity);
         if(!description) return unknown('Posting description is missing');
-        provider='employer';
+        provider=myjobmagHost(u.hostname)?'jobboard':'employer';
+        // A job board's broad location metadata is not an employer statement
+        // about residency. Any explicit full-description hiring scope remains.
+        if(provider==='jobboard' && /\b(worldwide|anywhere|global)\b/i.test(loc)) loc='';
         payload={title:decode(j.title),description,location:loc || '',remote:j.jobLocationType==='TELECOMMUTE' || /remote/i.test(loc)};
       }
     }
     payload.description=cleanText(decode(payload.description),Infinity);
-    const reason=nonVacancyReason(payload);
-    if(reason)return {v:VERIFICATION_VERSION,status:'dead',checked_at:at,reason};
     if(!payload.title || !payload.description) return unknown('Incomplete posting evidence');
-    return {v:VERIFICATION_VERSION,status:'ok',checked_at:at,provider,...payload};
-  } catch { return unknown('Current posting could not be verified'); }
+    if(!normalizedTitle(payload.title) || normalizedTitle(payload.title)!==normalizedTitle(job.title)) return unknown('Exact employer vacancy could not be verified');
+    const reason=nonVacancyReason(payload);
+    if(reason)return closed({status:'dead',reason});
+    return {v:VERIFICATION_VERSION,status:'ok',checked_at:at,...observation,identity:'exact',provider,...payload};
+  } catch(error) {
+    const reason=ctrl.signal.aborted?'Posting check timed out or was cancelled':
+      error instanceof SyntaxError?'Source response was not valid JSON':
+      /^(?:Unsupported posting host|Unexpected employer redirect|Source access blocked|Source returned HTTP|Posting too large|Too many redirects)/.test(error?.message || '')?error.message:'Current posting could not be verified';
+    return unknown(reason);
+  }
   finally {clearTimeout(timer);signal?.removeEventListener('abort',abort);}
 }
 export function compactVerification(v) {
@@ -191,7 +263,16 @@ export function retainVerificationEvidence(current, previous) {
 export function applyVerification(job, incoming) {
   const v = retainVerificationEvidence(incoming, job.elig_signals?.verification);
   const evidence = v.status === 'ok' || v.status === 'dead' ? v : v.last_known;
-  if (evidence?.status === 'dead') return {...job, verification: {...v, status:'dead'}};
+  if (evidence?.status === 'dead') {
+    // Closure belongs to the last conclusive observation, not to a later
+    // timeout. Keep its reason/date/HTTP proof visible and audit the retry
+    // separately; the persisted observation remains unknown with last_known.
+    const {last_known,...latestObservation}=v;
+    return {...job,elig_signals:{...job.elig_signals,verification:v},verification:{
+      ...evidence,evidence_checked_at:evidence.checked_at,
+      ...(v!==evidence?{last_known:evidence,latest_observation:latestObservation}:{})
+    }};
+  }
   if (evidence?.status === 'ok') {
     const changedAt=Date.parse(job.elig_signals?.source?.changed_at);
     if (Number.isFinite(changedAt) && changedAt > (Date.parse(evidence.checked_at) || 0)) {
@@ -213,7 +294,7 @@ export function applyVerification(job, incoming) {
     // when projecting employer content into a search result.
     fresh.elig_signals={...fresh.elig_signals,
       ...(job.elig_signals?.source ? {source:job.elig_signals.source} : {}), verification:v};
-    return {...fresh,verification:{status:v.status,checked_at:v.checked_at,provider:evidence.provider,evidence_checked_at:evidence.checked_at}};
+    return {...fresh,verification:{v:v.v,status:v.status,checked_at:v.checked_at,provider:evidence.provider,evidence_checked_at:evidence.checked_at,identity:evidence.identity,evidence_url:evidence.evidence_url,checked_url:evidence.checked_url,http_status:evidence.http_status}};
   }
   return {...job,verification:v};
 }
