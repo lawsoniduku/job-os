@@ -9,9 +9,9 @@ const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // those to milliseconds and can reject a correctly ordered keyset page.
 export function timestampMicros(value) {
   if (typeof value !== 'string') return null;
-  const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,6}))?(Z|[+-]\d{2}:\d{2})$/.exec(value);
+  const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,6}))?(Z|[+-]\d{2}:\d{2})?$/.exec(value);
   if (!match) return null;
-  const seconds = Date.parse(`${match[1]}${match[3]}`);
+  const seconds = Date.parse(`${match[1]}${match[3] || 'Z'}`);
   return Number.isFinite(seconds) ? BigInt(seconds) * 1000n + BigInt((match[2] || '').padEnd(6, '0')) : null;
 }
 const validDate = value => timestampMicros(value) !== null;
@@ -72,7 +72,7 @@ export async function collectInferenceCandidates(fetchPage, options, now = Date.
       if (!validDate(at) || !uuid.test(row.id || '')) throw new Error('Inference queue returned an invalid ordering key');
       if (cursor && !(timestampMicros(at) < timestampMicros(cursor.at) || (timestampMicros(at) === timestampMicros(cursor.at) && row.id < cursor.id))) throw new Error('Inference queue failed to advance in newest-first order');
       const beforeCursor = cursor;
-      cursor = { v: 1, at, id: row.id, from: options.from, until: options.until, days: options.days };
+      cursor = { v: 1, at: /(?:Z|[+-]\d{2}:\d{2})$/.test(at) ? at : `${at}Z`, id: row.id, from: options.from, until: options.until, days: options.days };
       scanned++;
       consumed++;
       const candidate = pendingInference(row, now);

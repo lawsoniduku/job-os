@@ -103,3 +103,13 @@ test('FK migration static contracts audit actual orphans and validate SET NULL w
   assert.doesNotMatch(sql, /delete from public\.(applications|saved_jobs)/i);
   assert.doesNotMatch(sql, /limit 253|where.*253/i);
 });
+
+test('legacy archive compatibility preserves the old table before creating the audited archive', async () => {
+  const sql=await readFile(new URL('../supabase/migrations/018_archive_prune.sql',import.meta.url),'utf8');
+  const legacy=sql.indexOf('rename to jobs_archive_legacy_20261019');
+  assert.ok(legacy>=0,'old archive must be preserved by name before creating the new table');
+  assert.ok(legacy<sql.indexOf('create table if not exists public.jobs_archive'));
+  assert.match(sql,/alter table public\.jobs_archive_legacy_20261019 enable row level security/i);
+  assert.match(sql,/revoke all on public\.jobs_archive_legacy_20261019 from public, anon, authenticated/i);
+  assert.doesNotMatch(sql,/drop table|truncate|delete from public\.jobs_archive_legacy/i);
+});

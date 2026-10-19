@@ -39,7 +39,28 @@ insert into public.applications values
   ('30000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000001', 'Application snapshot'),
   ('30000000-0000-0000-0000-000000000099', '00000000-0000-0000-0000-000000000099', 'Orphan snapshot');
 
+-- Exercise the fresh-schema path first; this database is disposable and empty.
 \ir ../migrations/018_archive_prune.sql
+do $$ begin
+  if to_regclass('public.jobs_archive') is null then raise exception 'Fresh archive was not created'; end if;
+end $$;
+drop table public.jobs_archive;
+-- Reproduce the legacy flat archive found during the production preflight.
+create table public.jobs_archive (id uuid primary key, title text, description text, apply_url text, source text);
+insert into public.jobs_archive values ('90000000-0000-0000-0000-000000000001','Historical fixture','Original body','https://example.invalid/old','jobhive');
+\ir ../migrations/018_archive_prune.sql
+-- The old archive remains intact and private; new events use a separate table.
+do $$ begin
+  if (select count(*) from public.jobs_archive_legacy_20261019) <> 1
+    or (select description from public.jobs_archive_legacy_20261019) <> 'Original body'
+    or (select count(*) from public.jobs_archive) <> 0 then
+    raise exception 'Legacy archive was lost or mixed with new events';
+  end if;
+  if has_table_privilege('anon','public.jobs_archive_legacy_20261019','select')
+    or has_table_privilege('authenticated','public.jobs_archive_legacy_20261019','select') then
+    raise exception 'Legacy archive exposed to clients';
+  end if;
+end $$;
 -- Pruning is blocked until application referential integrity is installed.
 do $$ begin
   begin

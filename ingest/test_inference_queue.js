@@ -334,3 +334,15 @@ test('a real SIGTERM leaves an atomic resumable audit while a mocked model call 
     await rm(directory,{recursive:true,force:true});
   }
 });
+
+test('production timestamp-without-timezone dates retain UTC microseconds and resumable cursors', async () => {
+  const opts=inferenceOptions(['--limit','1','--page-size','2'],now);
+  const rows=[job(1,{posted_at:'2026-10-19T11:59:59.123456',created_at:'2026-10-01T00:00:00'}),job(2,{posted_at:'2026-10-19T11:59:59.123455'})];
+  const first=await collectInferenceCandidates(async()=>rows,opts,now);
+  assert.equal(first.selected.length,1);
+  assert.equal(first.cursor.at,'2026-10-19T11:59:59.123456Z');
+  const next=decodeInferenceCursor(encodeInferenceCursor(first.cursor));
+  const second=await collectInferenceCandidates(async()=>[rows[1]],{...opts,cursor:next},now);
+  assert.equal(second.selected[0].job.id,rows[1].id);
+  assert.equal(second.cursor.at,'2026-10-19T11:59:59.123455Z');
+});

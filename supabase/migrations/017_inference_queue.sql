@@ -19,6 +19,7 @@ create or replace function public.pending_inference_jobs(
 ) returns setof public.jobs
 language plpgsql stable security invoker
 set search_path = public, pg_temp
+set timezone = 'UTC'
 as $function$
 begin
   if p_until is null or p_limit is null or p_limit not between 1 and 1000
@@ -94,6 +95,7 @@ create or replace function public.write_job_inference(
 ) returns table(id uuid)
 language plpgsql security invoker
 set search_path = public, pg_temp
+set timezone = 'UTC'
 as $function$
 declare
   flags jsonb := '{}'::jsonb;
