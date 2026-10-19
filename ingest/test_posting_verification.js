@@ -288,7 +288,7 @@ test('new source restrictions outrank old positive evidence until a fresh employ
 const trustNow=Date.parse('2026-10-19T12:00:00Z');
 const icimsUrl='https://careers-example.icims.com/jobs/123/administrative-assistant/job?in_iframe=1';
 const phenomUrl='https://jobs.thermofisher.com/global/en/job/R-123/administrative-assistant';
-const customRecruiteeUrl='https://careers.tether.io/o/administrative-assistant/c/new';
+const customRecruiteeUrl='https://careers.openvpn.net/o/administrative-assistant/c/new';
 const myjobmagUrl='https://www.myjobmag.com/job/administrative-assistant-example';
 const preciseLd=(url,extra={})=>ld({url,validThrough:'2026-12-31T23:59:59Z',jobLocationType:'TELECOMMUTE',...extra});
 for(const [name,url] of [['iCIMS',icimsUrl],['Phenom',phenomUrl],['custom Recruitee',customRecruiteeUrl],['MyJobMag',myjobmagUrl]]) {
@@ -441,9 +441,95 @@ test('old verification versions are due even when recently checked, and current 
  const calls=[];const q={};
  for(const name of ['select','in','or','eq','order','limit'])q[name]=(...args)=>{calls.push([name,...args]);return q;};
  verificationQuery({from:()=>q},{now:trustNow});
- const due=calls.filter(c=>c[0]==='or').at(-1)[1];
+ const due=calls.find(c=>c[0]==='or' && c[1].includes('link_checked_at.lt.'))[1];
  assert.ok(due.includes('elig_signals->verification->>v.is.null'));
  assert.ok(due.includes(`elig_signals->verification->>v.neq.${VERIFICATION_VERSION}`));
  assert.ok(due.includes('link_checked_at.lt.'));
- assert.equal(calls.filter(c=>c[0]==='or').length,3);
+ assert.equal(calls.filter(c=>c[0]==='or').length,4);
+});
+
+const myjobmagLegacy='https://www.myjobmag.com/a_fields.php?id=1363262';
+const myjobmagCanonical='https://www.myjobmag.com/job/human-resource-manager-viju-industries-nigeria-limited-1';
+const myjobmagMain=(id='1363262',title=job.title,extra={})=>`<link rel="canonical" href="${myjobmagCanonical}"><h2 class="mag-b" id="job${id}"><span class="subjob-title">${title}</span></h2>${ld({url:undefined,validThrough:'2026-10-30T00:00:00+0000',...extra})}`;
+test('observed MyJobMag RSS numeric ID redirects to its exact main vacancy before earning availability',async()=>{
+ const v=await verifyPosting({...job,apply_url:myjobmagLegacy},{now:trustNow,fetcher:async url=>url===myjobmagLegacy?response('',302,{location:myjobmagCanonical}):response(myjobmagMain())});
+ assert.equal(v.status,'ok');assert.equal(v.provider,'jobboard');assert.equal(v.checked_url,myjobmagCanonical);
+});
+test('MyJobMag rejects unrelated redirects, wrong numeric IDs, category pages and conflicting structured URLs',async()=>{
+ for(const html of [myjobmagMain('1363263'),myjobmagMain('1363262','Different role'),myjobmagMain('1363262',job.title,{url:'https://www.myjobmag.com/job/unrelated'}),ld({url:undefined})]) {
+  const v=await verifyPosting({...job,apply_url:myjobmagLegacy},{now:trustNow,fetcher:async url=>url===myjobmagLegacy?response('',302,{location:myjobmagCanonical}):response(html)});
+  assert.equal(v.status,'unknown');
+ }
+ for(const location of ['/jobs-by-title/assistant','https://evil.example/job/1363262/assistant']) {
+  assert.equal((await verifyPosting({...job,apply_url:myjobmagLegacy},{fetcher:async()=>response('',302,{location})})).status,'unknown');
+ }
+ for(const apply_url of ['https://www.myjobmag.com/a_fields.php?id=12&id=13','https://www.myjobmag.com/a_fields.php?id=abc','https://www.myjobmag.com/a_fields.php?category=12']){
+  let calls=0;assert.equal((await verifyPosting({...job,apply_url},{fetcher:async()=>{calls++;return response(myjobmagMain());}})).status,'unknown');assert.equal(calls,0);
+ }
+});
+test('MyJobMag deadline with observed +0000 timezone proves expiry only after exact identity',async()=>{
+ const fetcher=async url=>url===myjobmagLegacy?response('',302,{location:myjobmagCanonical}):response(myjobmagMain('1363262',job.title,{validThrough:'2026-10-18T00:00:00+0000'}));
+ assert.equal((await verifyPosting({...job,apply_url:myjobmagLegacy},{now:trustNow,fetcher})).status,'dead');
+ assert.equal((await verifyPosting({...job,apply_url:'https://www.myjobmag.com/job/1363262/human-resource-manager'},{now:trustNow,fetcher:async()=>response(ld({url:'https://www.myjobmag.com/job/1363262/human-resource-manager'}))})).status,'ok');
+});
+
+import {createVerificationScheduler} from './core/verificationScheduler.js';
+test('scheduled verification bounds each employer host and stops sending after its 429',async()=>{
+ let active=0,maxActive=0,calls=0;let tick=Date.parse('2026-10-19T12:00:00Z');
+ const scheduler=createVerificationScheduler({perHost:2,now:()=>tick,verify:async row=>{
+  active++;maxActive=Math.max(maxActive,active);calls++;await new Promise(r=>setTimeout(r,3));active--;
+  return {v:VERIFICATION_VERSION,status:'unknown',checked_at:new Date(tick).toISOString(),http_status:429,retry_after_ms:60000,reason:'Source access blocked (HTTP 429)'};
+ }});
+ const rows=Array.from({length:12},(_,i)=>({...job,id:String(i),apply_url:`https://example.bamboohr.com/careers/${i+1}`}));
+ const results=await Promise.all(rows.map(row=>scheduler(row)));
+ assert.equal(maxActive,2);assert.equal(calls,2);assert.equal(results.filter(v=>v.http_status===429).length,2);
+ assert.ok(results.slice(2).every(v=>v.status==='unknown' && !v.http_status && v.reason.includes('Provider cooldown')));
+ tick+=61000;await scheduler(rows[0]);assert.equal(calls,3);
+});
+test('one provider cooldown never blocks unrelated employers or marks deferred jobs closed',async()=>{
+ let calls=0;const scheduler=createVerificationScheduler({verify:async row=>{calls++;return {v:VERIFICATION_VERSION,status:row.id==='1'?'unknown':'ok',http_status:row.id==='1'?429:200};}});
+ await scheduler(job);const deferred=await scheduler({...job,id:'2'});assert.equal(deferred.status,'unknown');
+ assert.equal((await scheduler({...job,id:'2',apply_url:'https://other.bamboohr.com/careers/2'})).status,'ok');assert.equal(calls,2);
+});
+test('unsupported URL shapes are explicitly non-retryable for this verifier version, not dead',async()=>{
+ const v=await verifyPosting({...job,apply_url:'https://www.myjobmag.com/jobs-by-title/assistant'},{fetcher:async()=>{throw new Error('must not fetch');}});
+ assert.equal(v.status,'unknown');assert.equal(v.retryable,false);
+ const calls=[];const q={};for(const n of ['select','in','or','order','limit'])q[n]=(...args)=>{calls.push([n,...args]);return q;};
+ verificationQuery({from:()=>q},{now:trustNow});
+ assert.ok(calls.some(([name,value])=>name==='or' && value.includes('elig_signals->verification->>retryable.neq.false')));
+});
+
+test('MyJobMag RSS identity cannot be forged by an explicit matching URL on another main vacancy',async()=>{
+ const html=myjobmagMain('1363263',job.title,{url:myjobmagLegacy});
+ assert.equal((await verifyPosting({...job,apply_url:myjobmagLegacy},{fetcher:async url=>url===myjobmagLegacy?response('',302,{location:myjobmagCanonical}):response(html)})).status,'unknown');
+});
+
+test('observed Tether custom domain uses its public offer API and exact slug/id/published contract',async()=>{
+ const url='https://careers.tether.io/o/people-operations-specialist/c/new';
+ const v=await verifyPosting({...recruiteeJob,apply_url:url},{fetcher:async requested=>{assert.equal(requested,'https://careers.tether.io/api/offers/people-operations-specialist');return response(recruiteeOffer());}});
+ assert.equal(v.status,'ok');assert.equal(v.provider,'employer');assert.equal(v.identity,'exact');
+ for(const offer of [recruiteeOffer({slug:'another-role'}),recruiteeOffer({id:null}),recruiteeOffer({status:'unknown'})]) {
+  assert.equal((await verifyPosting({...recruiteeJob,apply_url:url},{fetcher:async()=>response(offer)})).status,'unknown');
+ }
+});
+
+test('Recruitee mandatory application locations survive Remote job and exclude Nigeria for the reported Zelh shape',async()=>{
+ const v=await verifyPosting(recruiteeJob,{fetcher:async()=>response(recruiteeOffer({
+  description:'Logistics operations and customer support.',requirements:'Dispatch experience required.',
+  location_question_visible:true,locations_question_required:true,locations_question_type:'multiple_choice',
+  locations:[{city:'Belgrade',state:'Beograd',country:'Serbia'},{city:'Lviv',country:'Ukraine'}]
+ }))});
+ assert.equal(v.status,'ok');assert.match(v.location,/Belgrade, Beograd, Serbia/);assert.match(v.location,/Lviv, Ukraine/);
+ const applied=applyVerification(recruiteeJob,compactVerification(v));
+ assert.equal(checkEligibility(applied,'nigeria').eligible,false);
+ assert.equal(checkEligibility(applied,'ukraine').eligible,true);
+});
+test('Recruitee mandatory locations retain Nigeria alternatives; optional office preferences do not narrow worldwide hiring',async()=>{
+ const base={location_question_visible:true,locations_question_type:'multiple_choice',locations:[{city:'Prague',country:'Czechia'},{city:'Lagos',country:'Nigeria'}]};
+ const allowed=await verifyPosting(recruiteeJob,{fetcher:async()=>response(recruiteeOffer({...base,locations_question_required:true,description:'Operations support.',requirements:'Relevant experience.'}))});
+ assert.equal(checkEligibility(applyVerification(recruiteeJob,compactVerification(allowed)),'nigeria').eligible,true);
+ for(const extra of [{locations_question_required:false},{location_question_visible:false,locations_question_required:true},{locations_question_required:true,locations:[]}]) {
+  const v=await verifyPosting(recruiteeJob,{fetcher:async()=>response(recruiteeOffer({...base,...extra}))});
+  assert.equal(v.location,'Remote job');assert.equal(checkEligibility(applyVerification(recruiteeJob,compactVerification(v)),'nigeria').confidence,'certain');
+ }
 });

@@ -11,6 +11,9 @@ export function verificationQuery(db,{limit=500,source=null,recheckDays=1,now=Da
     .or(sourceVisibilityFilter(now))
     .or(publicationFilter(now))
     .or(`link_checked_at.is.null,link_checked_at.lt.${staleBefore},elig_signals->verification->>v.is.null,elig_signals->verification->>v.neq.${VERIFICATION_VERSION}`);
+  // Unsupported shapes cannot gain evidence by repeating the same code. A new
+  // verifier version automatically makes them due again; search retains them.
+  q=q.or(`elig_signals->verification->>retryable.is.null,elig_signals->verification->>retryable.neq.false,elig_signals->verification->>v.is.null,elig_signals->verification->>v.neq.${VERIFICATION_VERSION}`);
   if(source)q=q.eq('source',source);
   return q.order('link_checked_at',{ascending:true,nullsFirst:true}).order('id',{ascending:true}).limit(limit);
 }

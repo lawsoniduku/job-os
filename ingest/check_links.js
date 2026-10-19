@@ -1,4 +1,5 @@
 import { ACTIVE_JOB_SOURCES } from "../api/sourcePolicy.js";
+import { createVerificationScheduler } from "./core/verificationScheduler.js";
 import { verificationQuery } from "./core/verificationQueue.js";
 import { recordVerificationSummary, printVerificationSummary } from "./core/verificationDiagnostics.js";
 /** Scheduled verification of current public postings, with bounded batches.
@@ -214,6 +215,7 @@ async function run() {
   const by = { ok: 0, dead: 0, unknown: 0 };
   const diagnostics={};
   const deadline = Date.now() + 44 * 60 * 1000;
+  const scheduledVerification=createVerificationScheduler({perHost:2});
   while (checked < LIMIT && Date.now() < deadline) {
     // Persist each batch before selecting again, so PostgREST's response row
     // limit cannot silently turn a requested 12,000-job sweep into 1,000 jobs.
@@ -223,7 +225,7 @@ async function run() {
     await Promise.all(Array.from({length: CONCURRENCY}, async () => {
       while (queue.length) {
         const row = queue.shift();
-        const verification = retainVerificationEvidence(compactVerification(await verifyPosting(row, {timeoutMs: 12000})), row.elig_signals?.verification);
+        const verification = retainVerificationEvidence(compactVerification(await scheduledVerification(row, {timeoutMs: 12000})), row.elig_signals?.verification);
         const status = verification.status === 'ok' ? 'ok' : verification.status === 'dead' ? 'dead' : 'unknown';
         recordVerificationSummary(diagnostics,row,verification);
         results.push({...row,status,verification}); by[status]++; checked++;
