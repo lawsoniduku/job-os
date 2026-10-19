@@ -12,6 +12,14 @@ on:
         description: "How many listings to check this run"
         required: false
         default: "12000"
+      source:
+        description: "Optional maintained source, e.g. jobhive; leave blank for all"
+        required: false
+        default: ""
+      recheck_days:
+        description: "Recheck observations older than this many days"
+        required: false
+        default: "1"
 
 concurrency:
   group: posting-verification-${{ github.ref }}
@@ -30,7 +38,16 @@ jobs:
         run: npm install
 
       - name: Check listing links
-        run: node ingest/check_links.js --limit ${{ github.event.inputs.limit || 12000 }} --concurrency 24 --recheck-days 1
+        shell: bash
+        run: |
+          [[ "$CHECK_LIMIT" =~ ^[1-9][0-9]*$ ]] || { echo "limit must be a positive integer"; exit 1; }
+          [[ "$RECHECK_DAYS" =~ ^[1-9][0-9]*$ ]] || { echo "recheck_days must be a positive integer"; exit 1; }
+          args=(--limit "$CHECK_LIMIT" --concurrency 24 --recheck-days "$RECHECK_DAYS")
+          if [[ -n "$CHECK_SOURCE" ]]; then args+=(--source "$CHECK_SOURCE"); fi
+          node ingest/check_links.js "${args[@]}"
         env:
+          CHECK_LIMIT: ${{ inputs.limit || '12000' }}
+          CHECK_SOURCE: ${{ inputs.source || '' }}
+          RECHECK_DAYS: ${{ inputs.recheck_days || '1' }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}

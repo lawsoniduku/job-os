@@ -7,7 +7,7 @@ import {normalizeJob} from './core/normalize.js';
 const job={id:'1',source:'jobhive',title:'Administrative Assistant',apply_url:'https://example.bamboohr.com/careers/1',location:'Worldwide',remote:true,description:'Open to candidates worldwide.'};
 const bamboo=(extra={})=>({result:{jobOpening:{jobOpeningStatus:'Open',jobOpeningName:job.title,atsLocation:{country:'Nigeria'},description:'Administrative support for the team.',locationType:'1',...extra}}});
 const response=(body,status=200,headers={})=>new Response(typeof body==='string'?body:JSON.stringify(body),{status,headers});
-const ld=j=>`<script type="application/ld+json">${JSON.stringify({'@type':'JobPosting',title:job.title,description:'Administrative support for the team.',...j})}</script>`;
+const ld=j=>`<script type="application/ld+json">${JSON.stringify({'@type':'JobPosting',title:job.title,description:'Administrative support for the team.',url:'https://jobs.ashbyhq.com/example/abc',...j})}</script>`;
 test('employer Mexico location overrides cached worldwide metadata and inference',async()=>{
  const v=await verifyPosting(job,{fetcher:async()=>response(bamboo({atsLocation:{country:'Mexico'}}))});
  assert.equal(v.status,'ok');assert.equal(checkEligibility(applyVerification(job,v),'nigeria').eligible,false);
@@ -61,7 +61,7 @@ test('remote alone does not upgrade model worldwide inference',()=>{
 });
 test('Ashby EMEA alternative survives UK mention in same location requirement',async()=>{
  const j={...job,title:'GEOINT Analyst, Scams',apply_url:'https://jobs.ashbyhq.com/trm-labs/abc/application'};
- const v=await verifyPosting(j,{fetcher:async()=>response(ld({title:j.title,jobLocation:[{address:{addressCountry:'GB'}},{address:{addressCountry:'US'}}],jobLocationType:'TELECOMMUTE',description:'Location: remote in the UK, EMEA, or US. You must already have the right to work where you are based.'}))});
+ const v=await verifyPosting(j,{fetcher:async()=>response(ld({url:j.apply_url,title:j.title,jobLocation:[{address:{addressCountry:'GB'}},{address:{addressCountry:'US'}}],jobLocationType:'TELECOMMUTE',description:'Location: remote in the UK, EMEA, or US. You must already have the right to work where you are based.'}))});
  assert.equal(v.status,'ok');assert.equal(checkEligibility(applyVerification(j,v),'nigeria').eligible,true);
 });
 test('Workable retains country and requirements beyond first description block',async()=>{
@@ -177,7 +177,7 @@ test('Affirm direct employer posting preserves US restriction',async()=>{
  assert.equal(checkEligibility(applyVerification(row,compactVerification(v)),'us').eligible,true);
 });
 test('retired sources are never fetched or resolved through employer boards',async()=>{
- for(const apply_url of ['https://weworkremotely.com/remote-jobs/example','https://jobicy.com/jobs/example','https://himalayas.app/companies/example/jobs/assistant','https://myjobmag.com/job/assistant','https://www.myjobmag.com/job/assistant','https://www.arbeitnow.com/jobs/assistant','https://remotive.com/remote-jobs/assistant','https://remoteok.com/remote-jobs/assistant']) {
+ for(const apply_url of ['https://weworkremotely.com/remote-jobs/example','https://jobicy.com/jobs/example','https://himalayas.app/companies/example/jobs/assistant','https://www.arbeitnow.com/jobs/assistant','https://remotive.com/remote-jobs/assistant','https://remoteok.com/remote-jobs/assistant']) {
   let calls=0;
   const v=await verifyPosting({...job,company:'Canonical',apply_url},{fetcher:async()=>{calls++;return response(ld({}));}});
   assert.equal(v.status,'unknown');assert.equal(calls,0);
@@ -282,4 +282,122 @@ test('new source restrictions outrank old positive evidence until a fresh employ
  assert.equal(checkEligibility(applyVerification(changedGlobal,old),'nigeria').confidence,'possible');
  const fresh={...old,checked_at:'2026-10-18T12:00:00Z'};
  assert.equal(checkEligibility(applyVerification(changedGlobal,fresh),'nigeria').confidence,'certain');
+});
+
+// WS2 adversarial fixtures: synthetic HTTP responses only, never live postings.
+const trustNow=Date.parse('2026-10-19T12:00:00Z');
+const icimsUrl='https://careers-example.icims.com/jobs/123/administrative-assistant/job?in_iframe=1';
+const phenomUrl='https://jobs.thermofisher.com/global/en/job/R-123/administrative-assistant';
+const customRecruiteeUrl='https://careers.tether.io/o/administrative-assistant/c/new';
+const myjobmagUrl='https://www.myjobmag.com/job/administrative-assistant-example';
+const preciseLd=(url,extra={})=>ld({url,validThrough:'2026-12-31T23:59:59Z',jobLocationType:'TELECOMMUTE',...extra});
+for(const [name,url] of [['iCIMS',icimsUrl],['Phenom',phenomUrl],['custom Recruitee',customRecruiteeUrl],['MyJobMag',myjobmagUrl]]) {
+ test(`${name} earns availability from exact structured posting and records its proof`,async()=>{
+  const v=await verifyPosting({...job,apply_url:url},{now:trustNow,fetcher:async requested=>{assert.equal(requested,url);return response(preciseLd(url));}});
+  assert.equal(v.status,'ok');assert.equal(v.identity,'exact');assert.equal(v.evidence_url,url);assert.equal(v.checked_url,url);assert.equal(v.http_status,200);
+  assert.equal(v.provider,name==='MyJobMag'?'jobboard':'employer');
+  assert.equal(checkEligibility(applyVerification({...job,location:'Remote',apply_url:url},v),'nigeria').confidence,'possible','remote availability does not prove worldwide hiring');
+ });
+ test(`${name} rejects a same-title recommended job and handles closure conservatively`,async()=>{
+  for(const html of [ld({url:undefined}),preciseLd(url.replace(/assistant|123/,'other')),preciseLd('https://evil.example/jobs/123')]) {
+   const v=await verifyPosting({...job,apply_url:url},{now:trustNow,fetcher:async()=>response(html)});
+   assert.equal(v.status,'unknown');
+  }
+  assert.equal((await verifyPosting({...job,apply_url:url},{now:trustNow,fetcher:async()=>response(preciseLd(url,{validThrough:'2026-01-01T00:00:00Z'}))})).status,'dead');
+  for(const status of [403,429,500])assert.equal((await verifyPosting({...job,apply_url:url},{fetcher:async()=>response('',status)})).status,'unknown');
+  for(const status of [404,410])assert.equal((await verifyPosting({...job,apply_url:url},{fetcher:async()=>response('',status)})).status,'dead');
+  assert.equal((await verifyPosting({...job,apply_url:url},{fetcher:async()=>{throw new Error('timeout');}})).status,'unknown');
+ });
+}
+test('new adapters never fetch misleading hosts, credentials, ports, indexes or arbitrary custom domains',async()=>{
+ for(const apply_url of ['https://icims.com/jobs/123/assistant/job','https://a.b.icims.com/jobs/123/assistant/job','https://careers-example.icims.com.evil.test/jobs/123/assistant/job','https://jobs.thermofisher.com.evil.test/job/R-123','https://evil.example/job/R-123','https://jobs.thermofisher.com/jobs','https://careers-example.icims.com/jobs/search','https://user:secret@jobs.thermofisher.com/job/R-123','https://jobs.thermofisher.com:8443/job/R-123','https://careers.tether.io/api/offers/assistant','https://myjobmag.com/jobs']) {
+  let calls=0;const v=await verifyPosting({...job,apply_url},{fetcher:async()=>{calls++;return response(ld({}));}});
+  assert.equal(v.status,'unknown');assert.equal(calls,0,apply_url);
+ }
+});
+test('new adapters reject cross-origin and login redirects without inventing closure',async()=>{
+ for(const location of ['https://127.0.0.1/jobs','https://careers-other.icims.com/jobs','https://evil.example/','/login']) {
+  let calls=0;const v=await verifyPosting({...job,apply_url:icimsUrl},{fetcher:async()=>{calls++;return response('',302,{location});}});
+  assert.equal(v.status,'unknown');assert.equal(calls,1);
+ }
+});
+test('iCIMS exact numeric identifier can prove identity without structured url',async()=>{
+ const html=ld({url:undefined,identifier:{'@type':'PropertyValue',name:'iCIMS',value:'123'},validThrough:'2026-12-31'});
+ assert.equal((await verifyPosting({...job,apply_url:icimsUrl},{now:trustNow,fetcher:async()=>response(html)})).status,'ok');
+ assert.equal((await verifyPosting({...job,apply_url:icimsUrl},{now:trustNow,fetcher:async()=>response(html.replace('"123"','"124"'))})).status,'unknown');
+});
+test('structured expiration rejects malformed dates and respects inclusive date-only deadlines',async()=>{
+ for(const validThrough of ['yesterday','2026-02-30','2026-02-30T00:00:00Z','2026-10-19']) {
+  assert.equal((await verifyPosting({...job,apply_url:icimsUrl},{now:trustNow,fetcher:async()=>response(preciseLd(icimsUrl,{validThrough}))})).status,'ok');
+ }
+});
+test('Recruitee locale route retains exact tenant offer checks',async()=>{
+ const v=await verifyPosting({...recruiteeJob,apply_url:'https://example.recruitee.com/en/o/people-operations-specialist/c/new'},{fetcher:async url=>{assert.equal(url,'https://example.recruitee.com/api/offers/people-operations-specialist');return response(recruiteeOffer());}});
+ assert.equal(v.status,'ok');assert.equal(v.identity,'exact');
+});
+test('Y Combinator remains explicitly unverified without a reliable adapter',async()=>{
+ let calls=0;const v=await verifyPosting({...job,apply_url:'https://www.ycombinator.com/companies/example/jobs/123-assistant'},{fetcher:async()=>{calls++;return response(ld({}));}});
+ assert.equal(v.status,'unknown');assert.equal(calls,0);
+});
+test('all employer APIs reject a response for another same or different vacancy',async()=>{
+ assert.equal((await verifyPosting({...job,apply_url:'https://job-boards.greenhouse.io/example/jobs/1234'},{fetcher:async()=>response({id:1235,title:job.title,content:'Support the team.'})})).status,'unknown');
+ assert.equal((await verifyPosting({...job,apply_url:'https://jobs.lever.co/example/abcd-1234'},{fetcher:async()=>response({id:'abcd-9999',text:job.title,description:'Support the team.'})})).status,'unknown');
+ assert.equal((await verifyPosting(job,{fetcher:async()=>response(bamboo({jobOpeningName:'Unrelated Role'}))})).status,'unknown');
+});
+
+test('legacy structured adapters also require exact URL proof, not only a matching title',async()=>{
+ for(const html of [ld({url:undefined}),ld({url:'https://jobs.ashbyhq.com/example/another-vacancy'})]) {
+  assert.equal((await verifyPosting({...job,apply_url:'https://jobs.ashbyhq.com/example/abc'},{fetcher:async()=>response(html)})).status,'unknown');
+ }
+});
+test('missing or unfamiliar employer states do not prove closure',async()=>{
+ for(const jobOpeningStatus of [undefined,null,'Unknown']) {
+  assert.equal((await verifyPosting(job,{fetcher:async()=>response(bamboo({jobOpeningStatus}))})).status,'unknown');
+ }
+ const row={...job,apply_url:'https://apply.workable.com/example/j/ABC/apply'};
+ for(const state of [undefined,null,'Unknown']) {
+  assert.equal((await verifyPosting(row,{fetcher:async url=>response(url.includes('/api/')?{title:row.title,state,description:'Team support.'}:'<html/>')})).status,'unknown');
+ }
+ assert.equal((await verifyPosting(job,{fetcher:async()=>response(bamboo({jobOpeningName:'Different Role',jobOpeningStatus:'Closed'}))})).status,'unknown');
+});
+
+import {recordVerificationSummary,printVerificationSummary} from './core/verificationDiagnostics.js';
+import {verificationQuery} from './core/verificationQueue.js';
+test('scheduled diagnostics explain high unknown shares by source and platform',()=>{
+ const summary={};
+ for(const reason of ['Source access blocked (HTTP 403)','Exact vacancy could not be verified','Exact vacancy could not be verified'])recordVerificationSummary(summary,{source:'jobhive',ats_source:'recruitee'},{status:'unknown',reason});
+ recordVerificationSummary(summary,{source:'jobhive',ats_source:'recruitee'},{status:'ok'});
+ recordVerificationSummary(summary,{source:'jobhive',ats_source:'phenom'},{status:'dead'});
+ const output=[];printVerificationSummary(summary,line=>output.push(line));
+ assert.equal(summary['jobhive/recruitee'].unknown,3);
+ assert.equal(summary['jobhive/recruitee'].reasons['Exact vacancy could not be verified'],2);
+ assert.ok(output.some(line=>line.includes('75.0%')));assert.ok(output.some(line=>line.includes('ABOVE 30%')));
+});
+test('scheduled queue uses search publication and source visibility, including missing last_seen_at',()=>{
+ const calls=[];const q={};
+ for(const name of ['select','in','or','eq','order','limit'])q[name]=(...args)=>{calls.push([name,...args]);return q;};
+ const db={from:name=>{assert.equal(name,'jobs');return q;}};
+ verificationQuery(db,{source:'jobhive',now:trustNow,limit:500,recheckDays:1});
+ assert.ok(calls.some(([name,value])=>name==='or' && value.includes('last_seen_at.is.null')));
+ assert.ok(calls.some(([name,value])=>name==='or' && value.includes('posted_at.gte.2026-04-22')));
+ assert.ok(calls.some(([name,key,value])=>name==='eq' && key==='source' && value==='jobhive'));
+ assert.ok(calls.some(([name,column,options])=>name==='order' && column==='link_checked_at' && options.nullsFirst));
+ assert.equal(calls.filter(([name])=>name==='limit')[0][1],500);
+ assert.throws(()=>verificationQuery(db,{source:'unsupported'}),/Unsupported/);
+});
+test('compact search projection retains the v4 exact evidence audit fields',async()=>{
+ const row={...job,apply_url:phenomUrl};
+ const v=compactVerification(await verifyPosting(row,{now:trustNow,fetcher:async()=>response(preciseLd(phenomUrl))}));
+ const projected=applyVerification(row,v).verification;
+ for(const key of ['v','identity','evidence_url','checked_url','http_status'])assert.equal(projected[key],v[key]);
+});
+test('MyJobMag allows only its known apex/www alias redirect and keeps global metadata uncertain',async()=>{
+ const url='https://myjobmag.com/job/administrative-assistant-example';
+ const v=await verifyPosting({...job,apply_url:url},{now:trustNow,fetcher:async requested=>requested===url?response('',301,{location:myjobmagUrl}):response(preciseLd(myjobmagUrl,{jobLocation:{name:'Worldwide'}}))});
+ assert.equal(v.status,'ok');assert.equal(v.evidence_url,url);assert.equal(v.checked_url,myjobmagUrl);
+ assert.equal(checkEligibility(applyVerification({...job,apply_url:url},v),'nigeria').confidence,'possible');
+});
+test('Phenom accepts observed underscored requisition identifiers without weakening host identity',async()=>{
+ const apply_url='https://careers.marsh.com/job/R_364603';
+ assert.equal((await verifyPosting({...job,apply_url},{now:trustNow,fetcher:async()=>response(preciseLd(apply_url))})).status,'ok');
 });
