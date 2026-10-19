@@ -24,7 +24,7 @@ jobs:
       - run: npm run test:verification
       - run: npm ci --ignore-scripts --no-audit --no-fund
         working-directory: job-os-ui
-      - run: node --test tests/briefing-render.test.mjs
+      - run: node --test tests/*.test.mjs
         working-directory: job-os-ui
       - run: npm run build
         working-directory: job-os-ui

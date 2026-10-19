@@ -1,3 +1,4 @@
+import { compareTrustResults } from '../shared/jobTrust.js';
 import { activeJobSources, isActiveJobSource } from './sourcePolicy.js';
 import { getAliasesForCluster, scoreJobLocally, checkEligibility, SIGNALS_VERSION } from "./roleIntelligence.js";
 import { applyVerification, nonVacancyReason } from "./postingVerification.js";
@@ -131,15 +132,11 @@ export function matchesFilters(job, filters, now = Date.now()) {
   return true;
 }
 
-// Role and eligibility are gates above this ordering. Among surviving matches,
-// publication date leads; a higher score must not bury a newer posting. Never
-// substitute created_at/last_seen_at: those can just be import/feed-refresh times.
-export function compareSearchResults(a, b) {
-  const postedTime = (job) => {
-    const time = Date.parse(job.posted_at);
-    return Number.isFinite(time) ? time : -Infinity;
-  };
-  return postedTime(b) - postedTime(a) || b.score - a.score || String(a.id).localeCompare(String(b.id));
+// Role, eligibility and freshness remain gates. Supported eligibility plus current
+// employer availability leads; publication recency orders within each trust bucket.
+// Import timestamps never substitute for publication dates.
+export function compareSearchResults(a, b, now = Date.now()) {
+  return compareTrustResults(a, b, now);
 }
 
 export function rankCandidates(rows, intent, filters = {}, now = Date.now(), postingChecksApplied = false) {
@@ -167,7 +164,7 @@ export function rankCandidates(rows, intent, filters = {}, now = Date.now(), pos
       : nonVacancyReason(j) ? 'non_vacancy' : !matchesFilters(j,filters,now) ? 'filters_or_freshness' : null;
     if (reason) exclude(reason); else matching.push(j);
   }
-  matching.sort(compareSearchResults);
+  matching.sort((a, b) => compareSearchResults(a, b, now));
   const urls = new Set(), contents = new Set();
   const results = matching.filter((j) => {
     const url = canonicalUrl(j.apply_url || "");

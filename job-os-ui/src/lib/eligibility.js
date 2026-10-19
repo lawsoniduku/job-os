@@ -1,11 +1,8 @@
-// Unknown/missing verdicts must never receive the green Eligible badge.
+import { eligibilityConfidence } from '../../../shared/jobTrust.js';
+
+// Keep persisted verdict keys backward compatible; labels describe confidence.
 export function verdictOf(job) {
-  const e = job?.eligibility;
-  if (e?.eligible === false || e?.confidence === "excluded")
-    return { key: "conditional", label: "Not eligible" };
-  if (e?.eligible === true && e.confidence === "certain")
-    return { key: "eligible", label: "Eligible" };
-  if (e?.eligible === true && e.confidence === "likely")
-    return { key: "conditional", label: "Likely eligible" };
-  return { key: "conditional", label: "Unconfirmed" };
+  const {key, label} = eligibilityConfidence(job);
+  return {key, label};
 }
+export { availabilityOf, jobTrust, inferenceAudit } from '../../../shared/jobTrust.js';

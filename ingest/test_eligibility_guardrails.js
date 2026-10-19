@@ -106,8 +106,8 @@ for (const [name, input, label] of [
   ['unknown confidence', { eligibility: { eligible: true, confidence: 'unexpected' } }, 'Unconfirmed'],
   ['excluded verdict', { eligibility: { eligible: false, confidence: 'excluded' } }, 'Not eligible'],
   ['contradictory excluded verdict', { eligibility: { eligible: false, confidence: 'certain' } }, 'Not eligible'],
-  ['inferred verdict', { eligibility: { eligible: true, confidence: 'likely' } }, 'Likely eligible'],
-  ['certain verdict', { eligibility: { eligible: true, confidence: 'certain' } }, 'Eligible'],
+  ['inferred verdict', { eligibility: { eligible: true, confidence: 'likely' } }, 'Good'],
+  ['certain verdict', { eligibility: { eligible: true, confidence: 'certain' } }, 'High'],
 ]) {
   test(`badge: ${name}`, () => assert.equal(verdictOf(input).label, label));
 }
