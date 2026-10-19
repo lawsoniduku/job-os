@@ -1,0 +1,57 @@
+name: Retention integrity checks
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/retention-regression.yml'
+      - 'supabase/migrations/018_archive_prune.sql'
+      - 'supabase/migrations/019_application_job_fk.sql'
+      - 'supabase/scripts/test_job_retention.sql'
+      - 'ingest/prune_stale.js'
+      - 'ingest/test_retention.js'
+      - 'api/jobFreshness.js'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/retention-regression.yml'
+      - 'supabase/migrations/018_archive_prune.sql'
+      - 'supabase/migrations/019_application_job_fk.sql'
+      - 'supabase/scripts/test_job_retention.sql'
+      - 'ingest/prune_stale.js'
+      - 'ingest/test_retention.js'
+      - 'api/jobFreshness.js'
+
+permissions:
+  contents: read
+
+jobs:
+  retention:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: jobos_retention_test_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: local-retention-fixture-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGDATABASE: jobos_retention_test_ci
+      PGUSER: postgres
+      PGPASSWORD: local-retention-fixture-only
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --test ingest/test_retention.js
+      - name: Exercise migrations in disposable PostgreSQL only
+        run: psql -v ON_ERROR_STOP=1 -f supabase/scripts/test_job_retention.sql

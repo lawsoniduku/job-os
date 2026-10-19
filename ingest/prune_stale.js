@@ -1,117 +1,73 @@
 /**
- * ingest/prune_stale.js
- * =====================
- * Deletes listings that no feed has re-confirmed for N days.
+ * Archived, bounded retention. A missing feed observation is not proof of closure.
+ * Defaults to a read-only preview; --execute requires migrations 018 and 019.
+ * No raw DELETE, automatic retries, VACUUM FULL, or archive purge is performed.
  *
- * WHY THIS IS SAFE: search already hides anything with last_seen_at older
- * than 28 days (see the freshness gate in api/server.js). Rows past that
- * window are pure storage cost — no user can reach them by any query. The
- * ingest pipeline re-stamps last_seen_at every time a job is still present
- * in its source feed, so "not seen in 28 days" means the employer's own
- * board stopped listing it.
- *
- * WHY IT ISN'T THE WHOLE STORAGE STORY: on a 54k-row table only ~10% is
- * ever this stale, and descriptions (avg ~2.6KB) dominate the footprint.
- * Deleting also does NOT shrink the database on disk — Postgres leaves dead
- * tuples behind and only marks the space reusable. Run VACUUM FULL after
- * this if you actually want the file to shrink (see the reminder printed at
- * the end).
- *
- * ⚠️ WHAT NOT TO DO INSTEAD: truncating stored descriptions would look like
- * an easy win, but the eligibility engine reads the whole JD. The
- * jurisdiction markers (401(k), FLSA, HSA) live in the BENEFITS section,
- * which is almost always at the END of a posting — truncating would blind
- * those checks and silently reintroduce US-only jobs into Nigerian results.
- *
- * USAGE:
- *   node --env-file=.env ingest/prune_stale.js --dry-run     (preview, default 28d)
- *   node --env-file=.env ingest/prune_stale.js               (delete)
- *   node --env-file=.env ingest/prune_stale.js --days 45     (more conservative)
+ * PowerShell:
+ *   node --env-file=.env ingest/prune_stale.js --dry-run
+ *   node --env-file=.env ingest/prune_stale.js --execute --max-batches 5
  */
+import { pathToFileURL } from 'node:url';
+import { MAX_DISCOVERY_AGE_DAYS } from '../api/jobFreshness.js';
 
-import dotenv from "dotenv";
-import { createClient } from "@supabase/supabase-js";
-
-dotenv.config();
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
-
-const args = process.argv.slice(2);
-const dryRun = args.includes("--dry-run");
-const i = args.indexOf("--days");
-const DAYS = i > -1 && args[i + 1] ? parseInt(args[i + 1], 10) || 28 : 28;
-const cutoff = new Date(Date.now() - DAYS * 864e5).toISOString();
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-// THE STALENESS FILTER — every query below goes through this, so the rule
-// is stated in exactly one place.
-//
-// source='employer' is excluded because those rows are OUR OWN postings
-// (migration 015 §2), and nothing refreshes their last_seen_at: there is no
-// feed to re-confirm them from. Without this they would be deleted 28 days
-// after publishing — silently removing the one category of listing on this
-// table we know for certain is real, while its job_postings row went on
-// claiming to be open. A posting leaves search when its owner pauses or
-// closes it, which deletes the mirror deliberately; see the status handler
-// in api/employer.js.
-const stale = (q) => q.lt("last_seen_at", cutoff).neq("source", "employer");
-
-async function run() {
-  console.log(`\n🧹 PRUNE STALE${dryRun ? " (DRY RUN)" : ""} — not re-seen in ${DAYS} days (before ${cutoff.slice(0, 10)})`);
-
-  const { count: total } = await supabase.from("jobs").select("*", { count: "exact", head: true });
-  const { count: doomed } = await stale(
-    supabase.from("jobs").select("*", { count: "exact", head: true }));
-  console.log(`   total rows: ${total}`);
-  console.log(`   to delete:  ${doomed}  (${((doomed / total) * 100).toFixed(1)}%)`);
-
-  // Show what's going, oldest first — a sanity check that we're not about to
-  // delete something that should still be live.
-  const { data: sample } = await stale(
-    supabase.from("jobs").select("title, company, source, last_seen_at"))
-    .order("last_seen_at", { ascending: true }).limit(12);
-  console.log(`\n   oldest examples:`);
-  for (const r of sample || []) {
-    console.log(`     ${(r.last_seen_at || "").slice(0, 10)}  ${(r.title || "").slice(0, 44).padEnd(46)} @ ${(r.company || "").slice(0, 22)} [${r.source}]`);
+export function parsePruneOptions(args = []) {
+  const result = {execute: false, days: MAX_DISCOVERY_AGE_DAYS, batchSize: 500, maxBatches: 1};
+  const numeric = {'--days': ['days', MAX_DISCOVERY_AGE_DAYS, 3650], '--batch-size': ['batchSize', 1, 5000], '--max-batches': ['maxBatches', 1, 100]};
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--execute') result.execute = true;
+    else if (arg === '--dry-run') continue;
+    else if (numeric[arg]) {
+      const [key, min, max] = numeric[arg];
+      const raw = args[++i];
+      if (!/^\d+$/.test(raw || '') || Number(raw) < min || Number(raw) > max) throw new Error(`${arg} must be an integer between ${min} and ${max}`);
+      result[key] = Number(raw);
+    } else throw new Error(`Unknown option: ${arg}`);
   }
-
-  // Which sources lose the most — a source losing everything usually means
-  // that connector stopped running, not that its jobs all closed.
-  const { data: srcRows } = await stale(
-    supabase.from("jobs").select("source")).limit(10000);
-  const bySrc = {};
-  for (const r of srcRows || []) bySrc[r.source] = (bySrc[r.source] || 0) + 1;
-  console.log(`\n   by source:`);
-  Object.entries(bySrc).sort((a, b) => b[1] - a[1]).slice(0, 12)
-    .forEach(([k, v]) => console.log(`     ${String(v).padStart(6)}  ${k}`));
-
-  if (dryRun) { console.log(`\n   (dry run — nothing deleted)\n`); return; }
-
-  // Delete in id batches so one huge statement can't time out mid-flight.
-  let deleted = 0, failed = 0;
-  while (true) {
-    const { data: batch, error } = await stale(
-      supabase.from("jobs").select("id")).limit(500);
-    if (error) { console.log(`   ❌ fetch: ${error.message}`); break; }
-    if (!batch || batch.length === 0) break;
-    const ids = batch.map((r) => r.id);
-    let ok = false;
-    for (let a = 1; a <= 4; a++) {
-      const { error: delErr } = await supabase.from("jobs").delete().in("id", ids);
-      if (!delErr) { ok = true; break; }
-      console.log(`   ⚠️  delete failed (attempt ${a}/4): ${delErr.message}`);
-      await sleep(1500 * a);
-    }
-    if (ok) { deleted += ids.length; process.stdout.write(`   …deleted ${deleted}\n`); }
-    else { failed += ids.length; break; }
-    await sleep(120);
-  }
-
-  const { count: remaining } = await supabase.from("jobs").select("*", { count: "exact", head: true });
-  console.log(`\n✅ Deleted ${deleted} · failed ${failed} · remaining ${remaining}`);
-  console.log(`\n   ⚠️  Postgres has NOT returned this space to disk yet — the rows are`);
-  console.log(`   dead tuples until vacuumed. To actually shrink the database:`);
-  console.log(`     VACUUM FULL public.jobs;      -- Supabase Dashboard → SQL Editor`);
-  console.log(`   (locks the table briefly and needs temporary free space)\n`);
+  if (result.execute && args.includes('--dry-run')) throw new Error('Choose either --execute or --dry-run');
+  return result;
 }
 
-run();
+export async function pruneStaleJobs(db, options = {}, log = console.log) {
+  const settings = {...parsePruneOptions(), ...options};
+  if (typeof settings.execute !== 'boolean') throw new Error('execute must be a boolean');
+  // Validate programmatic use as strictly as CLI use.
+  parsePruneOptions(['--days', String(settings.days), '--batch-size', String(settings.batchSize), '--max-batches', String(settings.maxBatches)]);
+  const preview = await db.rpc('preview_stale_job_retention', {p_days: settings.days});
+  if (preview.error) throw new Error(`Retention preview failed: ${preview.error.message}`);
+  if (!preview.data || !Number.isSafeInteger(preview.data.selected) || preview.data.selected < 0) throw new Error('Retention preview returned an invalid count');
+  log(JSON.stringify({mode: settings.execute ? 'execute' : 'preview', ...preview.data}, null, 2));
+  if (!settings.execute) return {selected: preview.data.selected, archivedAndDeleted: 0, batches: 0, dryRun: true};
+
+  let archivedAndDeleted = 0, batches = 0;
+  for (; batches < settings.maxBatches;) {
+    const result = await db.rpc('archive_prune_stale_jobs', {p_days: settings.days, p_limit: settings.batchSize});
+    // Retrying an uncertain mutation could prune a second batch. Stop and let
+    // the operator inspect the archive/cron log before choosing another run.
+    if (result.error) throw new Error(`Retention batch failed after ${archivedAndDeleted} acknowledged archived deletions: ${result.error.message}. Not retried; inspect the archive before rerunning.`);
+    if (!Number.isSafeInteger(result.data) || result.data < 0 || result.data > settings.batchSize) throw new Error('Retention batch returned an invalid count; not retried');
+    batches++;
+    archivedAndDeleted += result.data;
+    log(`Archived and deleted ${result.data} jobs in batch ${batches}; acknowledged total ${archivedAndDeleted}.`);
+    if (result.data < settings.batchSize) break;
+  }
+  return {selected: preview.data.selected, archivedAndDeleted, batches, dryRun: false};
+}
+
+export async function main(args = process.argv.slice(2)) {
+  const options = parsePruneOptions(args);
+  const {default: dotenv} = await import('dotenv');
+  dotenv.config();
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
+  if (!url || !key) throw new Error('Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or server-side SUPABASE_KEY). Never use a client anon key.');
+  const {createClient} = await import('@supabase/supabase-js');
+  const db = createClient(url, key, {auth: {persistSession: false, autoRefreshToken: false}});
+  const result = await pruneStaleJobs(db, options);
+  console.log(JSON.stringify(result));
+  console.log('Archived descriptions still consume storage. Archiving protects recovery; it does not reclaim total database storage.');
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch(error => {console.error(error.message); process.exitCode = 1;});
+}
