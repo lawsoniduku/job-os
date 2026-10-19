@@ -2,12 +2,12 @@
 // Retired records stay in application/saved-job history; they are not deleted.
 export const ACTIVE_JOB_SOURCES = Object.freeze([
   'jobhive', 'greenhouse', 'lever', 'ashby', 'workable',
-  'smartrecruiters', 'teamtailor', 'breezy', 'employer',
+  'smartrecruiters', 'teamtailor', 'breezy', 'employer', 'myjobmag',
 ]);
 const active = new Set(ACTIVE_JOB_SOURCES);
 const retiredHosts = [
   'arbeitnow.com', 'jobicy.com', 'himalayas.app', 'weworkremotely.com',
-  'jobspresso.co', 'remotive.com', 'myjobmag.com',
+  'jobspresso.co', 'remotive.com',
 ];
 export function isActiveJobSource(job) {
   if (!active.has(job.source)) return false;

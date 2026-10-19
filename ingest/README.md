@@ -6,13 +6,15 @@ means adding its verified career-site slug to the relevant registry.
 
 ## Active source policy — 19 October 2026
 
-Discovery uses JobHive and direct company listings only. The native pipeline
+Discovery uses JobHive, direct company listings and the retained MyJobMag Nigeria feed. The native pipeline
 fetches employer boards on Greenhouse, Lever, Ashby, Workable and SmartRecruiters,
 plus employer-owned Teamtailor RSS and Breezy career sites. Employer-authored
 postings on JobCopilot remain a direct source.
 
-Arbeitnow, Jobicy, Himalayas, We Work Remotely, Jobspresso, Remotive and MyJobMag
-are retired. Their live connector implementations have been removed. Historical
+The six retired boards are Arbeitnow, Jobicy, Himalayas, We Work Remotely,
+Jobspresso and Remotive. MyJobMag remains active for Nigerian coverage and follows
+the existing publication, language, deduplication and eligibility checks. The six
+retired boards have no live connector implementations. Historical
 audit documents and regression fixtures may still name them; those references
 do not reactivate ingestion. Existing database rows and saved application
 history are not deleted by this change.
@@ -37,6 +39,7 @@ ingest/
     ats/smartrecruiters.js direct employer boards
     feeds/teamtailor.js employer-owned RSS feeds
     feeds/breezy.js     employer-owned career-site JSON
+    feeds/myjobmag.js   retained Nigeria RSS/XML feeds
     registry.js        the company seed list  ← edit this to add coverage
   pipeline.js      fetch → language → dedup → tag → upsert
   verify.js        pings every slug, reports LIVE vs 404 + job count
