@@ -140,7 +140,7 @@ stated requirement to live or be present somewhere.`;
  * Default never throws. Null leaves the deterministic verdict unchanged.
  * Batch jobs may opt into throwFatal to stop on permanent provider errors.
  */
-export async function inferEligibility(job, { generate = generateJSON, now = Date.now, config = llmConfig, throwFatal = false } = {}) {
+export async function inferEligibility(job, { generate = generateJSON, now = Date.now, config = llmConfig, throwFatal = false, throwRateLimit = false, quota } = {}) {
   if (!job?.description) return null;
   try {
     const raw = await generate(PROMPT(job), {
@@ -150,7 +150,7 @@ export async function inferEligibility(job, { generate = generateJSON, now = Dat
       retries: 0,          // ingest runs over many jobs; a retry storm is worse than a gap
       reasoningEffort: 'low',
       maxCompletionTokens: 4096,
-      throwFatal,
+      throwFatal, throwRateLimit, quota,
     });
     if (!raw) return null;
 
@@ -180,7 +180,7 @@ export async function inferEligibility(job, { generate = generateJSON, now = Dat
     return { v: INFER_VERSION, scope, countries, regions, evidence, confidence,
       at: new Date(now()).toISOString(), provider: config.provider, model: config.model };
   } catch (error) {
-    if (throwFatal && error.fatal) throw error;
+    if ((throwFatal && error.fatal) || (throwRateLimit && (error.deferred || error.rateLimited))) throw error;
     return null;   // see NEVER BLOCKS INGEST above
   }
 }

@@ -346,3 +346,130 @@ test('production timestamp-without-timezone dates retain UTC microseconds and re
   assert.equal(second.selected[0].job.id,rows[1].id);
   assert.equal(second.cursor.at,'2026-10-19T11:59:59.123455Z');
 });
+
+
+test('Groq quota parser honours seconds, compound resets and rejects unsafe headers', async () => {
+  const {parseGroqQuota} = await import('../lib/groqQuota.js');
+  const q=parseGroqQuota({'retry-after':'2','x-ratelimit-reset-tokens':'1m7.66s','x-ratelimit-remaining-tokens':'100','x-ratelimit-remaining-requests':'0','x-ratelimit-reset-requests':'23h59m'},now);
+  assert.equal(q.retryAt,now+2000); assert.equal(q.tokensResetAt,now+67660);
+  assert.equal(q.requestsResetAt,now+(23*60+59)*60000); assert.equal(q.remainingRequests,0);
+  const invalid=parseGroqQuota({'retry-after':'garbage','x-ratelimit-remaining-tokens':'-1','x-ratelimit-reset-tokens':'Infinity'},now);
+  assert.equal(invalid.retryAt,undefined); assert.equal(invalid.remainingTokens,undefined);
+});
+
+test('quota gate waits for token reset without real sleeps and reserves live request headroom', async () => {
+  const {createGroqQuota} = await import('../lib/groqQuota.js');
+  let clock=now;const sleeps=[];
+  const q=createGroqQuota({now:()=>clock,sleep:async ms=>{sleeps.push(ms);clock+=ms;},requestReserve:10,tokenReserve:100,maxWaitMs:10000,maxRequests:10,maxTokens:50000});
+  q.observe({'x-ratelimit-remaining-tokens':'200','x-ratelimit-reset-tokens':'2s','x-ratelimit-remaining-requests':'100'});
+  await q.beforeRequest(500);
+  assert.ok(sleeps[0]>=2000 && sleeps[0]<3000);
+  q.observe({'x-ratelimit-remaining-requests':'10','x-ratelimit-reset-requests':'12h'});
+  await assert.rejects(()=>q.beforeRequest(500),error=>error.deferred && !error.requestMade && error.reason==='request_reserve');
+});
+
+test('daily quota survives a new worker instance and resumes only after reset', async () => {
+  const {createGroqQuota} = await import('../lib/groqQuota.js');
+  let clock=now;
+  const q=createGroqQuota({model:DEFAULT_GROQ_MODEL,now:()=>clock,sleep:async()=>assert.fail('Daily exhaustion must not sleep for hours')});
+  const error=q.rateLimited({'retry-after':'3600','x-ratelimit-remaining-requests':'0','x-ratelimit-reset-requests':'1h'});
+  assert.equal(error.rateLimited,true); assert.equal(error.requestMade,true);
+  const restored=createGroqQuota({model:DEFAULT_GROQ_MODEL,state:JSON.parse(JSON.stringify(q.snapshot())),now:()=>clock});
+  await assert.rejects(()=>restored.beforeRequest(100),error=>error.deferred && error.retryAt>=now+3600000);
+  clock+=3601000;
+  await restored.beforeRequest(100);
+  assert.equal(restored.snapshot().runRequests,1);
+});
+
+test('a 429 is exposed to the worker once instead of swallowed and blindly retried', async () => {
+  const originalPost=axios.post;
+  const before=Object.fromEntries(['LLM_PROVIDER','GROQ_API_KEY','GROQ_MODEL'].map(key=>[key,process.env[key]]));
+  let calls=0;
+  axios.post=async()=>{calls++;const error=new Error('429');error.response={status:429,headers:{'retry-after':'90','x-ratelimit-remaining-tokens':'0','x-ratelimit-reset-tokens':'90s'}};throw error;};
+  try {
+    process.env.LLM_PROVIDER='groq';process.env.GROQ_API_KEY='offline-fixture';process.env.GROQ_MODEL=DEFAULT_GROQ_MODEL;
+    const client=await import('../lib/llm.js?quota-http-fixture');
+    await assert.rejects(()=>inferEligibility(job(),{generate:client.generateJSON,throwRateLimit:true}),error=>error.rateLimited && error.retryAt>Date.now());
+    assert.equal(calls,1);
+    assert.equal(await client.generateJSON('fixture',{retries:3}),null);
+    assert.equal(calls,2,'default callers also stop retrying 429');
+  } finally {axios.post=originalPost;for(const[key,value]of Object.entries(before))if(value===undefined)delete process.env[key];else process.env[key]=value;}
+});
+
+test('quota deferral checkpoints all pending jobs without converting deferrals to failures', async () => {
+  let calls=0;
+  const result=await enrichInferenceCandidates([1,2,3].map(n=>({job:job(n),beforeCursor:n===1?null:{id:job(n-1).id}})),{concurrency:1,infer:async()=>{calls++;throw Object.assign(new Error('Daily quota exhausted'),{deferred:true,requestMade:false,reason:'request_reserve',retryAt:now+3600000});},write:async()=>assert.fail('No quota must not write'),sleep:async()=>assert.fail('Daily limit must not retry')});
+  assert.equal(calls,1); assert.equal(result.calls,0); assert.equal(result.failed,0); assert.equal(result.deferred,3);
+  assert.equal(result.exitCode,0); assert.equal(result.retryCursor,null); assert.equal(result.deferReason,'request_reserve');
+});
+
+test('repeated short 429s are bounded and still fail the more-than-30-percent rule', async () => {
+  let calls=0;
+  const result=await enrichInferenceCandidates([1,2,3].map(n=>({job:job(n),beforeCursor:null})),{concurrency:1,infer:async()=>{calls++;throw Object.assign(new Error('rate limited'),{rateLimited:true,requestMade:true,retryAt:now+1000});},write:async()=>assert.fail(),sleep:async()=>{},now:()=>now,maxQuotaWaitMs:2000});
+  assert.equal(calls,2);assert.equal(result.callFailures,2);assert.equal(result.exitCode,1);assert.equal(result.rateLimited,2);assert.equal(result.deferred,3);
+});
+
+test('concurrent posting refresh skips an obsolete answer without reporting a storage outage', async () => {
+  const result=await enrichInferenceCandidates([{job:job(),beforeCursor:null}],{infer:async()=>({scope:'unclear',confidence:'low'}),write:async()=>({saved:false,skipped:true,error:null})});
+  assert.equal(result.writeFailures,0);assert.equal(result.failed,0);assert.equal(result.skipped,1);assert.equal(result.exitCode,0);
+});
+
+
+test('successful Groq headers and token usage control the following admission', async () => {
+  const {createGroqQuota}=await import('../lib/groqQuota.js');
+  const originalPost=axios.post;
+  const before=Object.fromEntries(['LLM_PROVIDER','GROQ_API_KEY','GROQ_MODEL'].map(key=>[key,process.env[key]]));
+  let clock=now,calls=0;const pauses=[];
+  const quota=createGroqQuota({model:DEFAULT_GROQ_MODEL,now:()=>clock,sleep:async ms=>{pauses.push(ms);clock+=ms;},maxTokens:10000,tokenReserve:10,requestReserve:1});
+  axios.post=async(url,body,options)=>{calls++;assert.equal(options.timeout,20000);return{headers:{'x-ratelimit-remaining-tokens':'100','x-ratelimit-reset-tokens':'1s'},data:{usage:{total_tokens:200},choices:[{message:{content:'{"scope":"unclear"}'}}]}};};
+  try {
+    process.env.LLM_PROVIDER='groq';process.env.GROQ_API_KEY='offline-fixture';process.env.GROQ_MODEL=DEFAULT_GROQ_MODEL;
+    const client=await import('../lib/llm.js?success-quota-fixture');
+    await client.generateJSON('fixture',{timeoutMs:20000,retries:0,maxCompletionTokens:1000,quota});
+    assert.equal(quota.snapshot().runTokens,200);
+    await client.generateJSON('fixture',{timeoutMs:20000,retries:0,maxCompletionTokens:1000,quota});
+    assert.equal(calls,2);assert.equal(pauses.length,1);assert.ok(pauses[0]>=1000);
+  } finally {axios.post=originalPost;for(const[key,value]of Object.entries(before))if(value===undefined)delete process.env[key];else process.env[key]=value;}
+});
+
+test('background budgets serialize concurrent admission and make no extra provider call', async () => {
+  const {createGroqQuota}=await import('../lib/groqQuota.js');
+  const quota=createGroqQuota({maxRequests:1,maxTokens:10000});
+  const admissions=await Promise.allSettled([quota.beforeRequest(100),quota.beforeRequest(100),quota.beforeRequest(100)]);
+  assert.equal(admissions.filter(x=>x.status==='fulfilled').length,1);
+  assert.equal(admissions[1].reason.reason,'run_request_budget');assert.equal(quota.snapshot().runRequests,1);
+  const tokenQuota=createGroqQuota({maxTokens:100});
+  await assert.rejects(()=>tokenQuota.beforeRequest(101),error=>error.reason==='run_token_budget' && !error.requestMade);
+});
+
+test('quota state is model scoped, handles missing reset headers and expires conservative fallbacks', async () => {
+  const {createGroqQuota,parseGroqQuota}=await import('../lib/groqQuota.js');
+  let clock=now;
+  const quota=createGroqQuota({model:'fixture',now:()=>clock});
+  quota.observe({'x-ratelimit-remaining-requests':'0'});
+  const cached=quota.snapshot();assert.equal(cached.requestsResetAt,now+86400000);
+  const other=createGroqQuota({model:'other',state:cached,now:()=>clock});await other.beforeRequest(1);
+  clock+=86400001;
+  const resumed=createGroqQuota({model:'fixture',state:cached,now:()=>clock});await resumed.beforeRequest(1);
+  assert.equal(parseGroqQuota({'retry-after':'9'.repeat(400)},now).retryAt,undefined);
+});
+
+test('quota checkpoint loader fails clearly on corruption but accepts a first run', async () => {
+  const {loadQuotaState,createAuditWriter}=await import('./infer_pending.js');
+  const directory=await mkdtemp(join(tmpdir(),'jobos-quota-state-'));const path=join(directory,'quota.json');
+  try {
+    assert.equal(await loadQuotaState(path),undefined);
+    const write=createAuditWriter(path);await write({v:1,model:'fixture',blockedUntil:now+10000});
+    assert.equal((await loadQuotaState(path)).blockedUntil,now+10000);
+    const {writeFile}=await import('node:fs/promises');await writeFile(path,'{broken');
+    await assert.rejects(()=>loadQuotaState(path),/Cannot read quota checkpoint/);
+  } finally {await rm(directory,{recursive:true,force:true});}
+});
+
+test('inference does not spend quota on postings hidden by the shared source freshness gate',()=>{
+ const stale=job(1,{last_seen_at:new Date(now-40*864e5).toISOString()});
+ assert.equal(pendingInference(stale,now),null);
+ const proof={status:'ok',checked_at:new Date(now-3600000).toISOString()};
+ assert.ok(pendingInference({...stale,elig_signals:{...signals(stale),verification:proof}},now));
+ assert.ok(pendingInference({...stale,last_seen_at:null},now));
+});

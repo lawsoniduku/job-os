@@ -3,11 +3,12 @@
  * Importing this module does not access a model or database.
  */
 import { pathToFileURL } from 'node:url';
-import { writeFile, rename } from 'node:fs/promises';
+import { readFile, writeFile, rename } from 'node:fs/promises';
 import { createClient } from '@supabase/supabase-js';
 import { ACTIVE_JOB_SOURCES } from '../api/sourcePolicy.js';
 import { extractEligibilitySignals, SIGNALS_VERSION, INFER_VERSION } from '../api/roleIntelligence.js';
 import { inferEligibility } from '../api/inferEligibility.js';
+import { createGroqQuota } from '../lib/groqQuota.js';
 import { isLLMHealthy, llmConfig, llmState, validateLLMConfig } from '../lib/llm.js';
 import { collectInferenceCandidates, enrichInferenceCandidates, inferenceOptions, encodeInferenceCursor, pendingInference } from './core/inferenceQueue.js';
 
@@ -36,7 +37,7 @@ export function inferenceWriter(db, now = Date.now, {attempts=4,pause=sleep} = {
     for(let attempt=0;attempt<attempts;attempt++) {
       try {
         if(!latest) {
-          const read=await db.from('jobs').select('id,title,company,location,description,source,apply_url,posted_at,created_at,link_status,elig_signals').eq('id',job.id).maybeSingle();
+          const read=await db.from('jobs').select('id,title,company,location,description,source,apply_url,posted_at,created_at,last_seen_at,link_status,elig_signals').eq('id',job.id).maybeSingle();
           if(read.error)throw new Error(read.error.message);
           if(!read.data)return{saved:false,skipped:true,error:null};
           latest=read.data;
@@ -58,20 +59,20 @@ export function inferenceWriter(db, now = Date.now, {attempts=4,pause=sleep} = {
   };
 }
 
-export async function runInference({db, options, infer = row=>inferEligibility(row,{throwFatal:true}), write = inferenceWriter(db),
-  now = Date.now, sleep:pause = sleep, concurrency = 2, paceMs = 1200, retryMs = 8000,onCheckpoint = async()=>{}} = {}) {
+export async function runInference({db, options, infer, quota, write = inferenceWriter(db),
+  now = Date.now, sleep:pause = sleep, concurrency = 1, paceMs = 2200, retryMs = 8000, maxQuotaWaitMs = 60000, onCheckpoint = async()=>{}} = {}) {
   const metadata = () => ({
     scope:{from:options.from,until:options.until,days:options.days}, provider:llmConfig.provider,model:llmConfig.model,
-    infer_version:INFER_VERSION,at:new Date(now()).toISOString(),last_model_error:llmState.lastError});
+    infer_version:INFER_VERSION,at:new Date(now()).toISOString(),last_model_error:llmState.lastError,quota:quota?.snapshot()});
   const selecting = progress => onCheckpoint({...metadata(),stage:'selecting',...progress,
     resume_cursor:encodeInferenceCursor(options.cursor),failed_row_retry:false});
   await selecting({selected:0,scanned:0,pages:0,calls:0});
   const queue = await collectInferenceCandidates(inferencePageFetcher(db), options, now(),selecting);
   const audit = (results,stage) => ({...results,...metadata(),stage,scanned:queue.scanned,pages:queue.pages,
-    queue_exhausted:queue.exhausted,exhausted:queue.exhausted && !results.unattempted && !results.failed,
+    queue_exhausted:queue.exhausted,exhausted:queue.exhausted && !results.unattempted && !results.failed && !results.deferred,
     resume_cursor:encodeInferenceCursor(results.retryCursor !== undefined ? results.retryCursor : queue.cursor),
     failed_row_retry:results.retryCursor !== undefined});
-  const results = await enrichInferenceCandidates(queue.selected, {infer,write,sleep:pause,concurrency,paceMs,retryMs,
+  const results = await enrichInferenceCandidates(queue.selected, {infer:infer || (row=>inferEligibility(row,{throwFatal:true,throwRateLimit:true,quota})),write,sleep:pause,concurrency,paceMs,retryMs,now,maxQuotaWaitMs,
     onProgress:results=>onCheckpoint(audit(results,'enriching'))});
   const complete = audit(results,'complete');
   await onCheckpoint(complete);
@@ -90,35 +91,52 @@ export function createAuditWriter(path) {
   };
 }
 
+// Corrupt state is an operational error, not permission to consume a new quota.
+// A missing cache is normal on the first run. State contains no credentials.
+export async function loadQuotaState(path) {
+  try { return JSON.parse(await readFile(path,'utf8')); }
+  catch(error) {if(error.code==='ENOENT')return undefined;throw new Error(`Cannot read quota checkpoint ${path}: ${error.message}`);}
+}
+
 export async function main(argv = process.argv.slice(2), env = process.env) {
   const options = inferenceOptions(argv);
   const config = validateLLMConfig(env);
-  const concurrency = bounded(env.INFER_CONCURRENCY, 2, 'INFER_CONCURRENCY', 1, 8);
-  const paceMs = bounded(env.INFER_PACE_MS, 1200, 'INFER_PACE_MS', 0, 60000);
+  const concurrency = bounded(env.INFER_CONCURRENCY, 1, 'INFER_CONCURRENCY', 1, 8);
+  const paceMs = bounded(env.INFER_PACE_MS, 2200, 'INFER_PACE_MS', 0, 60000);
   const retryMs = bounded(env.INFER_RETRY_MS, 8000, 'INFER_RETRY_MS', 0, 60000);
+  const maxQuotaWaitMs = bounded(env.INFER_MAX_QUOTA_WAIT_MS, 60000, 'INFER_MAX_QUOTA_WAIT_MS', 0, 60000);
+  const maxRequests = bounded(env.INFER_MAX_REQUESTS, 100, 'INFER_MAX_REQUESTS', 1, 10000);
+  const maxTokens = bounded(env.INFER_MAX_TOKENS, 60000, 'INFER_MAX_TOKENS', 10000, 10000000);
+  const requestReserve = bounded(env.INFER_REQUEST_RESERVE, 100, 'INFER_REQUEST_RESERVE', 0, 100000);
+  const tokenReserve = bounded(env.INFER_TOKEN_RESERVE, 1000, 'INFER_TOKEN_RESERVE', 0, 1000000);
+  const quotaPath=env.INFER_QUOTA_STATE_PATH || `${options.auditPath}.quota.json`;
+  const quota = config.provider==='groq' ? createGroqQuota({model:config.model,state:await loadQuotaState(quotaPath),sleep,maxWaitMs:maxQuotaWaitMs,maxRequests,maxTokens,requestReserve,tokenReserve}) : undefined;
   if (!env.SUPABASE_URL || !env.SUPABASE_KEY) throw new Error('SUPABASE_URL and service-role SUPABASE_KEY are required; nothing was selected or written');
   console.log(`Eligibility inference: ${config.provider}/${config.model}; scope ${options.from || 'all dates'} to ${options.until}`);
   console.log(`Posting limit ${options.limit}; scan ${options.scan}; page size ${options.pageSize}; max pages ${options.maxPages}; each posting may have one retry`);
+  if(quota)console.log(`Background allowance: ${maxRequests} requests / ${maxTokens} tokens this run; preserve ${requestReserve} daily requests and ${tokenReserve} minute tokens; quota waits capped at ${maxQuotaWaitMs}ms.`);
   if (!(await isLLMHealthy())) throw new Error(`Model configuration/unreachable: ${llmState.lastError || `${config.provider}/${config.model}`}; nothing was selected or written`);
   const db = createClient(env.SUPABASE_URL, env.SUPABASE_KEY, {auth:{persistSession:false,autoRefreshToken:false}});
   const saveAudit = createAuditWriter(options.auditPath);
+  const saveQuota = createAuditWriter(quotaPath);
   let lastAudit,stopping=false;
-  const checkpoint = async audit=>{lastAudit=audit;await saveAudit(audit);};
+  const checkpoint = async audit=>{lastAudit=audit;await saveAudit(audit);if(quota)await saveQuota(quota.snapshot());};
   const interrupted = signal=>{
     if(stopping)return;
     stopping=true;
     const audit={...lastAudit,stage:'interrupted',fatal:`Run interrupted by ${signal}`,at:new Date().toISOString(),exitCode:1};
     // The last checkpoint rewinds before every in-flight/unattempted row.
-    saveAudit(audit).finally(()=>process.exit(signal==='SIGINT'?130:143));
+    Promise.all([saveAudit({...audit,quota:quota?.snapshot()}),quota ? saveQuota(quota.snapshot()) : Promise.resolve()]).finally(()=>process.exit(signal==='SIGINT'?130:143));
   };
   const sigint=()=>interrupted('SIGINT'),sigterm=()=>interrupted('SIGTERM');
   process.once('SIGINT',sigint);process.once('SIGTERM',sigterm);
   let result;
-  try {result=await runInference({db,options,concurrency,paceMs,retryMs,onCheckpoint:checkpoint});}
+  try {result=await runInference({db,options,quota,concurrency,paceMs,retryMs,maxQuotaWaitMs,onCheckpoint:checkpoint});}
   finally {process.off('SIGINT',sigint);process.off('SIGTERM',sigterm);}
   console.log(JSON.stringify(result, null, 2));
   if (result.failureRate > 0.3) console.error(`Failed ${(result.failureRate*100).toFixed(1)}% of model calls (>30%); run fails even if retries later recovered some rows.`);
-  if (result.writeFailures) console.error(`${result.writeFailures} storage/changed-posting failures; inspect the audit and resume cursor.`);
+  if (result.writeFailures) console.error(`${result.writeFailures} storage failures; inspect the audit and resume cursor.`);
+  if(result.deferred)console.log(`Deferred ${result.deferred} postings: ${result.deferReason}${result.retryAt ? `; retry after ${result.retryAt}`:''}. No eligibility answer was invented; unfinished rows remain queued.`);
   if ((result.resume_cursor && !result.exhausted) || result.failed_row_retry) console.log(`More work/retries may remain. Resume with --cursor "${result.resume_cursor || ''}" (empty means restart newest).`);
   return result.exitCode;
 }
