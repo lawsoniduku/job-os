@@ -15,7 +15,11 @@ const realTitles=[
   'Software Engineer (C++)','Senior C# Developer','Senior HRIS & People Analytics Analyst',
   'Technical Support Engineer','Compensation & Analytics Partner','Head of BI & Analytics',
 ];
-const phrases=[...new Set(ROLE_TAXONOMY.flatMap(role=>[...role.aliases,...role.keywords]))];
+// Keep the original optimization corpus stable. New combined HR aliases have
+// explicit positive and adversarial regressions in test_discovery_recall.js.
+const addedAliases=new Set(['people and talent operations','people & talent operations',
+  'performance and talent development','performance & talent development']);
+const phrases=[...new Set(ROLE_TAXONOMY.flatMap(role=>[...role.aliases,...role.keywords]))].filter(p=>!addedAliases.has(p));
 const corpus=[...new Set([...phrases.flatMap(phrase=>[
   phrase,phrase.toUpperCase(),`(${phrase})`,`prefix${phrase}suffix`,
 ]),...realTitles])];

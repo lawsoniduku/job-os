@@ -18,10 +18,11 @@ import { loadJobhiveObservationIndex, persistRejectedJobhiveObservations } from 
 import { createClient } from "@supabase/supabase-js";
 import { parse } from "csv-parse";
 import { Readable } from "node:stream";
+import { createJobhiveAdmission } from "./core/jobhiveAdmission.js";
 import { normalizeJob } from "./core/normalize.js";
 import { tagJob } from "./core/tag.js";
 import { looksEnglishJob } from "./core/language.js";
-import { canonicalUrl, contentKey } from "./core/dedup.js";
+import { canonicalUrl } from "./core/dedup.js";
 import { rowToRaw, fastReject, recoverWorldwideJob, sourceObservation, createRejectionLedger, JOBHIVE_KEEP_REGIONS as KEEP_REGIONS } from "./core/jobhive.js";
 
 dotenv.config();
@@ -144,20 +145,14 @@ async function run() {
   const failedRows = []; // rows that failed mid-stream, retried once more after stream ends
   const failedExistingRows = [];
   let batch = [], existingBatch = [];
+  const admission = createJobhiveAdmission({maxRows:maxNewRows,maxBytes:maxNewBytes});
   const regionTally = {};
   const keptRegionTally = {};
 
-  // De-dup within this run. The SAME role is often posted many times under
-  // different req IDs/apply URLs by the same company — bulk ATS exports are
-  // especially prone to this (e.g. "Customer Service Rep - Work From Home"
-  // @ spadepartners showed up 5x in one run, each a different apply_url,
-  // flooding search results with what's really one job). pipeline.js already
-  // guards against this via dedup.js's dedupe(), but that needs the whole
-  // array in memory up front — this importer streams multi-hundred-MB files
-  // row by row on purpose, so we track the same two keys (canonical URL,
-  // content key) incrementally instead, to stay memory-safe.
+  // Existing URL refreshes stream independently. New rows are deduplicated
+  // within the bounded admission buffer and ordered by real publication date
+  // before they consume the database's new-row budget.
   const seenUrls = new Set();
-  const seenContent = new Set();
 
   let streamError = null;
   try {
@@ -216,13 +211,20 @@ async function run() {
       // 3) eligibility gate — keep only regions a Nigerian candidate can pursue
       if (!existingOwned && !KEEP_REGIONS.has(job.eligibility_region)) { wrongRegion++; rejections.record("region", raw); continue; }
 
+      // The deterministic verdict must run BEFORE new-row content dedup. An
+      // ineligible sibling must never hide a separate eligible requisition.
+      const admissionVerdict = existingOwned ? null : checkEligibility(job,"nigeria");
+      if (admissionVerdict?.eligible === false) {
+        ineligibleSkipped++; rejections.record("location_eligibility",raw);
+        admission.reject({...job,elig_signals:{...job.elig_signals,source:observation.source}});
+        continue;
+      }
+
       // 4) de-dup — same content key (company + normalized title + location)
       // or same canonical URL as a row we've already kept this run.
       const dedupUrl = canonicalUrl(job.apply_url);
-      const dedupKey = contentKey(job);
-      if (seenUrls.has(dedupUrl) || (!existingOwned && seenContent.has(dedupKey))) { duplicate++; rejections.record("duplicate", raw); continue; }
-      seenUrls.add(dedupUrl);
-      if (!existingOwned) seenContent.add(dedupKey);
+      if (existingOwned && seenUrls.has(dedupUrl)) { duplicate++; rejections.record("duplicate", raw); continue; }
+      if (existingOwned) seenUrls.add(dedupUrl);
 
       keptRegionTally[job.eligibility_region] = (keptRegionTally[job.eligibility_region] || 0) + 1;
       kept++;
@@ -238,19 +240,14 @@ async function run() {
       // Admission policy governs NEW records only. Existing owned URLs must
       // receive changed country/language/on-site requirements even when they
       // no longer qualify for import, so stale global signals are replaced.
-      (existingOwned ? existingBatch : batch).push(row);
+      if (existingOwned) existingBatch.push(row);
+      else admission.offer(row,{confidence:admissionVerdict?.confidence});
       if (existingBatch.length >= BATCH) {
         collectWrite(await upsertBatch(existingBatch, { existingOnly: true }), true);
         existingBatch = [];
         await sleep(SLEEP_MS);
       }
 
-      if (batch.length >= BATCH) {
-        const ok = await upsertBatch(batch);
-        collectWrite(ok);
-        batch = [];
-        await sleep(SLEEP_MS);
-      }
 
       if (kept >= keepLimit) break;
     }
@@ -269,9 +266,14 @@ async function run() {
   if (existingBatch.length) {
     collectWrite(await upsertBatch(existingBatch, { existingOnly: true }), true);
   }
-  if (batch.length) {
-    const ok = await upsertBatch(batch);
-    collectWrite(ok);
+  const intake = admission.stats();
+  duplicate += intake.duplicates;
+  budgetSkipped += intake.budgetSkipped;
+  batch = admission.rows();
+  console.log(`   newest-first admission: ${intake.selected} selected; ${intake.selectedBytes} buffered bytes; ${intake.considered} candidates considered`);
+  for (let i=0;i<batch.length;i+=BATCH) {
+    collectWrite(await upsertBatch(batch.slice(i,i+BATCH)));
+    await sleep(SLEEP_MS);
   }
 
   // FINAL RETRY PASS: once the download is fully done, the connection is no

@@ -24,7 +24,7 @@ test('streamed CLI dry run recovers worldwide jobs, accounts for negative observ
  assert.match(result.stdout,/upstream_stale:\s*1/);
  assert.match(result.stdout,/deadline_expired:\s*1/);
  assert.match(result.stdout,/publication_age:\s*1/);
- assert.match(result.stdout,/foreign_onsite:\s*1/);
+ assert.match(result.stdout,/region:\s*1/); // contradictory Remote+false flag reaches the authority before exclusion
  assert.match(result.stdout,/worldwide candidates recovered before dedup:\s*1/);
  assert.match(result.stdout,/dry run — nothing written/);
 });
@@ -45,4 +45,37 @@ test('full importer records new foreign restrictions on an owned job without ins
  assert.equal(writes[0].location,'New York, United States');
  assert.match(writes[0].description,/must reside/);
  assert.equal(writes[0].source,'jobhive');
+});
+
+function runAdmission(rows,{maxNewRows=1}={}) {
+ const now=Date.now(),headers=['title','url','company','description','location','country_iso','is_remote','posted_at','fetched_at'];
+ const common={title:'People Operations Specialist',company:'Example',description:'Work from anywhere in the world. Build excellent products and support employees.',location:'Worldwide',is_remote:'true',posted_at:date(now-day),fetched_at:date(now-1000)};
+ const csv=[headers.join(','),...rows.map(r=>headers.map(h=>quote(({...common,...r})[h])).join(','))].join('\n');
+ const preload=`const writes=[];let reads=0;process.on('beforeExit',()=>console.log('QA_ADMISSION:'+JSON.stringify({writes,reads})));globalThis.fetch=async(input,opts={})=>{const u=String(input);if(u==='https://storage.stapply.ai/jobhive/v1/recruitee/jobs.csv')return new Response(${JSON.stringify(csv)});if(!u.startsWith('https://fixture.supabase.co/rest/v1/jobs'))throw Error('Unexpected network '+u);const method=opts.method||'GET';if(method==='GET'){reads++;return new Response('[]',{headers:{'content-type':'application/json'}});}if(method==='POST'){const rows=JSON.parse(opts.body);writes.push(...rows);return new Response(JSON.stringify(rows.map((_,i)=>({id:'00000000-0000-0000-0000-'+String(i+1).padStart(12,'0')}))),{headers:{'content-type':'application/json'}});}throw Error('Unexpected mutation '+method);};`;
+ const result=spawnSync(process.execPath,['--import','data:text/javascript,'+encodeURIComponent(preload),'ingest/import_jobhive.js','recruitee','--max-new-rows',String(maxNewRows)],{cwd:new URL('..',import.meta.url),env:{...process.env,SUPABASE_URL:'https://fixture.supabase.co',SUPABASE_KEY:'fixture-key'},encoding:'utf8',timeout:20000});
+ assert.equal(result.status,0,result.stderr+'\n'+result.stdout);
+ return JSON.parse(result.stdout.split('\n').find(x=>x.startsWith('QA_ADMISSION:')).slice('QA_ADMISSION:'.length));
+}
+
+test('new-row budget admits a fresh tail job instead of the first older CSV row',()=>{
+ const now=Date.now();
+ const out=runAdmission([{url:'https://example.recruitee.com/o/old',title:'Old People Operations Specialist',posted_at:date(now-100*day)},{url:'https://example.recruitee.com/o/new',title:'Fresh People Operations Specialist',posted_at:date(now-day)}]);
+ assert.equal(out.writes.length,1);
+ assert.equal(out.writes[0].apply_url,'https://example.recruitee.com/o/new');
+});
+test('an ineligible sibling cannot consume content deduplication before eligible intake',()=>{
+ const out=runAdmission([{url:'https://example.recruitee.com/o/us',description:'US citizens only. Applicants must reside in the United States.'},{url:'https://example.recruitee.com/o/global'}]);
+ assert.equal(out.writes.length,1);
+ assert.equal(out.writes[0].apply_url,'https://example.recruitee.com/o/global');
+});
+test('freshest content-equivalent requisition wins without expanding the row cap',()=>{
+ const now=Date.now();
+ const out=runAdmission([{url:'https://example.recruitee.com/o/old',posted_at:date(now-100*day)},{url:'https://example.recruitee.com/o/new',posted_at:date(now-day)}]);
+ assert.equal(out.writes.length,1);
+ assert.equal(out.writes[0].apply_url,'https://example.recruitee.com/o/new');
+});
+test('a zero new-row budget performs no candidate-by-candidate database reads',()=>{
+ const out=runAdmission(Array.from({length:12},(_,i)=>({url:`https://example.recruitee.com/o/new${i}`,title:`People Operations Specialist ${i}`})),{maxNewRows:0});
+ assert.equal(out.writes.length,0);
+ assert.equal(out.reads,1); // the bounded existing-owned inventory only
 });

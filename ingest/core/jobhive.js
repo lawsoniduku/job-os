@@ -64,6 +64,10 @@ export function fastReject(raw) {
   if (!iso) return false;                    // unknown country -> let the engine decide
   if (AFRICAN_ISO.has(iso)) return false;    // African -> always evaluate
   if (raw.isRemote !== false) return false;  // remote or unknown -> evaluate
+  // A conflicting feed boolean is not enough to discard explicit role-location
+  // evidence before the authority sees it. This only defers the decision:
+  // residency/onsite restrictions still run through the unchanged engine.
+  if (/\b(remote|worldwide|anywhere|global|emea)\b/i.test(raw.location || '')) return false;
   return true;                                // concrete foreign + on-site -> drop
 }
 
@@ -73,8 +77,17 @@ export function fastReject(raw) {
 // This does not admit generic Remote/Unknown or widen the source inventory.
 export function recoverWorldwideJob(job, raw) {
   if (JOBHIVE_KEEP_REGIONS.has(job.eligibility_region)) return job;
-  const candidate = { ...job, eligibility_region: "Global", description: cleanText(raw.description, Infinity) };
-  candidate.elig_signals = extractEligibilitySignals(candidate);
+  const full = { ...job, description: cleanText(raw.description, Infinity) };
+  full.elig_signals = extractEligibilitySignals(full);
+  // Coarse country hints and company marketing can mis-tag an explicit EMEA
+  // hiring location. Ask the same country engine used by search before the
+  // import allow-list throws it away; do not expand a customer-region mention.
+  if (/\bemea\b|europe[, /-]+middle east[, /&-]+(?:and )?africa/i.test(job.location || '')) {
+    const regionVerdict = checkEligibility(full,"nigeria");
+    if (regionVerdict.eligible && ["certain","likely"].includes(regionVerdict.confidence))
+      return {...job,eligibility_region:"EMEA",elig_signals:full.elig_signals};
+  }
+  const candidate = { ...full, eligibility_region: "Global" };
   const worldwideLocation = detectEligibilityRegion("", job.location, null, job.country_iso) === "Global";
   const genericLocation = /^(?:remote(?:\s+job)?|fully remote|work from home)?$/i.test((job.location || "").trim());
   if (!worldwideLocation && !(genericLocation && candidate.elig_signals.worldwideDesc)) return job;

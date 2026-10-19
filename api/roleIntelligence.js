@@ -55,6 +55,7 @@ export const ROLE_TAXONOMY = [
       "hr coordinator","hr advisor","hr consultant","hr associate",
       "people partner","people manager","people operations",
       "people ops manager","people ops specialist","hr operations",
+      "people and talent operations","people & talent operations",
       "hr ops","hr administrator","hr assistant","hr officer",
       "employee relations","employee experience","people experience",
       "hr lead","head of people","vp people","chief people officer",
@@ -75,7 +76,8 @@ export const ROLE_TAXONOMY = [
     aliases: [
       "performance management","performance manager","performance analyst","people performance analyst",
       "talent performance analyst","performance management specialist",
-      "performance and reward analyst","performance systems analyst"
+      "performance and reward analyst","performance systems analyst",
+      "performance and talent development","performance & talent development"
     ],
     keywords: ["performance review","okrs","360 feedback","calibration",
       "performance cycle","goal setting","talent review","succession planning"]
