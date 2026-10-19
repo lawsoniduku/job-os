@@ -48,6 +48,8 @@ drop table public.jobs_archive;
 -- Reproduce the legacy flat archive found during the production preflight.
 create table public.jobs_archive (id uuid primary key, title text, description text, apply_url text, source text);
 insert into public.jobs_archive values ('90000000-0000-0000-0000-000000000001','Historical fixture','Original body','https://example.invalid/old','jobhive');
+create function public.archive_stale_jobs(cutoff_days integer default 60) returns integer language plpgsql security definer as $$ begin return 0; end $$;
+grant execute on function public.archive_stale_jobs(integer) to public, anon, authenticated, service_role;
 \ir ../migrations/018_archive_prune.sql
 -- The old archive remains intact and private; new events use a separate table.
 do $$ begin
@@ -55,6 +57,11 @@ do $$ begin
     or (select description from public.jobs_archive_legacy_20261019) <> 'Original body'
     or (select count(*) from public.jobs_archive) <> 0 then
     raise exception 'Legacy archive was lost or mixed with new events';
+  end if;
+  if has_function_privilege('anon','public.archive_stale_jobs(integer)','execute')
+    or has_function_privilege('authenticated','public.archive_stale_jobs(integer)','execute')
+    or has_function_privilege('service_role','public.archive_stale_jobs(integer)','execute') then
+    raise exception 'Superseded archive RPC remains publicly executable';
   end if;
   if has_table_privilege('anon','public.jobs_archive_legacy_20261019','select')
     or has_table_privilege('authenticated','public.jobs_archive_legacy_20261019','select') then

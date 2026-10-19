@@ -15,6 +15,16 @@ begin
   end if;
 end $$;
 
+-- The superseded unbounded SECURITY DEFINER RPC must not remain public.
+-- Its original body is preserved for audit; only its owner may invoke it.
+do $$
+begin
+  if to_regprocedure('public.archive_stale_jobs(integer)') is not null then
+    revoke all on function public.archive_stale_jobs(integer)
+      from public, anon, authenticated, service_role;
+  end if;
+end $$;
+
 -- Older deployments used a flat jobs-shaped archive. Keep every original row
 -- in place, privately, before installing the append-only audited event archive.
 -- Never reinterpret, overwrite or discard an unfamiliar existing archive.
