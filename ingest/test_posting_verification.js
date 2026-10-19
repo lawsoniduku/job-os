@@ -401,3 +401,38 @@ test('Phenom accepts observed underscored requisition identifiers without weaken
  const apply_url='https://careers.marsh.com/job/R_364603';
  assert.equal((await verifyPosting({...job,apply_url},{now:trustNow,fetcher:async()=>response(preciseLd(apply_url))})).status,'ok');
 });
+
+test('failed rechecks display the original closure evidence and preserve retry diagnostics separately',()=>{
+ const closure={v:VERIFICATION_VERSION,status:'dead',checked_at:'2026-10-18T10:00:00Z',reason:'Posting removed',evidence_url:icimsUrl,checked_url:icimsUrl,http_status:410,provider:'employer'};
+ const retry={v:VERIFICATION_VERSION,status:'unknown',checked_at:'2026-10-19T12:00:00Z',reason:'Posting check timed out or was cancelled',evidence_url:icimsUrl,checked_url:icimsUrl};
+ const row={...job,apply_url:icimsUrl,elig_signals:{...extractEligibilitySignals(job),verification:closure}};
+ const applied=applyVerification(row,retry);
+ for(const key of ['status','reason','checked_at','evidence_url','checked_url','http_status','provider'])assert.equal(applied.verification[key],closure[key]);
+ assert.equal(applied.verification.evidence_checked_at,closure.checked_at);
+ assert.deepEqual(applied.verification.latest_observation,retry);
+ assert.deepEqual(applied.verification.last_known,closure);
+ assert.equal(applied.elig_signals.verification.status,'unknown');
+ assert.equal(applied.elig_signals.verification.reason,retry.reason);
+ assert.deepEqual(applied.elig_signals.verification.last_known,closure);
+ const restarted=applyVerification(JSON.parse(JSON.stringify(applied)),{...retry,checked_at:'2026-10-19T13:00:00Z'});
+ assert.equal(restarted.verification.reason,closure.reason);
+ assert.equal(restarted.verification.checked_at,closure.checked_at);
+ assert.equal(restarted.verification.latest_observation.checked_at,'2026-10-19T13:00:00Z');
+ assert.equal(restarted.verification.latest_observation.last_known,undefined);
+ const conclusive=applyVerification(row,closure);
+ assert.equal(conclusive.verification.latest_observation,undefined);
+ assert.equal(conclusive.verification.evidence_checked_at,closure.checked_at);
+});
+test('a failed redirected request does not inherit the previous endpoint HTTP status',async()=>{
+ const apply_url='https://jobs.thermofisher.com/job/R-123';
+ const redirected='https://jobs.thermofisher.com/global/en/job/R-123/administrative-assistant';
+ let calls=0;
+ const v=await verifyPosting({...job,apply_url},{now:trustNow,fetcher:async url=>{
+  calls++;
+  if(calls===1)return response('',302,{location:redirected});
+  assert.equal(url,redirected);throw new Error('timeout');
+ }});
+ assert.equal(calls,2);assert.equal(v.status,'unknown');assert.equal(v.checked_url,redirected);
+ assert.equal(v.http_status,undefined,'no HTTP response was received from the redirected endpoint');
+ assert.equal(JSON.parse(JSON.stringify(v)).http_status,undefined);
+});

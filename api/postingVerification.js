@@ -105,7 +105,9 @@ async function readResponse(url, fetcher, signal, expectedOrigin=new URL(url).or
   const originMatches=u=>u.origin===expectedOrigin || (myjobmagHost(new URL(expectedOrigin).hostname) && myjobmagHost(u.hostname));
   for(let i=0;i<5;i++) {
     if(!allowed(current) || !originMatches(current)) throw new Error('Unsupported posting host');
-    observe({checked_url:current.href});
+    // No response exists yet for this endpoint. A redirected request that
+    // fails must not inherit the prior endpoint's redirect HTTP status.
+    observe({checked_url:current.href,http_status:undefined});
     const r = await fetcher(current.href, {redirect:'manual',signal,headers:{'User-Agent':'JobCopilotVerification/1.0','Accept':'application/json,text/html'}});
     observe({checked_url:current.href,http_status:r.status});
     if ([301,302,303,307,308].includes(r.status)) {
@@ -261,7 +263,16 @@ export function retainVerificationEvidence(current, previous) {
 export function applyVerification(job, incoming) {
   const v = retainVerificationEvidence(incoming, job.elig_signals?.verification);
   const evidence = v.status === 'ok' || v.status === 'dead' ? v : v.last_known;
-  if (evidence?.status === 'dead') return {...job, verification: {...v, status:'dead'}};
+  if (evidence?.status === 'dead') {
+    // Closure belongs to the last conclusive observation, not to a later
+    // timeout. Keep its reason/date/HTTP proof visible and audit the retry
+    // separately; the persisted observation remains unknown with last_known.
+    const {last_known,...latestObservation}=v;
+    return {...job,elig_signals:{...job.elig_signals,verification:v},verification:{
+      ...evidence,evidence_checked_at:evidence.checked_at,
+      ...(v!==evidence?{last_known:evidence,latest_observation:latestObservation}:{})
+    }};
+  }
   if (evidence?.status === 'ok') {
     const changedAt=Date.parse(job.elig_signals?.source?.changed_at);
     if (Number.isFinite(changedAt) && changedAt > (Date.parse(evidence.checked_at) || 0)) {
