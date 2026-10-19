@@ -2,6 +2,15 @@
 
 Reviewed 2026-10-18 against the surgical working tree. This is a code and contract map, not a claim that every authenticated flow has been exercised in production.
 
+Source policy updated 2026-10-19: the native pipeline now fetches direct employer
+ATS/career sites only (Greenhouse, Lever, Ashby, Workable, SmartRecruiters,
+Teamtailor and Breezy). JobHive remains separate, and employer-authored postings
+remain supported. Live aggregator connectors were removed; earlier audit
+descriptions are historical. Existing database rows and application snapshots
+are not deleted by source retirement. `api/sourcePolicy.js` restricts search,
+digests and ongoing verification/inference/enrichment to maintained sources.
+Retired board URLs cannot bypass discovery policy under a JobHive source label.
+
 ## Runtime and entry points
 
 - `index.js` imports `api/server.js`; root `npm start` starts that Express API directly. Environment-backed dependencies are Supabase, the configured LLM provider (`lib/llm.js`), and external employer/ATS pages.
@@ -13,7 +22,7 @@ Reviewed 2026-10-18 against the surgical working tree. This is a code and contra
 
 | Producer | Authoritative record | Search projection and ownership rule |
 |---|---|---|
-| Native feed/ATS connectors | External employer or feed posting | `ingest/pipeline.js` normalizes, tags, deduplicates and writes `jobs`. Native connector ownership must survive overlap with JobHive. |
+| Native direct ATS/career-site connectors | External employer posting | `ingest/pipeline.js` normalizes, tags, deduplicates and writes `jobs`. Native connector ownership must survive overlap with JobHive. |
 | JobHive CSV importer | Upstream ATS dataset row | `ingest/import_jobhive.js` streams one ATS slice, rejects out-of-scope rows, normalizes/tags, deduplicates, then uses `core/jobhiveRefreshWriter.js`. Existing rows are refreshed only when owned by JobHive for the same ATS; IDs, creation time and application links survive. Native ingestion continues to use the separate insert-only `core/jobhiveWriter.js`. |
 | Employer console | `job_postings`, organization-scoped | `api/employer.js` mirrors open postings into `jobs` with `source=ats_source=employer` and `/apply/:postingId`. Draft/closed postings are removed from search. JobHive and stale pruning must not acquire ownership of this projection. |
 | Eligibility extraction/inference | Posting evidence, not applicant identity | Versioned `jobs.elig_signals` supports lean search; inference and verification may add evidence. A source refresh must recompute source-derived signals when content changes without discarding conclusive employer verification. |
@@ -32,8 +41,8 @@ Discovery keeps the 180-day ordinary publication window. Older current-year post
 ## Search and consumer contract
 
 1. `/ai/search` parses role aliases, requested country, seniority and remote preference. Explicit country text wins over the profile-country query parameter. `/ai/refine` reconstructs the intent and applies cumulative filters.
-2. `searchCandidates.js` retrieves relevant role/alias candidates through paged partitions. SQL publication, observation and dead-link gates act before eligibility scoring. Missing/outdated signals need description hydration; the server switches to lean payloads only after sufficient current-version coverage.
-3. Local ranking applies eligibility, relevance, non-vacancy, salary and explicit-recency checks. Candidate employer verification then runs within its budget; final ranking recomputes with the resulting evidence. Unknown verification is not itself proof of closure.
+2. `searchCandidates.js` retrieves relevant role/alias candidates through paged partitions. SQL source, publication, observation and dead-link gates act before eligibility scoring. Four parallel UUID ranges use exhaustive 1,000-row keyset pages. Schema capability probes replace whole-database signal counts; missing/outdated signals are hydrated with their exact descriptions before scoring.
+3. Local ranking applies eligibility, relevance, non-vacancy, salary and explicit-recency checks. Candidate employer verification then runs within a hard two-second shared budget; final ranking recomputes with the resulting evidence. Search uses in-memory checks without synchronous database persistence; the scheduled checker remains the durable evidence writer. Pending checks retain previous restrictions/closure and do not drop candidates. Unknown verification is not itself proof of closure.
 4. Results are publication-date ordered, deduplicated and paginated. The server caches rankings briefly by intent and filters; that cache can mask an import/logic change until expiration or process restart.
 5. `Copilot.jsx` consumes `data`, `total`, `has_more`, `intent`, counts, `sort` and eligibility/verification evidence. It persists result snapshots in threads. Restoring an old thread does not revalidate the displayed cards automatically; new search is necessary when validating a release.
 6. `Briefing.jsx` searches all preferred roles through `briefingFeed.mjs`, with bounded concurrency, merged deduplication and a five-card display. It falls back to the latest saved search. It has loading, partial-error, full-error and empty states. Its final display is a sample, not the complete search inventory.

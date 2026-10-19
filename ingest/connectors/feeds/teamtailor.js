@@ -6,7 +6,7 @@
  * No auth required. Docs: support.teamtailor.com (RSS feed how-to).
  *
  * We add companies to TEAMTAILOR_SITES below. Each yields up to per_page jobs.
- * Dependency-free RSS parsing (mirrors the MyJobMag connector).
+ * Dependency-free parsing of each employer's own RSS feed.
  */
 
 import axios from "axios";

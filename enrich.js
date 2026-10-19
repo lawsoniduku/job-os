@@ -1,3 +1,4 @@
+import { ACTIVE_JOB_SOURCES } from "./api/sourcePolicy.js";
 /**
  * ENRICHMENT PIPELINE v2
  * ======================
@@ -162,6 +163,7 @@ async function enrichJobs() {
   const { data: jobs, error } = await supabase
     .from("jobs")
     .select("id, title, description, location")
+    .in("source", ACTIVE_JOB_SOURCES)
     .is("role_cluster", null)
     .limit(500);
 

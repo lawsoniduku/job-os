@@ -16,20 +16,13 @@ import { fetchLever } from "./connectors/ats/lever.js";
 import { fetchAshby } from "./connectors/ats/ashby.js";
 import { fetchWorkable } from "./connectors/ats/workable.js";
 import { fetchSmartRecruiters } from "./connectors/ats/smartrecruiters.js";
-import { fetchRemotive } from "./connectors/feeds/remotive.js";
-import { fetchHimalayas } from "./connectors/feeds/himalayas.js";
-import { fetchJobicy } from "./connectors/feeds/jobicy.js";
-import { fetchArbeitnow } from "./connectors/feeds/arbeitnow.js";
-import { fetchMyJobMag } from "./connectors/feeds/myjobmag.js";
-import { fetchWeWorkRemotely } from "./connectors/feeds/weworkremotely.js";
-import { fetchJobspresso } from "./connectors/feeds/jobspresso.js";
 import { fetchTeamtailor } from "./connectors/feeds/teamtailor.js";
 import { fetchBreezy } from "./connectors/feeds/breezy.js";
 import {
   GREENHOUSE_COMPANIES, LEVER_COMPANIES, ASHBY_COMPANIES,
   WORKABLE_COMPANIES, SMARTRECRUITERS_COMPANIES,
 } from "./connectors/registry.js";
-import { looksEnglish, looksEnglishJob } from "./core/language.js";
+import { looksEnglishJob } from "./core/language.js";
 import { dedupe } from "./core/dedup.js";
 import { tagJob } from "./core/tag.js";
 import { createJobhiveWriter } from "./core/jobhiveWriter.js";
@@ -38,27 +31,21 @@ dotenv.config();
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
 async function run() {
-  console.log("\n🚀 INGESTION PIPELINE v3.2 (feeds + ATS)\n========================================\n");
+  console.log("\n🚀 INGESTION PIPELINE v3.3 (direct employer ATS)\n========================================\n");
 
-  // 1. FETCH — company ATS boards + big aggregator feeds, all in parallel.
-  console.log("Fetching ATS boards + aggregator feeds...");
+  // 1. FETCH — direct company ATS boards and employer-owned feeds only.
+  // JobHive has its own bounded importer/workflow; aggregator connectors are retired.
+  console.log("Fetching direct employer ATS boards...");
   const settled = await Promise.allSettled([
     fetchGreenhouse(GREENHOUSE_COMPANIES),
     fetchLever(LEVER_COMPANIES),
     fetchAshby(ASHBY_COMPANIES),
     fetchWorkable(WORKABLE_COMPANIES || []),
     fetchSmartRecruiters(SMARTRECRUITERS_COMPANIES || []),
-    fetchRemotive({ limit: 500 }),
-    fetchHimalayas({ limit: 500 }),
-    fetchJobicy({ count: 200 }),
-    fetchArbeitnow({ pages: 3 }),
-    fetchMyJobMag(),
-    fetchWeWorkRemotely(),
-    fetchJobspresso(),
     fetchTeamtailor(),
     fetchBreezy(),
   ]);
-  const sourceNames = ["greenhouse", "lever", "ashby", "workable", "smartrecruiters", "remotive", "himalayas", "jobicy", "arbeitnow", "myjobmag", "weworkremotely", "jobspresso", "teamtailor", "breezy"];
+  const sourceNames = ["greenhouse", "lever", "ashby", "workable", "smartrecruiters", "teamtailor", "breezy"];
   let jobs = [], sourceFailures = 0;
   settled.forEach((result, index) => {
     if (result.status === "fulfilled") jobs.push(...result.value);

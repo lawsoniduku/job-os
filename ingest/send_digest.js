@@ -1,3 +1,4 @@
+import { ACTIVE_JOB_SOURCES, isActiveJobSource } from "../api/sourcePolicy.js";
 /**
  * ingest/send_digest.js
  * ======================
@@ -45,6 +46,7 @@ async function fetchNewRoles({ country, roleCluster }) {
   let query = supabase
     .from("jobs")
     .select("title, company, apply_url, role_cluster, eligibility_region, posted_at, location, source")
+    .in("source", ACTIVE_JOB_SOURCES)
     .gte("posted_at", since)
     .order("posted_at", { ascending: false })
     .limit(500);
@@ -52,7 +54,7 @@ async function fetchNewRoles({ country, roleCluster }) {
   const { data, error } = await query;
   if (error) throw new Error(error.message);
 
-  let jobs = (data || []).filter((j) => KEEP_REGIONS.has(j.eligibility_region));
+  let jobs = (data || []).filter((j) => isActiveJobSource(j) && KEEP_REGIONS.has(j.eligibility_region));
 
   // country preference: keep explicitly-that-country roles PLUS global/remote
   // (never narrow to ONLY that country — global/remote is always relevant too)

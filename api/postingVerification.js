@@ -1,15 +1,13 @@
 // Current, public posting evidence. No model guesses and no arbitrary URL fetches.
 import { updateJobSignals, mergePostingObservation } from '../ingest/core/jobSignalsWriter.js';
-import { GREENHOUSE_COMPANIES } from '../ingest/connectors/registry.js';
 import { cleanText } from '../ingest/core/normalize.js';
 import { extractEligibilitySignals, SIGNALS_VERSION } from './roleIntelligence.js';
 
 export const VERIFICATION_VERSION = 3;
 const TTL = 6 * 60 * 60 * 1000;
 const cache = new Map();
-const boardCache = new Map();
 const recruiteeTenant = hostname => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.recruitee\.com$/i.test(hostname);
-const hosts = ['bamboohr.com', 'apply.workable.com', 'jobs.ashbyhq.com', 'api.ashbyhq.com', 'job-boards.greenhouse.io', 'boards.greenhouse.io', 'boards-api.greenhouse.io', 'boards-api.eu.greenhouse.io', 'api.lever.co', 'jobs.lever.co', 'weworkremotely.com', 'jobicy.com', 'himalayas.app', 'myjobmag.com', 'www.myjobmag.com', 'canonical.com'];
+const hosts = ['bamboohr.com', 'apply.workable.com', 'jobs.ashbyhq.com', 'api.ashbyhq.com', 'job-boards.greenhouse.io', 'boards.greenhouse.io', 'boards-api.greenhouse.io', 'boards-api.eu.greenhouse.io', 'api.lever.co', 'jobs.lever.co', 'canonical.com'];
 const allowed = (u) => u.protocol === 'https:' && !u.username && !u.password && (!u.port || u.port === '443') && (recruiteeTenant(u.hostname) || hosts.some(h => u.hostname === h || (h === 'bamboohr.com' && u.hostname.endsWith('.bamboohr.com'))));
 const list = v => v == null ? [] : Array.isArray(v) ? v : [v];
 function countryName(v) {
@@ -86,10 +84,13 @@ function explicitTimestamp(value) {
   if(year<1000 || month<1 || month>12 || day<1 || day>new Date(Date.UTC(year,month,0)).getUTCDate() || hour>23 || minute>59 || second>59) return NaN;
   return Date.parse(normalized);
 }
-export async function verifyPosting(job, {fetcher=fetch, now=Date.now(), timeoutMs=12000}={}) {
+export async function verifyPosting(job, {fetcher=fetch, now=Date.now(), timeoutMs=12000, signal}={}) {
   const at = new Date(now).toISOString();
   const unknown = reason => ({v:VERIFICATION_VERSION,status:'unknown',checked_at:at,reason});
   const ctrl = new AbortController(), timer = setTimeout(()=>ctrl.abort(),timeoutMs);
+  const abort=()=>ctrl.abort();
+  if(signal?.aborted) ctrl.abort();
+  else signal?.addEventListener('abort',abort,{once:true});
   try {
     let u = new URL(job.apply_url);
     if(!allowed(u)) return unknown('Source cannot yet be verified');
@@ -97,32 +98,6 @@ export async function verifyPosting(job, {fetcher=fetch, now=Date.now(), timeout
     const recruitee=recruiteeTenant(u.hostname);
     const offerPath=path.match(/^\/o\/([a-z0-9][a-z0-9-]*)(?:\/c\/new)?\/?$/i);
     if(recruitee && !offerPath) return unknown('Unsupported employer vacancy URL');
-    // Known employer identities are curated in the ingestion registry. Resolve
-    // board copies to an exact, unique current employer title when available.
-    const employer=GREENHOUSE_COMPANIES.find(c=>c.name.toLowerCase()===String(job.company||'').trim().toLowerCase());
-    if(employer && ['jobicy.com','weworkremotely.com','himalayas.app'].includes(u.hostname)) {
-      const base=employer.apiBase || 'https://boards-api.greenhouse.io';
-      let board=boardCache.get(employer.slug);
-      if(!board || now-board.at>300000) {
-        const r=await readResponse(`${base}/v1/boards/${employer.slug}/jobs`,fetcher,ctrl.signal);
-        if(!r.status) {const data=JSON.parse(r.text);if(Array.isArray(data.jobs)){board={at:now,jobs:data.jobs};boardCache.set(employer.slug,board);}}
-      }
-      const normalized=s=>decode(s).toLowerCase().replace(/[^a-z0-9]/g,'');
-      const matches=(board?.jobs||[]).filter(j=>normalized(j.title)===normalized(job.title));
-      if(matches.length===1) {
-        const direct=matches[0].absolute_url;
-        const d=await readResponse(`${base}/v1/boards/${employer.slug}/jobs/${matches[0].id}`,fetcher,ctrl.signal);
-        if(!d.status) {
-          const j=JSON.parse(d.text);
-          if(j.content && direct && allowed(new URL(direct))) {
-            const candidate={title:j.title,description:cleanText(decode(j.content),Infinity),location:j.location?.name||'',remote:/remote|home[- ]?based|worldwide|anywhere/i.test(j.location?.name||'')};
-            const reason=nonVacancyReason(candidate);
-            return reason ? {v:VERIFICATION_VERSION,status:'dead',checked_at:at,reason}
-              : {v:VERIFICATION_VERSION,status:'ok',checked_at:at,provider:'employer',apply_url:direct,...candidate};
-          }
-        }
-      }
-    }
     const gh=path.match(/^\/([^/]+)\/jobs\/(\d+)/);
     const lever=path.match(/^\/([^/]+)\/([a-f0-9-]+)(?:\/apply)?\/?$/i);
     if(recruitee) {
@@ -187,11 +162,8 @@ export async function verifyPosting(job, {fetcher=fetch, now=Date.now(), timeout
         const loc=list(j.applicantLocationRequirements?.length?j.applicantLocationRequirements:j.applicantLocationRequirements || j.jobLocation).map(locationText).filter(Boolean).join('; ');
         const description=cleanText(decode(j.description),Infinity);
         if(!description) return unknown('Posting description is missing');
-        provider=/ashbyhq|greenhouse|lever|canonical/.test(u.hostname)?'employer':'job board';
-        payload={title:decode(j.title),description,location:(u.hostname==='weworkremotely.com' && /^remote\s+\S/i.test(j.hiringOrganization?.address || '') ? j.hiringOrganization.address : loc) || '',remote:j.jobLocationType==='TELECOMMUTE' || /remote/i.test(loc)};
-        // Board labels are not proof of worldwide hiring. Retain them only as
-        // uncertainty unless the actual description supports worldwide scope.
-        if(provider==='job board' && /worldwide|anywhere|global/i.test(payload.location) && !extractEligibilitySignals(payload).worldwideDesc) payload.location='Remote';
+        provider='employer';
+        payload={title:decode(j.title),description,location:loc || '',remote:j.jobLocationType==='TELECOMMUTE' || /remote/i.test(loc)};
       }
     }
     payload.description=cleanText(decode(payload.description),Infinity);
@@ -200,7 +172,7 @@ export async function verifyPosting(job, {fetcher=fetch, now=Date.now(), timeout
     if(!payload.title || !payload.description) return unknown('Incomplete posting evidence');
     return {v:VERIFICATION_VERSION,status:'ok',checked_at:at,provider,...payload};
   } catch { return unknown('Current posting could not be verified'); }
-  finally {clearTimeout(timer);}
+  finally {clearTimeout(timer);signal?.removeEventListener('abort',abort);}
 }
 export function compactVerification(v) {
   if(v.status!=='ok')return v;
@@ -243,19 +215,12 @@ export function applyVerification(job, incoming) {
       ...(job.elig_signals?.source ? {source:job.elig_signals.source} : {}), verification:v};
     return {...fresh,verification:{status:v.status,checked_at:v.checked_at,provider:evidence.provider,evidence_checked_at:evidence.checked_at}};
   }
-  // Generic aggregator labels alone are not proof of worldwide hiring. Keep the
-  // role discoverable, but do not give it a green badge when the body lacks evidence.
-  const signals=job.elig_signals || extractEligibilitySignals(job);
-  const board = ['weworkremotely','jobicy','himalayas'].includes(job.source)
-    || /^https:\/\/(?:www\.)?(?:weworkremotely\.com|jobicy\.com|himalayas\.app)\//i.test(job.apply_url || '');
-  if (board && /worldwide|anywhere|global/i.test(job.location || '') && !signals.worldwideDesc) {
-    return {...job,location:'Remote',eligibility_region:null,elig_signals:signals,verification:v};
-  }
   return {...job,verification:v};
 }
-// Bounded work per request. Unknown availability is separate from location eligibility.
-// The scheduled checker persists this same evidence and progressively warms it.
-export async function verifyCandidates(rows,{db,verify=verifyPosting,now=Date.now(),budgetMs=20000,concurrency=8}={}) {
+// Search uses persist:false: cache quick observations in memory and let the
+// scheduled checker durably merge evidence. Database round trips and slow ATS
+// responses must not determine whether every candidate reaches the response.
+export async function verifyCandidates(rows,{db,verify=verifyPosting,now=Date.now(),budgetMs=2000,concurrency=8,persist=true}={}) {
   const output=new Array(rows.length), queue=[]; let cursor=0;
   const fresh=(v,job)=>v?.v===VERIFICATION_VERSION && !(Date.parse(job?.elig_signals?.source?.changed_at)>Date.parse(v.checked_at)) && now-Date.parse(v.checked_at)>=0 && now-Date.parse(v.checked_at)<(v.status==='unknown'?300000:TTL);
   rows.forEach((job,i)=>{
@@ -263,22 +228,37 @@ export async function verifyCandidates(rows,{db,verify=verifyPosting,now=Date.no
     const v=fresh(cached,job) ? cached : job.elig_signals?.verification;
     if(fresh(v,job))output[i]=applyVerification(job,v); else queue.push({job,i});
   });
-  const deadline=Date.now()+budgetMs;
-  await Promise.all(Array.from({length:concurrency},async()=>{
-    while(cursor<queue.length && Date.now()<deadline) {
-      const {job,i}=queue[cursor++];
-      const checked=await verify(job,{now,timeoutMs:Math.max(100,Math.min(12000,deadline-Date.now()))});
-      const previous = retainVerificationEvidence(cache.get(job.apply_url) || {status:'pending'},job.elig_signals?.verification);
-      const v=retainVerificationEvidence(compactVerification(checked),previous);
-      if(cache.size>5000)cache.delete(cache.keys().next().value);
-      cache.set(job.apply_url,v); output[i]=applyVerification(job,v);
-      if(db && job.id) {
-        // Merge into the latest evidence, not the search snapshot read seconds ago.
-        const {error}=await updateJobSignals(db,job.id,current=>({...current,
-          verification:mergePostingObservation(current.verification,v)}));
-        if(error)console.warn('Posting verification cache write failed:',error.message);
+  const budget=Number.isFinite(budgetMs)?Math.max(0,budgetMs):2000;
+  const deadline=Date.now()+budget, stop=Symbol('verification deadline');
+  const ctrl=new AbortController(); let timer;
+  const deadlineReached=new Promise(resolve=>{timer=setTimeout(()=>{ctrl.abort();resolve(stop);},budget);});
+  try {
+    const workers=Array.from({length:Math.min(queue.length,Math.max(1,Math.min(32,Math.floor(concurrency)||1)))},async()=>{
+      while(cursor<queue.length && Date.now()<deadline && !ctrl.signal.aborted) {
+        const {job,i}=queue[cursor++];
+        const unknown=()=>({v:VERIFICATION_VERSION,status:'unknown',checked_at:new Date(now).toISOString(),reason:'Current posting could not be verified'});
+        // The race also bounds injected/non-cooperative verifiers. Handle late
+        // rejection here so a response timeout never causes an unhandled error.
+        const operation=Promise.resolve().then(()=>verify(job,{now,timeoutMs:Math.max(1,Math.min(12000,deadline-Date.now())),signal:ctrl.signal})).catch(unknown);
+        let checked=await Promise.race([operation,deadlineReached]);
+        if(checked===stop || ctrl.signal.aborted || Date.now()>=deadline) return;
+        if(!['ok','dead','unknown'].includes(checked?.status)) checked=unknown();
+        const previous = retainVerificationEvidence(cache.get(job.apply_url) || {status:'pending'},job.elig_signals?.verification);
+        const v=retainVerificationEvidence(compactVerification(checked),previous);
+        if(cache.size>5000)cache.delete(cache.keys().next().value);
+        cache.set(job.apply_url,v); output[i]=applyVerification(job,v);
+        if(persist && db && job.id) {
+          // Preserve compatibility for non-search callers. Even a hung write
+          // cannot extend this helper beyond its deadline.
+          const write=Promise.resolve().then(()=>updateJobSignals(db,job.id,current=>({...current,
+            verification:mergePostingObservation(current.verification,v)}))).catch(error=>({error}));
+          const saved=await Promise.race([write,deadlineReached]);
+          if(saved===stop || ctrl.signal.aborted) return;
+          if(saved.error)console.warn('Posting verification cache write failed:',saved.error.message);
+        }
       }
-    }
-  }));
+    });
+    await Promise.race([Promise.all(workers),deadlineReached]);
+  } finally {clearTimeout(timer);}
   return Array.from(output,(v,i)=>v||applyVerification(rows[i],retainVerificationEvidence({status:'pending',reason:'Not checked yet'},cache.get(rows[i].apply_url) || rows[i].elig_signals?.verification)));
 }
