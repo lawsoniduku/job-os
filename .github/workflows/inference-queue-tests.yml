@@ -1,0 +1,40 @@
+name: Inference queue PostgreSQL regression
+on:
+  pull_request:
+    paths:
+      - 'supabase/migrations/017_inference_queue.sql'
+      - 'scripts/test_inference_queue.sql'
+      - '.github/workflows/inference-queue-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/migrations/017_inference_queue.sql'
+      - 'scripts/test_inference_queue.sql'
+      - '.github/workflows/inference-queue-tests.yml'
+permissions:
+  contents: read
+jobs:
+  isolated-postgres:
+    runs-on: ubuntu-latest
+    container: postgres:16
+    services:
+      database:
+        image: postgres:16
+        env:
+          POSTGRES_DB: jobos_inference_test_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: disposable-ci-only
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: database
+      PGUSER: postgres
+      PGPASSWORD: disposable-ci-only
+      PGDATABASE: jobos_inference_test_ci
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exercise migration 017 in disposable PostgreSQL only
+        run: psql --no-psqlrc --set ON_ERROR_STOP=1 --file scripts/test_inference_queue.sql

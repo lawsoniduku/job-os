@@ -1,163 +1,128 @@
-import { ACTIVE_JOB_SOURCES } from "../api/sourcePolicy.js";
-/**
- * ingest/infer_pending.js — LLM eligibility inference over pending rows
- * =====================================================================
- * Finds recent jobs the deterministic engine could not judge, asks the model
- * who may apply, and writes the answer into elig_signals.infer.
- *
- * Run: node --env-file=.env ingest/infer_pending.js [--days 14] [--limit 300] [--all]
- *
- * ── WHY THIS IS A SEPARATE PASS AND NOT PART OF ingest/pipeline.js ─────────
- *
- * It was inline first. That was wrong, and the reason is worth recording so
- * nobody moves it back.
- *
- * The pipeline upserts with ignoreDuplicates:true, so it only ever touches a
- * job once — the run in which it first appears. Any row whose inference failed
- * during that run would never be reconsidered. Measured on live data, Groq's
- * free tier rate-limited 7 of 20 calls even at concurrency 2 with pacing, so
- * inline inference would have permanently abandoned about a third of exactly
- * the rows it was built to fix.
- *
- * As a separate pass keyed on "inference is missing", a rate limit costs
- * nothing but time: the row is still pending, and the next run picks it up.
- * Coverage converges instead of leaking. It also keeps model latency out of
- * the ingest critical path.
- *
- * ── SCOPE ─────────────────────────────────────────────────────────────────
- * Defaults to the last 14 days: new jobs only, which is the agreed scope. The
- * existing corpus is left alone until the measured lift justifies a backfill.
- * --all removes the date bound if that decision is ever taken.
+/** Pending eligibility inference. Apply migration 017 before running.
+ * PowerShell: node --env-file=.env ingest/infer_pending.js --limit 3000 --scan 20000 --page-size 500
+ * Importing this module does not access a model or database.
  */
+import { pathToFileURL } from 'node:url';
+import { writeFile, rename } from 'node:fs/promises';
+import { createClient } from '@supabase/supabase-js';
+import { ACTIVE_JOB_SOURCES } from '../api/sourcePolicy.js';
+import { extractEligibilitySignals, SIGNALS_VERSION, INFER_VERSION } from '../api/roleIntelligence.js';
+import { inferEligibility } from '../api/inferEligibility.js';
+import { isLLMHealthy, llmConfig, llmState, validateLLMConfig } from '../lib/llm.js';
+import { collectInferenceCandidates, enrichInferenceCandidates, inferenceOptions, encodeInferenceCursor, pendingInference } from './core/inferenceQueue.js';
 
-import { createClient } from "@supabase/supabase-js";
-import { extractEligibilitySignals, SIGNALS_VERSION, INFER_VERSION } from "../api/roleIntelligence.js";
-import { inferEligibility, needsInference } from "../api/inferEligibility.js";
-import { isLLMHealthy, llmConfig, llmState } from "../lib/llm.js";
-
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
-
-const arg = (flag, fallback) => {
-  const i = process.argv.indexOf(flag);
-  return i > -1 && process.argv[i + 1] ? process.argv[i + 1] : fallback;
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const bounded = (value, fallback, name, min, max) => {
+  const n = value === undefined || value === '' ? fallback : Number(value);
+  if (!Number.isSafeInteger(n) || n < min || n > max) throw new Error(`${name} must be an integer from ${min} to ${max}`);
+  return n;
 };
-const DAYS  = Number(arg("--days", 14));
-const LIMIT = Number(arg("--limit", 300));
-const ALL   = process.argv.includes("--all");
 
-// Rate limiting, not parallelism, is the binding constraint — a 429 arrived on
-// a strictly sequential run. These two numbers are the throttle; raising them
-// makes runs fail faster, not finish faster.
-const CONCURRENCY = Number(process.env.INFER_CONCURRENCY || 2);
-const PACE_MS     = Number(process.env.INFER_PACE_MS || 1200);
-const RETRY_MS    = 8000;
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-async function run() {
-  console.log(`\n🤖 ELIGIBILITY INFERENCE — ${llmConfig.provider}/${llmConfig.model}`);
-  console.log(`   scope: ${ALL ? "ALL rows" : `last ${DAYS} days`} · limit ${LIMIT} · concurrency ${CONCURRENCY}\n`);
-
-  // Check the boring cause FIRST. "Model unreachable" is true but useless when
-  // the real answer is that nobody ever created the API key — isLLMHealthy()
-  // cannot tell those apart (it reports a missing key as lastError: null), so
-  // a run that fails this way otherwise sends you looking at the network.
-  if ((process.env.LLM_PROVIDER || "").toLowerCase() === "groq" && !process.env.GROQ_API_KEY) {
-    console.log("❌ GROQ_API_KEY is empty or unset.");
-    console.log("   In GitHub: Settings → Secrets and variables → Actions → New repository secret.");
-    console.log("   This is the only workflow in the repo that needs it, so it is very likely missing");
-    console.log("   rather than wrong. Nothing was written; re-run once it exists.\n");
-    process.exit(1);
-  }
-
-  if (!(await isLLMHealthy())) {
-    console.log(`❌ model unreachable${llmState.lastError ? ` — ${llmState.lastError}` : ""}.`);
-    console.log(`   provider=${llmConfig.provider} model=${llmConfig.model}`);
-    console.log("   Nothing was written; safe to re-run later.\n");
-    process.exit(1);
-  }
-
-  // SCAN SIZE IS NOT WORK SIZE. Only a minority of rows are ambiguous, so the
-  // scan has to be much wider than the number we intend to ask about — tying
-  // the two together made a --limit of 15 read only 90 rows and find nothing.
-  const SCAN = Number(arg("--scan", 3000));
-  let q = supabase.from("jobs")
-    .select("id, title, company, location, description, elig_signals")
-    .in("source", ACTIVE_JOB_SOURCES)
-    .order("posted_at", { ascending: false })
-    .limit(SCAN);
-  if (!ALL) q = q.gte("posted_at", new Date(Date.now() - DAYS * 864e5).toISOString());
-
-  const { data, error } = await q;
-  if (error) { console.error("❌", error.message); process.exit(1); }
-
-  // Only rows that are (a) still ambiguous and (b) not already inferred.
-  const pending = [];
-  for (const job of data) {
-    const sig = job.elig_signals?.v === SIGNALS_VERSION
-      ? job.elig_signals
-      : extractEligibilitySignals(job);
-    // Already asked under the CURRENT contract — don't pay twice. Version-aware
-    // on purpose: a stale inference is one applyInference will refuse to use,
-    // so skipping on mere presence would strand those rows unenriched forever
-    // every time the prompt improves.
-    if (sig.infer?.v === INFER_VERSION) continue;
-    if (!needsInference(job, sig)) continue;       // engine already has an answer
-    pending.push({ job, sig });
-    if (pending.length >= LIMIT) break;
-  }
-
-  console.log(`   ${data.length} scanned → ${pending.length} pending inference\n`);
-  if (!pending.length) { console.log("✅ nothing to do.\n"); return; }
-
-  let resolved = 0, unclear = 0, failed = 0, written = 0, recovered = 0;
-  const scopes = {};
-  let cursor = 0;
-
-  async function worker() {
-    while (cursor < pending.length) {
-      const { job, sig } = pending[cursor++];
-      let infer = null;
-      try {
-        infer = await inferEligibility(job);
-        if (!infer) {                              // usually a 429 — one patient retry
-          await sleep(RETRY_MS);
-          infer = await inferEligibility(job);
-          if (infer) recovered++;
-        }
-      } catch { /* falls through to failed */ }
-
-      if (!infer) { failed++; await sleep(PACE_MS); continue; }
-
-      scopes[infer.scope] = (scopes[infer.scope] || 0) + 1;
-      if (infer.scope === "unclear" || infer.confidence === "low") unclear++; else resolved++;
-
-      // Store even "unclear" and "low". It costs nothing extra, it stops us
-      // paying to ask the same question next run, and it is the only record of
-      // where the prompt is weak.
-      const result = await updateJobSignals(supabase, job.id, (current, latest) => {
-        // A model answer is valid only for the posting text it was asked about.
-        if (['title','location','description'].some(key => latest[key] !== job[key])) return undefined;
-        return {...current, ...extractEligibilitySignals(latest), infer};
-      }, {snapshot:job, columns:'id,title,location,description,elig_signals'});
-      if (result.error || result.skipped) failed++; else written++;
-
-      if (written % 25 === 0 && written) process.stdout.write(`   …${written} written\n`);
-      await sleep(PACE_MS);
-    }
-  }
-
-  const t0 = Date.now();
-  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, pending.length) }, worker));
-  const secs = ((Date.now() - t0) / 1000).toFixed(0);
-
-  const pct = pending.length ? ((resolved / pending.length) * 100).toFixed(0) : "0";
-  console.log(`\n✅ ${pending.length} asked in ${secs}s`);
-  console.log(`   ${resolved} resolved (${pct}%) · ${unclear} still unclear · ${failed} failed${recovered ? ` · ${recovered} recovered after backoff` : ""}`);
-  console.log(`   scopes: ${Object.entries(scopes).map(([k, v]) => `${k}=${v}`).join(" ") || "none"}`);
-  console.log(`   written: ${written}`);
-  if (failed) console.log(`   ${failed} left pending — they are picked up by the next run, nothing is lost.`);
-  console.log();
+export function inferencePageFetcher(db) {
+  return async ({cursor,size,from,until}) => {
+    const {data,error} = await db.rpc('pending_inference_jobs', {
+      p_sources: ACTIVE_JOB_SOURCES, p_infer_version: INFER_VERSION, p_signals_version: SIGNALS_VERSION,
+      p_since: from, p_until: until, p_cursor_at: cursor?.at ?? null, p_cursor_id: cursor?.id ?? null, p_limit:size,
+    });
+    if (error) throw new Error(`Inference queue failed: ${error.message}. Apply supabase/migrations/017_inference_queue.sql and use a service-role SUPABASE_KEY.`);
+    return data;
+  };
 }
 
-run().catch((e) => { console.error("❌", e.message); process.exit(1); });
+export function inferenceWriter(db, now = Date.now, {attempts=4,pause=sleep} = {}) {
+  const identity = ['title','company','location','description','source','apply_url'];
+  return async ({job}, infer) => {
+    let latest=job,lastError=null;
+    for(let attempt=0;attempt<attempts;attempt++) {
+      try {
+        if(!latest) {
+          const read=await db.from('jobs').select('id,title,company,location,description,source,apply_url,posted_at,created_at,link_status,elig_signals').eq('id',job.id).maybeSingle();
+          if(read.error)throw new Error(read.error.message);
+          if(!read.data)return{saved:false,skipped:true,error:null};
+          latest=read.data;
+        }
+        if(identity.some(key=>latest[key]!==job[key]))return{saved:false,skipped:true,error:null};
+        const flags=extractEligibilitySignals(latest);
+        if(!pendingInference({...latest,elig_signals:{...latest.elig_signals,...flags}},now()))return{saved:false,skipped:true,error:null};
+        // Full text travels in a POST body, never unbounded URL predicates.
+        const expected=Object.fromEntries([...identity,'link_status','elig_signals'].map(key=>[key,latest[key]??null]));
+        const result=await db.rpc('write_job_inference',{p_id:job.id,p_expected:expected,p_infer:infer,p_flags:flags});
+        if(result.error)throw new Error(result.error.message);
+        if(result.data?.length)return{saved:true,skipped:false,error:null};
+        lastError=new Error('Posting text or evidence changed concurrently');
+      } catch(error) {lastError=error;}
+      latest=null;
+      if(attempt+1<attempts)await pause(Math.min(1500,200*(attempt+1)));
+    }
+    return{saved:false,skipped:false,error:lastError};
+  };
+}
+
+export async function runInference({db, options, infer = row=>inferEligibility(row,{throwFatal:true}), write = inferenceWriter(db),
+  now = Date.now, sleep:pause = sleep, concurrency = 2, paceMs = 1200, retryMs = 8000,onCheckpoint = async()=>{}} = {}) {
+  const metadata = () => ({
+    scope:{from:options.from,until:options.until,days:options.days}, provider:llmConfig.provider,model:llmConfig.model,
+    infer_version:INFER_VERSION,at:new Date(now()).toISOString(),last_model_error:llmState.lastError});
+  const selecting = progress => onCheckpoint({...metadata(),stage:'selecting',...progress,
+    resume_cursor:encodeInferenceCursor(options.cursor),failed_row_retry:false});
+  await selecting({selected:0,scanned:0,pages:0,calls:0});
+  const queue = await collectInferenceCandidates(inferencePageFetcher(db), options, now(),selecting);
+  const audit = (results,stage) => ({...results,...metadata(),stage,scanned:queue.scanned,pages:queue.pages,
+    queue_exhausted:queue.exhausted,exhausted:queue.exhausted && !results.unattempted && !results.failed,
+    resume_cursor:encodeInferenceCursor(results.retryCursor !== undefined ? results.retryCursor : queue.cursor),
+    failed_row_retry:results.retryCursor !== undefined});
+  const results = await enrichInferenceCandidates(queue.selected, {infer,write,sleep:pause,concurrency,paceMs,retryMs,
+    onProgress:results=>onCheckpoint(audit(results,'enriching'))});
+  const complete = audit(results,'complete');
+  await onCheckpoint(complete);
+  return complete;
+}
+
+// Serialize checkpoints and atomically rename each complete JSON document.
+// A killed process leaves the previous checkpoint readable, never half JSON.
+export function createAuditWriter(path) {
+  let pending = Promise.resolve();
+  const temporary = `${path}.${process.pid}.tmp`;
+  return audit => {
+    const body = `${JSON.stringify(audit,null,2)}\n`;
+    pending = pending.then(async()=>{await writeFile(temporary,body,'utf8');await rename(temporary,path);});
+    return pending;
+  };
+}
+
+export async function main(argv = process.argv.slice(2), env = process.env) {
+  const options = inferenceOptions(argv);
+  const config = validateLLMConfig(env);
+  const concurrency = bounded(env.INFER_CONCURRENCY, 2, 'INFER_CONCURRENCY', 1, 8);
+  const paceMs = bounded(env.INFER_PACE_MS, 1200, 'INFER_PACE_MS', 0, 60000);
+  const retryMs = bounded(env.INFER_RETRY_MS, 8000, 'INFER_RETRY_MS', 0, 60000);
+  if (!env.SUPABASE_URL || !env.SUPABASE_KEY) throw new Error('SUPABASE_URL and service-role SUPABASE_KEY are required; nothing was selected or written');
+  console.log(`Eligibility inference: ${config.provider}/${config.model}; scope ${options.from || 'all dates'} to ${options.until}`);
+  console.log(`Posting limit ${options.limit}; scan ${options.scan}; page size ${options.pageSize}; max pages ${options.maxPages}; each posting may have one retry`);
+  if (!(await isLLMHealthy())) throw new Error(`Model configuration/unreachable: ${llmState.lastError || `${config.provider}/${config.model}`}; nothing was selected or written`);
+  const db = createClient(env.SUPABASE_URL, env.SUPABASE_KEY, {auth:{persistSession:false,autoRefreshToken:false}});
+  const saveAudit = createAuditWriter(options.auditPath);
+  let lastAudit,stopping=false;
+  const checkpoint = async audit=>{lastAudit=audit;await saveAudit(audit);};
+  const interrupted = signal=>{
+    if(stopping)return;
+    stopping=true;
+    const audit={...lastAudit,stage:'interrupted',fatal:`Run interrupted by ${signal}`,at:new Date().toISOString(),exitCode:1};
+    // The last checkpoint rewinds before every in-flight/unattempted row.
+    saveAudit(audit).finally(()=>process.exit(signal==='SIGINT'?130:143));
+  };
+  const sigint=()=>interrupted('SIGINT'),sigterm=()=>interrupted('SIGTERM');
+  process.once('SIGINT',sigint);process.once('SIGTERM',sigterm);
+  let result;
+  try {result=await runInference({db,options,concurrency,paceMs,retryMs,onCheckpoint:checkpoint});}
+  finally {process.off('SIGINT',sigint);process.off('SIGTERM',sigterm);}
+  console.log(JSON.stringify(result, null, 2));
+  if (result.failureRate > 0.3) console.error(`Failed ${(result.failureRate*100).toFixed(1)}% of model calls (>30%); run fails even if retries later recovered some rows.`);
+  if (result.writeFailures) console.error(`${result.writeFailures} storage/changed-posting failures; inspect the audit and resume cursor.`);
+  if ((result.resume_cursor && !result.exhausted) || result.failed_row_retry) console.log(`More work/retries may remain. Resume with --cursor "${result.resume_cursor || ''}" (empty means restart newest).`);
+  return result.exitCode;
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().then(code => {process.exitCode = code;}).catch(error => {console.error(`Inference startup/run failed: ${error.message}`);process.exitCode = 1;});
+}

@@ -45,8 +45,8 @@
  * exactly as it is today. Inference is an enrichment, never a gate.
  */
 
-import { generateJSON } from "../lib/llm.js";
-import { INFER_VERSION } from "./roleIntelligence.js";
+import { generateJSON, llmConfig } from "../lib/llm.js";
+import { INFER_VERSION, checkEligibility } from "./roleIntelligence.js";
 
 // DEPENDENCY DIRECTION. This module imports from roleIntelligence.js and
 // roleIntelligence.js never imports from here — deliberately one-way. The
@@ -75,22 +75,21 @@ const VALID_SCOPES = new Set(["worldwide", "region", "country", "unclear"]);
  */
 export function needsInference(job, signals) {
   const s = signals || job?.elig_signals;
-  if (!s) return false;
-  // Any decisive negative — the engine already has its answer.
-  if (s.hardExclusion || s.nonEnglishMarkers || s.nonEnglishLocal) return false;
-  if (s.restricted || s.onsiteRequired || s.jurisdiction) return false;
-  if (s.tiedCountries?.length) return false;
-  // Any decisive positive — likewise.
-  if (s.worldwideDesc) return false;
-  // Location must be uninformative, or the location branch decides it.
-  const loc = String(job?.location || "").trim().toLowerCase();
-  const bare = !loc || [
-    "remote", "remote,", "anywhere", "n/a", "-", "not specified",
-    "remote worldwide", "fully remote", "global", "worldwide",
-  ].includes(loc);
-  if (!bare) return false;
-  // Nothing to read is nothing to infer from.
-  return (job?.description || "").length >= 200;
+  if (!s || s.infer?.v === INFER_VERSION || job?.link_status === "dead") return false;
+  if ((job?.description || "").length < 200) return false;
+  if (s.verification?.status === "dead" || s.verification?.last_known?.status === "dead") return false;
+  // Retain the original conservative queue prerequisites. SQL mirrors these
+  // cheap cached checks; it never tries to replace the engine's verdict.
+  if (s.hardExclusion || s.nonEnglishMarkers || s.nonEnglishLocal || s.restricted
+    || s.onsiteRequired || s.jurisdiction || s.tiedCountries?.length || s.worldwideDesc) return false;
+  const location = String(job?.location || '').trim().toLowerCase();
+  if (location && !['remote', 'remote,', 'remote job', 'anywhere', 'n/a', '-',
+    'not specified', 'remote worldwide', 'fully remote', 'global', 'worldwide'].includes(location)) return false;
+  // Ask only where the existing engine actually falls through. Checking the
+  // reason prevents earlier 'possible' conflicts (onsite/timezone/missing text)
+  // from being mistaken for the inference branch. Never change engine rules.
+  const verdict = checkEligibility({ ...job, elig_signals: { ...s, infer: undefined } }, "nigeria");
+  return verdict.eligible && verdict.confidence === "possible" && verdict.reason === "Remote — region unconfirmed";
 }
 
 const PROMPT = (job) => `You determine WHO IS LEGALLY ALLOWED TO APPLY for a job, from its posting.
@@ -138,17 +137,20 @@ stated requirement to live or be present somewhere.`;
 
 /**
  * inferEligibility(job) -> structured verdict, or null.
- * Never throws. Never blocks. Null means "we learned nothing", which leaves
- * the deterministic verdict exactly as it was.
+ * Default never throws. Null leaves the deterministic verdict unchanged.
+ * Batch jobs may opt into throwFatal to stop on permanent provider errors.
  */
-export async function inferEligibility(job) {
+export async function inferEligibility(job, { generate = generateJSON, now = Date.now, config = llmConfig, throwFatal = false } = {}) {
   if (!job?.description) return null;
   try {
-    const raw = await generateJSON(PROMPT(job), {
+    const raw = await generate(PROMPT(job), {
       timeoutMs: 20000,
       temperature: 0,
       numCtx: 8192,
       retries: 0,          // ingest runs over many jobs; a retry storm is worse than a gap
+      reasoningEffort: 'low',
+      maxCompletionTokens: 4096,
+      throwFatal,
     });
     if (!raw) return null;
 
@@ -175,8 +177,10 @@ export async function inferEligibility(job) {
     const confidence = ["high", "medium", "low"].includes(raw.confidence)
       ? raw.confidence : "low";
 
-    return { v: INFER_VERSION, scope, countries, regions, evidence, confidence };
-  } catch {
+    return { v: INFER_VERSION, scope, countries, regions, evidence, confidence,
+      at: new Date(now()).toISOString(), provider: config.provider, model: config.model };
+  } catch (error) {
+    if (throwFatal && error.fatal) throw error;
     return null;   // see NEVER BLOCKS INGEST above
   }
 }
