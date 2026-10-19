@@ -14,3 +14,5 @@ The existing nightly job is `prune-stale-jobs`, an unbounded DELETE after 45 day
 Two adversarial regression cases failed before the patch and pass afterward. Database behavior is tested in the existing isolated PostgreSQL CI workflows before any production migration application. The deterministic eligibility engine and inference contract are unchanged.
 
 Manual inference workflow dispatch now has an opt-in `trust_reports` input. It captures the existing read-only report immediately before and after the backfill, including failed enrichment runs, in the same audit artifact. It stays off for scheduled passes to avoid repeatedly downloading the full job corpus or increasing normal egress. Credentials stay in the existing GitHub Actions environment.
+
+The availability rollout must not skip recently checked legacy proofs: the due queue also selects missing/old verification versions. Once a new-version observation is persisted it leaves that version-upgrade queue, even when the outcome is honestly unknown. This makes an immediate backfill possible without negative date offsets or repeatedly checking the same batch.
