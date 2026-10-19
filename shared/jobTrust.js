@@ -12,9 +12,13 @@ export function eligibilityConfidence(job) {
     return { key: 'conditional', level: 'excluded', label: 'Not eligible', positive: false,
       reason: text(e?.reason) || 'The posting has a requirement that excludes your location.' };
   const level = e?.eligible === true && ['certain', 'likely'].includes(e.confidence) ? e.confidence : 'possible';
+  const rawReason = text(e?.reason);
+  const reason = level === 'possible' && rawReason === 'Remote — region unconfirmed'
+    ? 'The posting does not say which countries it can hire from.'
+    : rawReason || "The posting doesn't say whether applicants in your country can be hired.";
   return { key: level === 'certain' ? 'eligible' : 'conditional', level,
     label: { certain: 'High', likely: 'Good', possible: 'Unconfirmed' }[level],
-    positive: level !== 'possible', reason: text(e?.reason) || "The posting doesn't say whether applicants in your country can be hired." };
+    positive: level !== 'possible', reason };
 }
 
 function postingUrl(value) {

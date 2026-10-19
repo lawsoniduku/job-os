@@ -60,7 +60,7 @@ test('every Unconfirmed card has a visible one-line reason and a separate availa
     const j=row('uncertain',{eligibility});
     const html=renderToStaticMarkup(React.createElement(JobTrustDetails,{job:j,trust:jobTrust(j,now)}));
     assert.match(html,/Why unconfirmed:/);
-    assert.match(html,/country can be hired|region unconfirmed/);
+    assert.match(html,/country can be hired|does not say which countries it can hire from/);
     assert.match(html,/Availability: Unverified/);
     assert.doesNotMatch(html,/Availability: Verified/);
   }
@@ -116,4 +116,17 @@ test('Briefing preserves trust priority when combining independent searches', as
     row('confirmed-old',{company:'Old',title:'Assistant',posted_at:'2026-10-01T00:00:00Z',apply_url:url+'-old',verification:{...proof,evidence_url:url+'-old'}})];
   const result=await loadBriefingFeed({queries:['new','old'],country:'Nigeria',now,search:async ({q})=>({data:[jobs[q==='new'?0:1]]})});
   assert.deepEqual(result.jobs.map(j=>j.id),['confirmed-old','unconfirmed-new']);
+});
+
+test('generic engine uncertainty becomes a useful display reason without changing raw or model evidence', () => {
+  const rawReason='Remote — region unconfirmed';
+  const job=row('fallback',{eligibility:{eligible:true,confidence:'possible',reason:rawReason}});
+  assert.equal(jobTrust(job,now).eligibility.reason,'The posting does not say which countries it can hire from.');
+  assert.equal(job.eligibility.reason,rawReason);
+  const evidence='Hiring looks tied to the United States';
+  const modelReason=`Hiring looks tied to us — "${evidence}" — worth confirming before you apply`;
+  const inferred=row('model-uncertain',{eligibility:{eligible:true,confidence:'possible',reason:modelReason},elig_signals:{infer:{evidence}}});
+  assert.equal(jobTrust(inferred,now).eligibility.reason,modelReason);
+  assert.equal(inferenceAudit(inferred).evidence,evidence);
+  assert.equal(jobTrust(row('certain-text',{eligibility:{eligible:true,confidence:'certain',reason:rawReason}}),now).eligibility.reason,rawReason);
 });
