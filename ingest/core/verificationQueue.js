@@ -1,4 +1,5 @@
 import {ACTIVE_JOB_SOURCES} from '../../api/sourcePolicy.js';
+import {VERIFICATION_VERSION} from '../../api/postingVerification.js';
 import {publicationFilter,sourceVisibilityFilter} from '../../api/jobFreshness.js';
 
 export function verificationQuery(db,{limit=500,source=null,recheckDays=1,now=Date.now()}={}) {
@@ -9,7 +10,7 @@ export function verificationQuery(db,{limit=500,source=null,recheckDays=1,now=Da
     .in('source',ACTIVE_JOB_SOURCES)
     .or(sourceVisibilityFilter(now))
     .or(publicationFilter(now))
-    .or(`link_checked_at.is.null,link_checked_at.lt.${staleBefore}`);
+    .or(`link_checked_at.is.null,link_checked_at.lt.${staleBefore},elig_signals->verification->>v.is.null,elig_signals->verification->>v.neq.${VERIFICATION_VERSION}`);
   if(source)q=q.eq('source',source);
   return q.order('link_checked_at',{ascending:true,nullsFirst:true}).order('id',{ascending:true}).limit(limit);
 }

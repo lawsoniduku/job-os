@@ -18,7 +18,7 @@ create role service_role nologin;
 create table public.jobs (
   id uuid primary key, title text, company text, location text, description text,
   source text, apply_url text, link_status text,
-  posted_at timestamptz, created_at timestamptz, elig_signals jsonb
+  posted_at timestamp without time zone, created_at timestamp without time zone, elig_signals jsonb
 );
 grant select, update on public.jobs to service_role;
 
@@ -64,6 +64,7 @@ declare
   n integer;
   rejected boolean := false;
 begin
+  perform set_config('TimeZone','Pacific/Auckland',true);
   select array_agg(id order by id) into rows from public.pending_inference_jobs(
     array['jobhive'],2,5,'2026-04-22T12:00:00Z','2026-10-19T12:00:00Z',null,null,1000);
   if rows is distinct from array[
@@ -74,7 +75,7 @@ begin
     raise exception 'Wrong pending server selection: %',rows;
   end if;
   select * into first_row from public.pending_inference_jobs(array['jobhive'],2,5,'2026-04-22T12:00:00Z','2026-10-19T12:00:00Z',null,null,1);
-  select * into second_row from public.pending_inference_jobs(array['jobhive'],2,5,'2026-04-22T12:00:00Z','2026-10-19T12:00:00Z',first_row.posted_at,first_row.id,1);
+  select * into second_row from public.pending_inference_jobs(array['jobhive'],2,5,'2026-04-22T12:00:00Z','2026-10-19T12:00:00Z',first_row.posted_at at time zone 'UTC',first_row.id,1);
   if first_row.id <> '00000000-0000-4000-8000-000000000001' or second_row.id <> '00000000-0000-4000-8000-000000000002' then
     raise exception 'Microsecond keyset ordering lost';
   end if;

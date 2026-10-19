@@ -436,3 +436,14 @@ test('a failed redirected request does not inherit the previous endpoint HTTP st
  assert.equal(v.http_status,undefined,'no HTTP response was received from the redirected endpoint');
  assert.equal(JSON.parse(JSON.stringify(v)).http_status,undefined);
 });
+
+test('old verification versions are due even when recently checked, and current versions leave that queue',()=>{
+ const calls=[];const q={};
+ for(const name of ['select','in','or','eq','order','limit'])q[name]=(...args)=>{calls.push([name,...args]);return q;};
+ verificationQuery({from:()=>q},{now:trustNow});
+ const due=calls.filter(c=>c[0]==='or').at(-1)[1];
+ assert.ok(due.includes('elig_signals->verification->>v.is.null'));
+ assert.ok(due.includes(`elig_signals->verification->>v.neq.${VERIFICATION_VERSION}`));
+ assert.ok(due.includes('link_checked_at.lt.'));
+ assert.equal(calls.filter(c=>c[0]==='or').length,3);
+});

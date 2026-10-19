@@ -15,8 +15,47 @@ begin
   end if;
 end $$;
 
+-- The superseded unbounded SECURITY DEFINER RPC must not remain public.
+-- Its original body is preserved for audit; only its owner may invoke it.
+do $$
+begin
+  if to_regprocedure('public.archive_stale_jobs(integer)') is not null then
+    revoke all on function public.archive_stale_jobs(integer)
+      from public, anon, authenticated, service_role;
+  end if;
+end $$;
+
+-- Older deployments used a flat jobs-shaped archive. Keep every original row
+-- in place, privately, before installing the append-only audited event archive.
+-- Never reinterpret, overwrite or discard an unfamiliar existing archive.
+do $$
+begin
+  if to_regclass('public.jobs_archive') is not null
+    and not exists (select 1 from pg_attribute where attrelid=to_regclass('public.jobs_archive')
+      and attname='job_row' and not attisdropped) then
+    if to_regclass('public.jobs_archive_legacy_20261019') is not null then
+      raise exception 'Legacy archive preservation target already exists; inspect before applying 018';
+    end if;
+    if not exists (select 1 from pg_attribute where attrelid=to_regclass('public.jobs_archive')
+        and attname='id' and atttypid='uuid'::regtype and not attisdropped)
+      or (select count(*) from pg_attribute where attrelid=to_regclass('public.jobs_archive')
+        and attname in ('title','description','apply_url','source') and not attisdropped) <> 4 then
+      raise exception 'Unrecognized jobs_archive schema; preserve and reconcile it explicitly';
+    end if;
+    if exists (select 1 from pg_constraint where confrelid=to_regclass('public.jobs_archive')) then
+      raise exception 'Legacy archive has foreign-key dependents; review before renaming';
+    end if;
+    alter table public.jobs_archive rename to jobs_archive_legacy_20261019;
+    alter table public.jobs_archive_legacy_20261019 enable row level security;
+    revoke all on public.jobs_archive_legacy_20261019 from public, anon, authenticated;
+    grant select on public.jobs_archive_legacy_20261019 to service_role;
+    comment on table public.jobs_archive_legacy_20261019 is
+      'Original flat job archive preserved without row conversion during trust rollout.';
+  end if;
+end $$;
+
 create table if not exists public.jobs_archive (
-  archive_id bigint generated always as identity primary key,
+  archive_id bigint generated always as identity constraint jobs_archive_events_pkey primary key,
   job_id uuid not null,
   deleted_at timestamptz not null default clock_timestamp(),
   delete_reason text not null,

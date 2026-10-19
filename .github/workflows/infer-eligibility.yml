@@ -26,6 +26,10 @@ on:
       cursor:
         description: "Resume cursor from the previous inference audit (optional)"
         default: ""
+      trust_reports:
+        description: "Capture full read-only trust reports before/after this manual backfill"
+        type: boolean
+        default: false
       all:
         description: "Remove SQL date bound; discovery and deterministic gates still apply"
         type: boolean
@@ -46,6 +50,12 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Capture trust baseline
+        if: github.event_name == 'workflow_dispatch' && inputs.trust_reports
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: node scripts/trust_report.js --country nigeria --json > trust-before.json
       - name: Infer eligibility
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -71,11 +81,20 @@ jobs:
           if [ -n "$INPUT_CURSOR" ]; then args+=(--cursor "$INPUT_CURSOR"); fi
           if [ "$INPUT_ALL" = "true" ]; then args+=(--all); fi
           node ingest/infer_pending.js "${args[@]}"
+      - name: Capture trust after enrichment
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.trust_reports
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: node scripts/trust_report.js --country nigeria --json > trust-after.json
       - name: Keep inference audit (also on failure)
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: inference-audit-${{ github.run_id }}
-          path: inference-audit.json
+          path: |
+            inference-audit.json
+            trust-before.json
+            trust-after.json
           if-no-files-found: warn
           retention-days: 30
