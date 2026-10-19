@@ -1,0 +1,80 @@
+{
+  "provenance": "Synthetic offline fixture with mocked enrichment/verification. Not a production result.",
+  "jobs": [
+    {
+      "id": "00000000-0000-0000-0000-000000000001",
+      "source": "jobhive",
+      "ats_source": "bamboohr",
+      "title": "Operations Analyst",
+      "company": "Offline fixture",
+      "location": "Remote",
+      "description": "Help the team plan work, support colleagues and document processes. Help the team plan work, support colleagues and document processes. Help the team plan work, support colleagues and document processes. Help the team plan work, support colleagues and document processes. Help the team plan work, support colleagues and document processes. ",
+      "apply_url": "https://fixture.bamboohr.com/careers/1",
+      "posted_at": "2026-10-18T12:00:00Z",
+      "created_at": "2026-10-18T12:00:00Z",
+      "last_seen_at": "2026-10-19T10:00:00Z",
+      "elig_signals": {
+        "v": 5,
+        "hardExclusion": null,
+        "hardExclusions": [],
+        "hiringScopes": [],
+        "descriptionMissing": false,
+        "nonEnglishMarkers": false,
+        "nonEnglishLocal": false,
+        "restricted": false,
+        "tiedCountries": [],
+        "worldwideDesc": false,
+        "descMentionsForeign": false,
+        "insuranceLicensing": false,
+        "onsiteRequired": null,
+        "jurisdiction": null,
+        "tzFriction": false,
+        "remoteWords": true,
+        "infer": {
+          "v": 2,
+          "scope": "region",
+          "countries": [],
+          "regions": [
+            "africa"
+          ],
+          "confidence": "medium",
+          "evidence": "A fixture scope declaration.",
+          "at": "2026-10-19T10:00:00Z",
+          "model": "fixture-model"
+        },
+        "verification": {
+          "v": 4,
+          "status": "ok",
+          "provider": "employer",
+          "identity": "exact",
+          "http_status": 200,
+          "evidence_url": "https://fixture.bamboohr.com/careers/1",
+          "checked_url": "https://fixture.bamboohr.com/careers/1/detail",
+          "checked_at": "2026-10-19T10:00:00Z",
+          "title": "Operations Analyst",
+          "location": "Remote",
+          "description": "Work from anywhere in the world. Help the team plan work, support colleagues and document processes. Help the team plan work, support colleagues and document processes. Help the team plan work, support colleagues and document processes. Help the team plan work, support colleagues and document processes. Help the team plan work, support colleagues and document processes. ",
+          "remote": true,
+          "signals": {
+            "v": 5,
+            "hardExclusion": null,
+            "hardExclusions": [],
+            "hiringScopes": [],
+            "descriptionMissing": false,
+            "nonEnglishMarkers": false,
+            "nonEnglishLocal": false,
+            "restricted": false,
+            "tiedCountries": [],
+            "worldwideDesc": true,
+            "descMentionsForeign": false,
+            "insuranceLicensing": false,
+            "onsiteRequired": null,
+            "jurisdiction": null,
+            "tzFriction": false,
+            "remoteWords": true
+          }
+        }
+      }
+    }
+  ]
+}
