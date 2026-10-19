@@ -533,3 +533,25 @@ test('Recruitee mandatory locations retain Nigeria alternatives; optional office
   assert.equal(v.location,'Remote job');assert.equal(checkEligibility(applyVerification(recruiteeJob,compactVerification(v)),'nigeria').confidence,'certain');
  }
 });
+
+import {createSourceVerificationSelector} from './core/verificationQueue.js';
+test('verification rotates bounded source pages so a broad backlog cannot starve a small source',async()=>{
+ const calls=[];const pending={jobhive:[[{id:'h1'}],[{id:'h2'}],[]],myjobmag:[[{id:'m1'}],[]]};
+ const select=createSourceVerificationSelector(async(source,limit)=>{calls.push({source,limit});return pending[source].shift();},{sources:['jobhive','myjobmag']});
+ assert.deepEqual(await select(500),[{id:'h1'}]);
+ assert.deepEqual(await select(500),[{id:'m1'}]);
+ assert.deepEqual(await select(1),[{id:'h2'}]);
+ assert.deepEqual(await select(500),[]);
+ assert.deepEqual(calls,[{source:'jobhive',limit:500},{source:'myjobmag',limit:500},{source:'jobhive',limit:1},{source:'myjobmag',limit:500},{source:'jobhive',limit:500}]);
+ assert.deepEqual(await select(500),[]);assert.equal(calls.length,5);
+});
+test('verification source selection honours an explicit maintained source and exposes read failures',async()=>{
+ let calls=0;const select=createSourceVerificationSelector(async(source,limit)=>{calls++;assert.equal(source,'myjobmag');assert.equal(limit,10);throw new Error('database timeout');},{source:'myjobmag'});
+ await assert.rejects(select(10),/database timeout/);assert.equal(calls,1);
+ assert.throws(()=>createSourceVerificationSelector(async()=>[],{source:'retired-feed'}),/Unsupported/);
+});
+test('verification source selection rejects unsafe page sizes and incomplete-looking reads',async()=>{
+ let calls=0;const select=createSourceVerificationSelector(async()=>{calls++;return null;},{source:'jobhive'});
+ for(const n of [0,501,1.5,NaN])await assert.rejects(select(n),/page size/);
+ assert.equal(calls,0);await assert.rejects(select(500),/invalid page/);
+});

@@ -1,6 +1,6 @@
 import { ACTIVE_JOB_SOURCES } from "../api/sourcePolicy.js";
 import { createVerificationScheduler } from "./core/verificationScheduler.js";
-import { verificationQuery } from "./core/verificationQueue.js";
+import { verificationQuery, createSourceVerificationSelector } from "./core/verificationQueue.js";
 import { recordVerificationSummary, printVerificationSummary } from "./core/verificationDiagnostics.js";
 /** Scheduled verification of current public postings, with bounded batches.
  * Stores compact evidence in existing elig_signals JSONB; no schema change.
@@ -186,23 +186,15 @@ async function assertLivenessColumns() {
   if (error) throw new Error(`Cannot read jobs.link_status: ${error.message}`);
 }
 
-// Regions the search pre-filter actually surfaces to an African candidate
-// (see /ai/search in api/server.js). A listing tagged US / UK / Canada /
-// Regional can never appear in results, so whether its link still works is
-// information no user will ever benefit from. Measured: 18,560 of 48,673 rows
-// — 38% of the crawl — were in that unreachable set. Skipping them is free
-// coverage, not a shortcut. Pass --all-regions to check everything anyway.
-const SEARCHABLE_REGIONS = ["Nigeria", "Africa", "Global", "Remote", "EMEA", "Unknown"];
-
-async function selectBatch(limit = Math.min(LIMIT, 500)) {
+async function selectBatch(batchSource, limit = Math.min(LIMIT, 500)) {
   for (let a = 1; a <= 4; a++) {
     // Only rows the search can actually surface today — no point spending
     // requests on listings already gated out by freshness or by region.
     // Persist each batch before selecting the next: rows leave the due queue.
     // Country filters are applied at search time; check every region.
-    const { data, error } = await verificationQuery(supabase,{limit,source,recheckDays:RECHECK_DAYS});
+    const { data, error } = await verificationQuery(supabase,{limit,source:batchSource,recheckDays:RECHECK_DAYS});
     if (!error) return data || [];
-    console.log(`  ⚠️  select failed (attempt ${a}/4): ${error.message}`);
+    console.log(`  ⚠️  ${batchSource} select failed (attempt ${a}/4): ${error.message}`);
     await sleep(1500 * a);
   }
   throw new Error("Could not select verification batch after 4 attempts");
@@ -216,14 +208,15 @@ async function run() {
   const diagnostics={};
   const deadline = Date.now() + 44 * 60 * 1000;
   const scheduledVerification=createVerificationScheduler({perHost:2});
+  const nextBatch=createSourceVerificationSelector(selectBatch,{source});
   while (checked < LIMIT && Date.now() < deadline) {
     // Persist each batch before selecting again, so PostgREST's response row
     // limit cannot silently turn a requested 12,000-job sweep into 1,000 jobs.
-    const batch = await selectBatch(Math.min(500, LIMIT - checked));
+    const batch = await nextBatch(Math.min(500, LIMIT - checked));
     if (!batch.length) break;
     const results = [], queue = [...batch];
     await Promise.all(Array.from({length: CONCURRENCY}, async () => {
-      while (queue.length) {
+      while (queue.length && Date.now() < deadline) {
         const row = queue.shift();
         const verification = retainVerificationEvidence(compactVerification(await scheduledVerification(row, {timeoutMs: 12000})), row.elig_signals?.verification);
         const status = verification.status === 'ok' ? 'ok' : verification.status === 'dead' ? 'dead' : 'unknown';
