@@ -36,3 +36,11 @@ test('temporary board failures are visible while successful source rows remain r
 test('a known missing employer board remains distinct from a transient source outage',async()=>{
  assert.deepEqual(await runBatched([{slug:'retired'}],async()=>{throw Object.assign(new Error('not found'),{response:{status:404}});},'Fixture',5),[]);
 });
+
+import {GREENHOUSE_COMPANIES} from './connectors/registry.js';
+test('Moniepoint uses the observed public board API that returns its official requisitions',async t=>{
+ const previous=axios.get;t.after(()=>{axios.get=previous;});let requested;
+ axios.get=async url=>{requested=url;return {data:{jobs:[]}};};
+ await fetchGreenhouse([GREENHOUSE_COMPANIES.find(c=>c.slug==='moniepoint')]);
+ assert.equal(requested,'https://boards-api.greenhouse.io/v1/boards/moniepoint/jobs?content=true');
+});
