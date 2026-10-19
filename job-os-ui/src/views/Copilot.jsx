@@ -14,6 +14,8 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { aiSearch, aiRefine, aiClarify, aiChat, aiCvRewrite, verdictOf, fmtSalary } from "../lib/api";
 import { supabase } from "../lib/supabaseClient";
+import { jobTrust } from "../lib/eligibility";
+import { JobTrustDetails } from "../components/JobTrustDetails";
 import { track } from "../lib/track";
 import { recordApplyIntent, EARLY_STAGES } from "../lib/applyIntent";
 import { extractTextFromFile } from "../lib/extractText";
@@ -647,7 +649,7 @@ function ResultsBlock({ m, isLatest, onLoadMore, onTailor, onReport, user, busy 
         </div>
       )}
 
-      {m.sort === "newest" && m.total > 0 && <p className="ai-text">Newest first · Older listings appear when recently confirmed open · Undated listings appear last.</p>}
+      {m.total > 0 && <p className="ai-text">{m.sort === "trust_then_newest" ? "Supported eligibility and verified availability first, then newest within each group. Older listings need recent evidence that they are still open." : "Saved results — search again for current availability and ordering."}</p>}
 
       {m.total > 0 && m.locationUnconfirmed != null && <p className="ai-text">{m.locationConfirmed} have positive location evidence; {m.locationUnconfirmed} still need country confirmation. Unconfirmed roles are possibilities, not confirmed eligible matches.</p>}
 
@@ -695,7 +697,8 @@ function JobCard({ job, onTailor, onReport, user }) {
   const [reported, setReported] = useState(false);
   const v   = verdictOf(job);
   const sal = fmtSalary(job.salary_min, job.salary_max);
-  const confLabel = { certain: "High", likely: "Good", possible: "Unconfirmed" }[job.eligibility?.confidence] || "—";
+  const trust = jobTrust(job);
+  const confLabel = trust.eligibility.label;
 
   useEffect(() => {
     if (!pop && !matchPop) return;
@@ -736,14 +739,15 @@ function JobCard({ job, onTailor, onReport, user }) {
             className={`verdict ${v.key}`}
             onClick={(e) => { e.stopPropagation(); setPop((p) => !p); }}
             aria-expanded={pop}
-            title="Why this verdict"
+            title="Why this eligibility confidence"
+            aria-label={`Eligibility confidence: ${v.label}`}
           >
-            <span className="vdot" />{v.label}
+            <span className="vdot" />Eligibility: {v.label}
           </button>
           {pop && (
             <div className="popover" onClick={(e) => e.stopPropagation()}>
-              <h4>Why this verdict</h4>
-              <p style={{ margin: 0 }}>{job.eligibility?.reason || "Eligibility signal found in the posting."}</p>
+              <h4>Eligibility confidence</h4>
+              <p style={{ margin: 0 }}>{trust.eligibility.reason}</p>
               <div className="conf">Confidence: <b>{confLabel}</b>{v.key === "conditional" && " — confirm in the posting before applying"}</div>
             </div>
           )}
@@ -777,15 +781,14 @@ function JobCard({ job, onTailor, onReport, user }) {
                 </p>
               ))}
               <div className="conf" style={{ marginTop: 6 }}>
-                Role fit and location evidence drive this score. Matching results are ordered by newest posting first.
+                Role fit and location evidence drive this score. Supported eligibility and verified availability lead the results; newest postings lead within each group.
               </div>
             </div>
           )}
         </span>
       </div>
 
-      {job.match_reason && <div className="jc-why">{job.match_reason}</div>}
-      {job.verification?.status !== "ok" && <div className="jc-why">Availability not confirmed — check the posting before applying.</div>}
+      <JobTrustDetails job={job} trust={trust} />
 
       <div className="jc-meta">
         {sal && <span className="sal">{sal}</span>}

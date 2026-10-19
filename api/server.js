@@ -37,6 +37,7 @@ import {
 import { generateJSON, generateText, isLLMHealthy, llmConfig, llmState } from "../lib/llm.js";
 import { makeRequireAuth, makeRequireEmployer, makeOptionalAuth } from "./auth.js";
 import { verifyCandidates } from "./postingVerification.js";
+import { availabilityOf } from '../shared/jobTrust.js';
 import { parseSalaryFloor, fetchCandidates, rankCandidates, sanitizeFilters, compareSearchResults } from "./searchCandidates.js";
 import { employerRouter } from "./employer.js";
 
@@ -98,6 +99,7 @@ if (SUPABASE_KEY_ROLE === "anon") {
 // entire reason a search moved 1.3-2.2 MB and took 4-13s. Everything the
 // eligibility check needed from it is precomputed into `elig_signals`
 // (~200 bytes) at ingest — see migration 011 and SIGNALS_VERSION.
+// The full signals JSON retains inference quotes/audit metadata and posting proof.
 // Nothing downstream needs the description: the frontend never reads it, and
 // /ai/tailor + /ai/interview fetch it themselves by job id.
 const JOB_COLUMNS_LEAN =
@@ -147,7 +149,7 @@ async function verifiedRanking(intent, filters = {}) {
         verification: verified-scored, final_ranking: finished-verified },
       excluded: preliminary.excluded + ranked.excluded,
       duplicates: preliminary.duplicates + ranked.duplicates,
-      verificationPending: ranked.results.filter(j => j.verification?.status !== 'ok').length,
+      verificationPending: ranked.results.filter(j => availabilityOf(j).key === 'unverified').length,
       locationConfirmed: ranked.results.filter(j => ['certain','likely'].includes(j.eligibility.confidence)).length,
       locationUnconfirmed: ranked.results.filter(j => j.eligibility.confidence === 'possible').length,
     };
@@ -227,7 +229,7 @@ app.get("/ai/search", searchLimit, async (req, res) => {
       finalResults = eligible.map((j) => ({ ...j, match_reason: j.eligibility.reason }));
     }
 
-    // Keep publication-date order even when optional model scoring is enabled.
+    // Keep trust groups and publication order even when optional model scoring is enabled.
     finalResults.sort(compareSearchResults);
     const totalAvailable = finalResults.length;        // how many eligible matches exist in all
     const results = finalResults.slice(offset, offset + limit);
@@ -243,7 +245,7 @@ app.get("/ai/search", searchLimit, async (req, res) => {
     searchTiming(res, ranked, requestStarted);
     res.json({
       query: q,
-      sort: "newest",
+      sort: "trust_then_newest",
       verification_pending: ranked.verificationPending,
       location_confirmed: ranked.locationConfirmed,
       location_unconfirmed: ranked.locationUnconfirmed,
@@ -877,7 +879,7 @@ app.post("/ai/refine", searchLimit, async (req, res) => {
     searchTiming(res, ranked, requestStarted);
     res.json({
       type: "refined",
-      sort: "newest",
+      sort: "trust_then_newest",
       verification_pending: ranked.verificationPending,
       location_confirmed: ranked.locationConfirmed,
       location_unconfirmed: ranked.locationUnconfirmed,

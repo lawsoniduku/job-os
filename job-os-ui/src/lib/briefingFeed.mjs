@@ -1,5 +1,7 @@
+import { compareTrustResults } from '../../../shared/jobTrust.js';
+
 // Merge independent role searches without turning failures into empty results.
-export async function loadBriefingFeed({queries, country, search}) {
+export async function loadBriefingFeed({queries, country, search, now = Date.now()}) {
   const uniqueQueries = [...new Set(queries.filter(Boolean))];
   let next = 0;
   const results = [], failed = [];
@@ -12,8 +14,7 @@ export async function loadBriefingFeed({queries, country, search}) {
       } catch { failed.push(q); }
     }
   }));
-  const time = job => Number.isFinite(Date.parse(job.posted_at)) ? Date.parse(job.posted_at) : -Infinity;
-  results.sort((a,b) => time(b) - time(a) || (b.score || 0) - (a.score || 0) || String(a.id).localeCompare(String(b.id)));
+  results.sort((a,b) => compareTrustResults(a,b,now));
   const ids = new Set(), urls = new Set(), content = new Set();
   const jobs = results.filter(job => {
     const key = job.company && job.title ? [job.company, job.title, job.location || ''].map(s => s.toLowerCase().trim()).join('::') : null;

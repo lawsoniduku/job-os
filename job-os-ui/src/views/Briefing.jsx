@@ -13,6 +13,7 @@ import { strengthOf } from "../lib/profile";
 import { aiSearch, verdictOf, fmtSalary, daysSince } from "../lib/api";
 import { loadBriefingFeed } from "../lib/briefingFeed.mjs";
 import { recordApplyIntent } from "../lib/applyIntent";
+import { JobTrustDetails } from "../components/JobTrustDetails";
 
 export default function Briefing({ shared, active }) {
   const { user, profile, requireAuth, setView } = shared;
@@ -179,10 +180,11 @@ export default function Briefing({ shared, active }) {
           const sal = fmtSalary(job.salary_min, job.salary_max);
           return (
             <div className="row-card" key={job.id}>
-              <span className={`verdict ${v.key}`} style={{ cursor: "default" }}><span className="vdot" />{v.label}</span>
+              <span className={`verdict ${v.key}`} aria-label={`Eligibility confidence: ${v.label}`} style={{ cursor: "default" }}><span className="vdot" />Eligibility: {v.label}</span>
               <div className="rc-main">
                 <div className="rc-title">{job.title} · {job.company}</div>
-                <div className="rc-sub">{job.match_reason || job.location || ""}</div>
+                <div className="rc-sub">{job.location || ""}</div>
+                <JobTrustDetails job={job} />
               </div>
               <div className="rc-right">
                 {sal && <span className="sal">{sal}</span>}
