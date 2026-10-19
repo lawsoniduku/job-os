@@ -1,3 +1,4 @@
+import { createSearchCapabilities } from './searchCapabilities.js';
 /**
  * JOB COPILOT API SERVER v3.1 (refactored)
  * ----------------------------------------
@@ -114,78 +115,12 @@ const JOB_COLUMNS_FULL =
 
 // Reports are review hints, not proof of closure. Public inserts cannot hide jobs globally.
 
-// ── Liveness column probe ────────────────────────────────────────────────
-// The liveness gate depends on migration 010 having been run in Supabase.
-// Deploy order is not guaranteed (Render can redeploy this code before the
-// SQL is applied), and filtering on a column that doesn't exist would 500
-// EVERY search. So we probe once and simply skip the gate until the column
-// is there — degrading to today's behaviour instead of taking search down.
-let _hasLiveness = null;
-async function livenessAvailable() {
-  if (_hasLiveness !== null) return _hasLiveness;
-  const { error } = await supabase.from("jobs").select("link_status").limit(1);
-  _hasLiveness = !error;
-  console.log(error
-    ? "ℹ️  liveness gate OFF — run supabase/migrations/010_job_liveness.sql to enable"
-    : "✅ liveness gate ON");
-  return _hasLiveness;
-}
-
-// ── Lean-payload probe ───────────────────────────────────────────────────
-// Only drop `description` from the search payload once elig_signals actually
-// exists AND is populated. Two separate failure modes to avoid:
-//   - column missing (migration 011 not run)  -> query would error outright
-//   - column present but mostly NULL (backfill not run) -> checkEligibility
-//     would fall back to a description we no longer fetched, and silently
-//     mis-judge eligibility. That is far worse than being slow.
-// Requires >95% coverage before switching, and re-checks every 10 minutes so
-// the switch flips on its own once the backfill finishes — no redeploy.
-let _lean = { on: false, at: 0 };
-const LEAN_TTL_MS = 10 * 60_000;
-async function useLeanColumns() {
-  if (Date.now() - _lean.at < LEAN_TTL_MS) return _lean.on;
-  try {
-    const { count: total } = await supabase.from("jobs").select("*", { count: "exact", head: true });
-    // Count rows whose signals match the CURRENT logic version — not merely
-    // non-null. Checking null-ness was a real bug: after a SIGNALS_VERSION
-    // bump every row still has a (stale) blob, so the probe would report full
-    // coverage, switch to the lean payload, and then checkEligibility would
-    // find the blob unusable and recompute from a description that is no
-    // longer being fetched. Version-aware means a bump correctly drops
-    // coverage to 0 and search falls back to the safe path until the backfill
-    // catches up.
-    // MUST be an exact count. "estimated"/"planned" ask the planner, which
-    // cannot estimate a JSON-path filter at all: with all 48,673 rows
-    // populated it returned 1001 (estimated) and 243 (planned), so coverage
-    // read as ~2% and the lean payload silently never engaged. This runs once
-    // per 10 minutes, so ~2s of exact count is irrelevant — unlike the
-    // per-search count, which is why that one was removed entirely.
-    const { count: current, error } = await supabase.from("jobs")
-      .select("*", { count: "exact", head: true })
-      .eq("elig_signals->>v", String(SIGNALS_VERSION));
-    if (error) throw new Error(error.message);
-    const covered = total > 0 ? (current || 0) / total : 0;
-    const on = covered >= 0.95;
-    // Log the FIRST evaluation as well as any change. Logging only on change
-    // meant a probe that computed `false` (matching the initial value) said
-    // nothing at all — which is exactly how the bug above stayed invisible.
-    if (on !== _lean.on || _lean.at === 0) {
-      console.log(on
-        ? `✅ lean search payload ON — elig_signals ${(covered * 100).toFixed(1)}% populated (descriptions no longer fetched)`
-        : `ℹ️  lean payload OFF — elig_signals only ${(covered * 100).toFixed(1)}% populated; run ingest/backfill_signals.js`);
-    }
-    _lean = { on, at: Date.now() };
-  } catch {
-    _lean = { on: false, at: Date.now() };   // column absent -> stay on the safe path
-    console.log("ℹ️  lean payload OFF — run supabase/migrations/011_elig_signals.sql");
-  }
-  return _lean.on;
-}
+// Probe schema capability once per TTL. Individual stale/missing signal rows
+// are hydrated by fetchCandidates, so whole-database coverage counts are unnecessary.
+const loadSearchCapabilities = createSearchCapabilities({ db: supabase });
 
 async function searchPool(intent) {
-  const [lean, hasLiveness] = await Promise.all([
-    useLeanColumns(), livenessAvailable(),
-  ]);
+  const { lean, hasLiveness } = await loadSearchCapabilities();
   return fetchCandidates({ db: supabase, intent, lean, hasLiveness,
     columns: lean ? JOB_COLUMNS_LEAN : JOB_COLUMNS_FULL });
 }
@@ -194,13 +129,16 @@ const cachedRanking = createSearchCache();
 async function verifiedRanking(intent, filters = {}) {
   const key = JSON.stringify([intent, filters]);
   return cachedRanking(key,async()=>{
+    const started = performance.now();
     const rawJobs=await searchPool(intent);
+    const retrieved = performance.now();
     const preliminary = rankCandidates(rawJobs, intent, filters);
-    const checked = await verifyCandidates(preliminary.results, { db: supabase });
+    const checked = await verifyCandidates(preliminary.results, { budgetMs: 2000, persist: false });
     const ranked = rankCandidates(checked, intent, filters, Date.now(), true);
     const exclusionReasons={...preliminary.exclusionReasons};
     for(const [reason,count] of Object.entries(ranked.exclusionReasons)) exclusionReasons[reason]=(exclusionReasons[reason]||0)+count;
     console.log('Search exclusions:',exclusionReasons);
+    console.log('Search timing:', { retrieval_ms: Math.round(retrieved - started), checks_and_ranking_ms: Math.round(performance.now() - retrieved), total_ms: Math.round(performance.now() - started) });
     const value = { ...ranked, exclusionReasons, evaluated: rawJobs.length,
       excluded: preliminary.excluded + ranked.excluded,
       duplicates: preliminary.duplicates + ranked.duplicates,
@@ -1096,6 +1034,8 @@ app.use(
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
+  // Warm tiny schema probes during startup instead of charging the first search.
+  void loadSearchCapabilities();
   console.log(`\n🚀 Job Copilot v3.1 → http://localhost:${PORT}`);
   console.log(`🤖 ${llmConfig.model} @ ${llmConfig.url}\n`);
 });

@@ -1,3 +1,4 @@
+import { ACTIVE_JOB_SOURCES } from "../api/sourcePolicy.js";
 /**
  * ingest/infer_pending.js — LLM eligibility inference over pending rows
  * =====================================================================
@@ -82,6 +83,7 @@ async function run() {
   const SCAN = Number(arg("--scan", 3000));
   let q = supabase.from("jobs")
     .select("id, title, company, location, description, elig_signals")
+    .in("source", ACTIVE_JOB_SOURCES)
     .order("posted_at", { ascending: false })
     .limit(SCAN);
   if (!ALL) q = q.gte("posted_at", new Date(Date.now() - DAYS * 864e5).toISOString());

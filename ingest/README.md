@@ -1,8 +1,25 @@
 # Phase 3 — African Ingestion Framework
 
-A scalable, slug-driven ingestion layer. Adding a company is one line in the
-registry, not a new file. Everything stays dependency-light (axios only) and
-network-free to test (the core was validated on mock payloads).
+A slug-driven ingestion layer for direct employer career sites, paired with
+the separately scheduled, bounded JobHive importer. Adding an employer usually
+means adding its verified career-site slug to the relevant registry.
+
+## Active source policy — 19 October 2026
+
+Discovery uses JobHive and direct company listings only. The native pipeline
+fetches employer boards on Greenhouse, Lever, Ashby, Workable and SmartRecruiters,
+plus employer-owned Teamtailor RSS and Breezy career sites. Employer-authored
+postings on JobCopilot remain a direct source.
+
+Arbeitnow, Jobicy, Himalayas, We Work Remotely, Jobspresso, Remotive and MyJobMag
+are retired. Their live connector implementations have been removed. Historical
+audit documents and regression fixtures may still name them; those references
+do not reactivate ingestion. Existing database rows and saved application
+history are not deleted by this change.
+
+JobHive continues to use `import_jobhive.js` and its own workflow, admission
+budgets, eligibility gates and refresh ownership rules. Retiring aggregators
+does not expand the JobHive source inventory or bypass eligibility checks.
 
 ## Structure
 ```
@@ -16,9 +33,14 @@ ingest/
     ats/greenhouse.js  generic slug fetcher
     ats/lever.js       generic slug fetcher
     ats/ashby.js       generic slug fetcher
+    ats/workable.js    direct employer boards
+    ats/smartrecruiters.js direct employer boards
+    feeds/teamtailor.js employer-owned RSS feeds
+    feeds/breezy.js     employer-owned career-site JSON
     registry.js        the company seed list  ← edit this to add coverage
   pipeline.js      fetch → language → dedup → tag → upsert
   verify.js        pings every slug, reports LIVE vs 404 + job count
+  trace_nigeria.js read-only stage counts for Nigeria/Africa-seeded employer boards
 ```
 
 ## Run order
@@ -31,12 +53,12 @@ node enrich.js             # 3. optional: re-tag any legacy rows (now boundary-a
 ## Why this raises search quality
 - **Coverage**: seeds Paystack, Flutterwave, Kuda, Moniepoint, Wave, Andela, mPharma,
   Wasoko, Sun King, M-KOPA, Reliance Health, Helium Health, Cowrywise, Eden Life,
-  Mono, Smile ID, Vendease, Sabi, Risevest … plus global remote-friendly boards.
+  Mono, Smile ID, Vendease, Sabi, Risevest … plus direct career sites of global employers.
   Ranking can finally surface roles that are actually open to African talent because
   they're now *in the database*.
-- **Region pre-tagged**: African-HQ employers carry a `region` hint, so their roles
-  get `eligibility_region = Africa/Nigeria` even when the JD never says "Africa".
-  Search reads this precomputed field instead of re-scanning text per query.
+- **Region pre-tagged**: registry region hints assist classification; they are not
+  proof that every vacancy at an African-headquartered employer accepts every
+  African applicant. Search still evaluates the posting's actual requirements.
 - **No German jobs**: the language filter removes them before they ever hit the DB.
 - **No phantom remotes**: `remote` is inferred from real signal, not defaulted true.
 

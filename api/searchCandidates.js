@@ -1,10 +1,12 @@
+import { activeJobSources, isActiveJobSource } from './sourcePolicy.js';
 import { getAliasesForCluster, scoreJobLocally, SIGNALS_VERSION } from "./roleIntelligence.js";
 import { applyVerification, nonVacancyReason } from "./postingVerification.js";
 import { canonicalUrl } from "../ingest/core/dedup.js";
 
 import { publicationIsDiscoverable, publicationFilter, sourceVisibilityFilter } from "./jobFreshness.js";
 
-const PAGE_SIZE = 500;
+const PAGE_SIZE = 1000;
+const PARTITIONS = 4;
 const DAY = 86400000;
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // Quoting protects PostgREST's OR grammar, independently of regex escaping.
@@ -43,23 +45,24 @@ export function applyRoleQuery(query, intent) {
 export async function fetchCandidates({ db, intent, columns, lean, hasLiveness, suppressed = new Set(), now = Date.now() }) {
   if (!intent.cluster && !intent.keywords?.length) throw new Error("Include a job title or role in your search.");
   const byId = new Map();
-  // Bound each query to a UUID primary-key range. A broad OR over 50k rows
-  // can choose an unbounded index scan (especially for EA/VA/CS aliases).
-  // Sixteen disjoint ranges retain every candidate without a newest-N cap.
+  // Four disjoint UUID ranges keep broad pools parallel without imposing
+  // sixteen round trips on small searches. Production reads returned the
+  // complete software pool in one parallel wave at the REST limit of 1000.
+  // Every range still exhausts keyset pages; this is not a candidate cap.
   const boundary = n => `${n.toString(16)}0000000-0000-0000-0000-000000000000`;
   let cursor = 0;
   await Promise.all(Array.from({ length: 4 }, async () => {
-    while (cursor < 16) {
+    while (cursor < PARTITIONS) {
       const partition = cursor++;
       let after = null;
       for (;;) {
-        let query = applyRoleQuery(db.from("jobs").select(columns), intent)
+        let query = applyRoleQuery(activeJobSources(db.from("jobs").select(columns)), intent)
           .or(sourceVisibilityFilter(now))
           .or(publicationFilter(now));
         if (hasLiveness) query = query.or("link_status.is.null,link_status.neq.dead");
         if (after !== null) query = query.gt("id", after);
-        else if (partition > 0) query = query.gte("id", boundary(partition));
-        if (partition < 15) query = query.lt("id", boundary(partition + 1));
+        else if (partition > 0) query = query.gte("id", boundary(partition * 4));
+        if (partition < PARTITIONS - 1) query = query.lt("id", boundary((partition + 1) * 4));
         const { data, error } = await query.order("id", { ascending: true }).limit(PAGE_SIZE);
         if (error) throw new Error(error.message);
         if (!data?.length) break;
@@ -72,8 +75,8 @@ export async function fetchCandidates({ db, intent, columns, lean, hasLiveness, 
     }
   }));
   const rows = [...byId.values()].sort((a,b) => String(a.id).localeCompare(String(b.id)));
-  // The coverage probe permits up to 5% stale/missing signals. Hydrate precisely
-  // those rows rather than evaluating them with an absent job description.
+  // Schema capability does not imply complete signal coverage. Hydrate every
+  // stale/missing row rather than evaluating it without a job description.
   if (lean) {
     const missing = rows.filter((j) => j.elig_signals?.v !== SIGNALS_VERSION);
     for (let i = 0; i < missing.length; i += 100) {
@@ -150,7 +153,7 @@ export function rankCandidates(rows, intent, filters = {}, now = Date.now(), pos
   });
   const exclusionReasons = {};
   const matching = scored.filter((j) => {
-    const reason = j.verification?.status === 'dead' ? 'closed'
+    const reason = !isActiveJobSource(j) ? 'retired_source' : j.verification?.status === 'dead' ? 'closed'
       : j.offTarget ? 'role_mismatch' : j.eligibility.eligible === false ? 'location_eligibility'
       : nonVacancyReason(j) ? 'non_vacancy' : !matchesFilters(j,filters,now) ? 'filters_or_freshness' : null;
     if (reason) exclusionReasons[reason]=(exclusionReasons[reason] || 0)+1;

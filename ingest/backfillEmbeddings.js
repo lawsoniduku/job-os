@@ -1,3 +1,4 @@
+import { ACTIVE_JOB_SOURCES } from "../api/sourcePolicy.js";
 import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
 import { getEmbedding } from "../search/embeddings.js";
@@ -15,6 +16,7 @@ async function run() {
   const { data: jobs, error } = await supabase
     .from("jobs")
     .select("id, title, description")
+    .in("source", ACTIVE_JOB_SOURCES)
     .is("embedding", null)
     .limit(200);
 

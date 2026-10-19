@@ -4,7 +4,7 @@ import { parseIntent, scoreJobLocally, extractEligibilitySignals, SIGNALS_VERSIO
 import { parseSalaryFloor, titlePattern, applyRoleQuery, fetchCandidates, rankCandidates, matchesFilters, compareSearchResults } from "../api/searchCandidates.js";
 
 const intent = parseIntent("virtual assistant jobs open to nigeria");
-const job = (title, extra = {}) => ({ id: title, title, company: "Example", location: "Lagos, Nigeria", description: "Administrative support for our team in Nigeria.", posted_at: new Date().toISOString(), ...extra });
+const job = (title, extra = {}) => ({ id: title, source: "jobhive", apply_url: "https://example.com/jobs/" + encodeURIComponent(extra.id || extra.company || title), title, company: "Example", location: "Lagos, Nigeria", description: "Administrative support for our team in Nigeria.", posted_at: new Date().toISOString(), ...extra });
 const unrelated = [
   "Head, Commercial Finance and Procurement", "Head of Air Freight", "Research Assistant - Kaduna",
   "Research Assistant - Oyo", "Research Assistant - Sokoto", "Assistant Valuation Manager, Transaction Services",
@@ -91,10 +91,10 @@ function fakeDatabase(rows) {
       lt: (_, v) => { request.upper = v; return q; },
       order: () => q,
       limit: (v) => { request.limit = v; return q; },
-      in: (_, ids) => { request.ids = ids; return q; },
+      in: (column, values) => { if(column === "source") request.sources = values; else request.ids = values; return q; },
       then: (resolve) => {
         requests.push(request);
-        const result = rows.filter((r) => (!request.after || r.id > request.after) && (!request.lower || r.id >= request.lower) && (!request.upper || r.id < request.upper) && (!request.ids || request.ids.includes(r.id)));
+        const result = rows.filter((r) => (!request.after || r.id > request.after) && (!request.lower || r.id >= request.lower) && (!request.upper || r.id < request.upper) && (!request.ids || request.ids.includes(r.id)) && (!request.sources || request.sources.includes(r.source)));
         resolve({ data: result.slice(0, request.limit), error: null });
       },
     };
@@ -108,7 +108,7 @@ test("retrieval exhausts more than 600 candidates and applies visibility to ever
   const got = await fetchCandidates({ db, intent, columns: "id,title", lean: true, hasLiveness: true, suppressed: new Set(["0000"]) });
   assert.equal(got.length, 1204);
   assert.equal(got.at(-1).id, "1204");
-  assert.ok(db.requests.length >= 16);
+  assert.equal(db.requests.length, 5);
   for (const request of db.requests) {
     assert.ok(request.ors.some((s) => s.includes("last_seen_at.gte.")));
     assert.ok(request.ors.includes("link_status.is.null,link_status.neq.dead"));
@@ -116,11 +116,24 @@ test("retrieval exhausts more than 600 candidates and applies visibility to ever
   }
 });
 
+test("retrieval covers every UUID range with one parallel page for a small pool", async () => {
+  const ids = ['00000000-0000-0000-0000-000000000001',
+    '3fffffff-ffff-ffff-ffff-ffffffffffff', '40000000-0000-0000-0000-000000000000',
+    '7fffffff-ffff-ffff-ffff-ffffffffffff', '80000000-0000-0000-0000-000000000000',
+    'bfffffff-ffff-ffff-ffff-ffffffffffff', 'c0000000-0000-0000-0000-000000000000',
+    'ffffffff-ffff-ffff-ffff-ffffffffffff'];
+  const db = fakeDatabase(ids.map(id => job('Virtual Assistant', {id, elig_signals:{v:SIGNALS_VERSION}})));
+  const rows = await fetchCandidates({db,intent,columns:'id,title',lean:true,hasLiveness:true});
+  assert.deepEqual(rows.map(row => row.id), ids);
+  assert.equal(db.requests.length,4);
+  assert.ok(db.requests.every(request => request.limit===1000));
+});
+
 test("lean retrieval hydrates descriptions for stale and missing signals", async () => {
   const rows = [job("Virtual Assistant", { id: "1", elig_signals: null }), job("Executive Assistant", { id: "2", elig_signals: { v: 1 } })];
   const db = fakeDatabase(rows);
   const got = await fetchCandidates({ db, intent, columns: "id,title", lean: true, hasLiveness: false });
-  assert.equal(db.requests.length, 17);
+  assert.equal(db.requests.length, 5);
   assert.equal(db.requests.at(-1).columns, "id,description");
   assert.deepEqual(db.requests.at(-1).ids, ["1", "2"]);
   assert.ok(got.every((j) => j.description));
@@ -128,7 +141,7 @@ test("lean retrieval hydrates descriptions for stale and missing signals", async
 
 test("retrieval failures are surfaced instead of reporting a partial total", async () => {
   const db = { from: () => {
-    const q = { select: () => q, or: () => q, gte: () => q, lt: () => q, order: () => q, limit: () => Promise.resolve({ error: { message: "database unavailable" } }) };
+    const q = { select: () => q, or: () => q, gte: () => q, lt: () => q, in: () => q, order: () => q, limit: () => Promise.resolve({ error: { message: "database unavailable" } }) };
     return q;
   } };
   await assert.rejects(fetchCandidates({ db, intent, columns: "id" }), /database unavailable/);

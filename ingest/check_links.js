@@ -1,3 +1,4 @@
+import { ACTIVE_JOB_SOURCES } from "../api/sourcePolicy.js";
 /** Scheduled verification of current public postings, with bounded batches.
  * Stores compact evidence in existing elig_signals JSONB; no schema change.
  * A blocked/unsupported source is unknown, never falsely marked closed.
@@ -196,6 +197,7 @@ async function selectBatch(limit = Math.min(LIMIT, 500)) {
     let q = supabase
       .from("jobs")
       .select("id, apply_url, title, company, link_status, link_checked_at, elig_signals")
+      .in("source", ACTIVE_JOB_SOURCES)
       .gte("last_seen_at", liveCutoff)
       .or(`link_checked_at.is.null,link_checked_at.lt.${staleBefore}`);
     // Country filters are applied at search time; check every region.

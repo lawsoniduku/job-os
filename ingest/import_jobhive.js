@@ -1,3 +1,4 @@
+import { isActiveJobSource } from "../api/sourcePolicy.js";
 import { publicationMayBeImported } from "../api/jobFreshness.js";
 /**
  * Stream one JobHive ATS slice. Refresh only JobHive-owned rows from the same
@@ -51,7 +52,7 @@ function numericArg(name, fallback) {
 }
 const maxNewRows = numericArg("--max-new-rows", 500);
 const maxNewBytes = numericArg("--max-new-bytes", 10 * 1024 * 1024);
-const upsertBatch = createJobhiveRefreshWriter(supabase, { dryRun, sleep, maxNewRows, maxNewBytes, admitNew:row => checkEligibility(row,"nigeria").eligible !== false });
+const upsertBatch = createJobhiveRefreshWriter(supabase, { dryRun, sleep, maxNewRows, maxNewBytes, admitNew:row => isActiveJobSource(row) && checkEligibility(row,"nigeria").eligible !== false });
 
 if (!ats || ats.startsWith("--")) {
   console.error("Usage: node --env-file=.env ingest/import_jobhive.js <ats> [--limit N] [--dry-run]");

@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {verifyPosting,applyVerification,compactVerification,verifyCandidates,nonVacancyReason,redirectedToIndex,parseJobPosting,locationText,retainVerificationEvidence} from '../api/postingVerification.js';
+import {verifyPosting,applyVerification,compactVerification,verifyCandidates,nonVacancyReason,redirectedToIndex,parseJobPosting,locationText,retainVerificationEvidence,VERIFICATION_VERSION} from '../api/postingVerification.js';
 import {checkEligibility,parseIntent,SIGNALS_VERSION,extractEligibilitySignals} from '../api/roleIntelligence.js';
 import {rankCandidates} from '../api/searchCandidates.js';
 import {normalizeJob} from './core/normalize.js';
-const job={id:'1',title:'Administrative Assistant',apply_url:'https://example.bamboohr.com/careers/1',location:'Worldwide',remote:true,description:'Open to candidates worldwide.'};
+const job={id:'1',source:'jobhive',title:'Administrative Assistant',apply_url:'https://example.bamboohr.com/careers/1',location:'Worldwide',remote:true,description:'Open to candidates worldwide.'};
 const bamboo=(extra={})=>({result:{jobOpening:{jobOpeningStatus:'Open',jobOpeningName:job.title,atsLocation:{country:'Nigeria'},description:'Administrative support for the team.',locationType:'1',...extra}}});
 const response=(body,status=200,headers={})=>new Response(typeof body==='string'?body:JSON.stringify(body),{status,headers});
 const ld=j=>`<script type="application/ld+json">${JSON.stringify({'@type':'JobPosting',title:job.title,description:'Administrative support for the team.',...j})}</script>`;
@@ -45,15 +45,15 @@ test('untrusted hosts and redirects are not fetched',async()=>{
  assert.equal((await verifyPosting(job,{fetcher})).status,'unknown');assert.equal(calls,1);
 });
 test('no JSON-LD or mismatched title is unknown, not a live vacancy',async()=>{
- const j={...job,apply_url:'https://jobicy.com/jobs/123-assistant'};
+ const j={...job,apply_url:'https://jobs.ashbyhq.com/example/abc'};
  for(const html of ['<h1>Current openings</h1>',ld({title:'Software Engineer'})])assert.equal((await verifyPosting(j,{fetcher:async()=>response(html)})).status,'unknown');
 });
 test('expired structured posting is dead',async()=>{
- assert.equal((await verifyPosting({...job,apply_url:'https://jobicy.com/jobs/123-assistant'},{fetcher:async()=>response(ld({validThrough:'2001-01-01'}))})).status,'dead');
+ assert.equal((await verifyPosting({...job,apply_url:'https://jobs.ashbyhq.com/example/abc'},{fetcher:async()=>response(ld({validThrough:'2001-01-01'}))})).status,'dead');
 });
-test('WWR role address beats generated worldwide country list',async()=>{
- const v=await verifyPosting({...job,apply_url:'https://weworkremotely.com/remote-jobs/example-assistant'},{fetcher:async()=>response(ld({applicantLocationRequirements:[{'@type':'Country',name:'NG'},{'@type':'Country',name:'US'}],hiringOrganization:{address:'Remote US'},jobLocationType:'TELECOMMUTE'}))});
- assert.equal(v.location,'Remote US'); assert.equal(checkEligibility(applyVerification(job,v),'nigeria').eligible,false);
+test('direct structured posting uses applicant location instead of headquarters address',async()=>{
+ const v=await verifyPosting({...job,apply_url:'https://jobs.ashbyhq.com/example/abc'},{fetcher:async()=>response(ld({applicantLocationRequirements:[{'@type':'Country',name:'US'}],hiringOrganization:{address:'Nigeria'},jobLocationType:'TELECOMMUTE'}))});
+ assert.equal(v.provider,'employer');assert.equal(v.location,'United States'); assert.equal(checkEligibility(applyVerification(job,v),'nigeria').eligible,false);
 });
 test('remote alone does not upgrade model worldwide inference',()=>{
  const j={...job,location:'Remote',description:undefined,elig_signals:{v:3,infer:{v:2,scope:'worldwide',confidence:'high',evidence:'Location field: Remote'}}};
@@ -82,6 +82,51 @@ test('zero verification budget leaves records pending rather than verified',asyn
  const rows=await verifyCandidates([{...job,apply_url:'https://test.bamboohr.com/careers/555'}],{budgetMs:0});
  assert.equal(rows[0].verification.status,'pending');
 });
+test('search deadline bounds a non-cooperative verifier without dropping rows or known restrictions',async()=>{
+ const known=compactVerification({v:VERIFICATION_VERSION,status:'ok',checked_at:'2000-01-01T00:00:00Z',title:job.title,description:'Applicants must be based in the United States.',location:'Remote',remote:true});
+ const input=[
+  {...job,id:'deadline-restricted',apply_url:'https://example.bamboohr.com/careers/771',elig_signals:{verification:known}},
+  {...job,id:'deadline-closed',apply_url:'https://example.bamboohr.com/careers/772',elig_signals:{verification:{v:VERIFICATION_VERSION,status:'dead',checked_at:'2000-01-01T00:00:00Z',reason:'Posting removed'}}},
+  {...job,id:'deadline-pending',apply_url:'https://example.bamboohr.com/careers/773'},
+ ];
+ const signals=[];let lateReject;
+ const started=Date.now();
+ const rows=await verifyCandidates(input,{budgetMs:40,concurrency:2,persist:false,verify:(_job,{signal})=>{
+  signals.push(signal);return new Promise((_resolve,reject)=>{lateReject=reject;});
+ }});
+ assert.ok(Date.now()-started<1000,'deadline must not wait for an uncooperative ATS');
+ assert.deepEqual(rows.map(row=>row.id),input.map(row=>row.id));assert.ok(signals.every(signal=>signal.aborted));
+ assert.equal(rows[0].verification.status,'pending');assert.equal(checkEligibility(rows[0],'nigeria').eligible,false);
+ assert.equal(rows[1].verification.status,'dead');assert.equal(rows[2].verification.status,'pending');
+ lateReject(new Error('late ATS failure'));await new Promise(resolve=>setImmediate(resolve));
+});
+test('search persist:false never reads or writes database and retains all quick observations',async()=>{
+ let dbCalls=0;
+ const db={from(){dbCalls++;throw new Error('Search must not wait for database persistence');}};
+ const input=Array.from({length:3},(_,i)=>({...job,id:`memory-${i}`,apply_url:`https://example.bamboohr.com/careers/${780+i}`}));
+ const rows=await verifyCandidates(input,{db,persist:false,budgetMs:500,verify:async row=>({...row,v:VERIFICATION_VERSION,status:'ok',checked_at:new Date().toISOString(),provider:'employer'})});
+ assert.equal(dbCalls,0);assert.equal(rows.length,input.length);assert.ok(rows.every(row=>row.verification.status==='ok'));
+});
+test('verification deadline also bounds a stalled durable persistence read',async()=>{
+ let reads=0;
+ const db={from:()=>({select:()=>({eq:()=>({maybeSingle:()=>{reads++;return new Promise(()=>{});}})})})};
+ const started=Date.now();
+ const rows=await verifyCandidates([{...job,id:'slow-write',apply_url:'https://example.bamboohr.com/careers/790'}],{db,budgetMs:40,verify:async row=>({...row,v:VERIFICATION_VERSION,status:'ok',checked_at:new Date().toISOString(),provider:'employer'})});
+ assert.equal(reads,1);assert.ok(Date.now()-started<1000);assert.equal(rows.length,1);assert.equal(rows[0].verification.status,'ok');
+});
+test('rejected verifier becomes unknown while preserving conclusive restrictions',async()=>{
+ const known=compactVerification({v:VERIFICATION_VERSION,status:'ok',checked_at:'2000-01-01T00:00:00Z',title:job.title,description:'US applicants only.',location:'Remote US',remote:true});
+ const rows=await verifyCandidates([{...job,apply_url:'https://example.bamboohr.com/careers/791',elig_signals:{verification:known}}],{budgetMs:500,persist:false,verify:async()=>{throw new Error('network');}});
+ assert.equal(rows[0].verification.status,'unknown');assert.equal(checkEligibility(rows[0],'nigeria').eligible,false);
+});
+test('verifyPosting forwards caller cancellation to its outbound request',async()=>{
+ const ctrl=new AbortController();let requested;
+ const checked=verifyPosting(job,{signal:ctrl.signal,fetcher:async(_url,{signal})=>{
+  requested=signal;return new Promise((_resolve,reject)=>signal.addEventListener('abort',()=>reject(new Error('aborted')),{once:true}));
+ }});
+ ctrl.abort();const v=await checked;
+ assert.equal(requested.aborted,true);assert.equal(v.status,'unknown');
+});
 test('schema parser handles graph arrays and invalid literal newline strings',()=>{
  assert.equal(parseJobPosting('<script type="application/ld+json">{"@graph":[{"@type":"JobPosting","title":"one\ntwo"}]}</script>')[0].title,'one\ntwo');
  assert.equal(locationText({name:'NG'}),'Nigeria');
@@ -99,16 +144,6 @@ test('Lever reads the complete requirements and structured country',async()=>{
  const row={...job,apply_url:'https://jobs.lever.co/example/abcd-1234/apply'};
  const v=await verifyPosting(row,{fetcher:async()=>response({id:'abcd-1234',text:row.title,categories:{location:'Mexico'},workplaceType:'remote',description:'Support the team.',lists:[{content:'Must be based in Mexico.'}]})});
  assert.equal(v.status,'ok');assert.equal(checkEligibility(applyVerification(row,v),'nigeria').eligible,false);
-});
-test('known employer board replaces aggregator metadata and supplies direct application',async()=>{
- const row={...job,company:'Canonical',apply_url:'https://jobicy.com/jobs/123-assistant'};
- const direct='https://job-boards.greenhouse.io/canonical/jobs/1234';
- const v=await verifyPosting(row,{fetcher:async url=>response(url.endsWith('/1234')
-   ? {id:1234,title:row.title,location:{name:'Homebased - Worldwide'},content:'Open to candidates worldwide.'}
-   : {jobs:[{id:1234,title:row.title,absolute_url:direct}]})});
- assert.equal(v.provider,'employer');assert.equal(v.apply_url,direct);
- assert.equal(applyVerification(row,compactVerification(v)).apply_url,direct);
- assert.equal(checkEligibility(applyVerification(row,compactVerification(v)),'nigeria').eligible,true);
 });
 
 test('failed rechecks preserve US restrictions across repeated failures and restart', () => {
@@ -134,22 +169,19 @@ test('successful changed posting replaces old restrictions', () => {
  assert.equal(retained.last_known,undefined);
  assert.equal(checkEligibility(applyVerification(job,retained),'nigeria').eligible,true);
 });
-test('unverified board worldwide label stays discoverable but unconfirmed', () => {
- const row={...job,source:'weworkremotely',description:'Administrative support for the team.'};
- const uncertain=applyVerification(row,{status:'unknown'});
- assert.equal(checkEligibility(uncertain,'nigeria').confidence,'possible');
- assert.equal(rankCandidates([uncertain],parseIntent('virtual assistant Nigeria'),{},Date.now(),true).results.length,1);
- assert.equal(checkEligibility(applyVerification({...row,description:'Open to candidates worldwide.'},{status:'unknown'}),'nigeria').confidence,'certain');
-});
-
-test('Affirm aggregator copy resolves to employer US restriction',async()=>{
- const row={...job,title:'Administrative Assistant IV',company:'Affirm',apply_url:'https://weworkremotely.com/remote-jobs/affirm-administrative-assistant-iv'};
- const v=await verifyPosting(row,{fetcher:async url=>response(url.endsWith('/7850544003')
- ? {id:7850544003,title:row.title,location:{name:'Remote US'},content:'Administrative support for our engineering team.'}
- : {jobs:[{id:7850544003,title:row.title,absolute_url:'https://job-boards.greenhouse.io/affirm/jobs/7850544003'}]})});
+test('Affirm direct employer posting preserves US restriction',async()=>{
+ const row={...job,title:'Administrative Assistant IV',company:'Affirm',apply_url:'https://job-boards.greenhouse.io/affirm/jobs/7850544003'};
+ const v=await verifyPosting(row,{fetcher:async()=>response({id:7850544003,title:row.title,location:{name:'Remote US'},content:'Administrative support for our engineering team.'})});
  assert.equal(v.provider,'employer');
  assert.equal(checkEligibility(applyVerification(row,compactVerification(v)),'nigeria').eligible,false);
  assert.equal(checkEligibility(applyVerification(row,compactVerification(v)),'us').eligible,true);
+});
+test('retired sources are never fetched or resolved through employer boards',async()=>{
+ for(const apply_url of ['https://weworkremotely.com/remote-jobs/example','https://jobicy.com/jobs/example','https://himalayas.app/companies/example/jobs/assistant','https://myjobmag.com/job/assistant','https://www.myjobmag.com/job/assistant','https://www.arbeitnow.com/jobs/assistant','https://remotive.com/remote-jobs/assistant','https://remoteok.com/remote-jobs/assistant']) {
+  let calls=0;
+  const v=await verifyPosting({...job,company:'Canonical',apply_url},{fetcher:async()=>{calls++;return response(ld({}));}});
+  assert.equal(v.status,'unknown');assert.equal(calls,0);
+ }
 });
 
 test('v3 clean employer evidence keeps restrictions after source signals upgrade', () => {
