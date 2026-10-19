@@ -1,4 +1,5 @@
-import { ACTIVE_JOB_SOURCES, isActiveJobSource } from "../api/sourcePolicy.js";
+import {buildDigestFeeds,digestPreferenceKey} from "./core/digestFeed.js";
+import {buildDigestEmail} from "./core/digestEmail.js";
 /**
  * ingest/send_digest.js
  * ======================
@@ -15,7 +16,7 @@ import { ACTIVE_JOB_SOURCES, isActiveJobSource } from "../api/sourcePolicy.js";
  * USAGE:
  *   node --env-file=.env ingest/send_digest.js            (send to everyone)
  *   node --env-file=.env ingest/send_digest.js --dry-run  (build emails, print, send nothing)
- *   node --env-file=.env ingest/send_digest.js --test=you@example.com  (send ONLY to this address)
+ *   node --env-file=.env ingest/send_digest.js --test=you@example.com --country=Nigeria  (send ONLY to this address)
  */
 
 import dotenv from "dotenv";
@@ -27,6 +28,7 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY
 const RESEND_KEY = process.env.RESEND_API_KEY;
 const FROM_ADDRESS = process.env.DIGEST_FROM_ADDRESS || "JobCopilot <digest@resend.dev>";
 const SITE_URL = process.env.SITE_URL || "https://job-os-tau.vercel.app";
+const API_URL = process.env.DIGEST_API_URL || process.env.API_URL || "https://job-os-z27v.onrender.com";
 
 const args = process.argv.slice(2);
 const dryRun = args.includes("--dry-run");
@@ -36,90 +38,6 @@ if (!RESEND_KEY && !dryRun) {
   console.error("Missing RESEND_API_KEY in environment. Get a free key at resend.com,");
   console.error("or run with --dry-run to preview without sending.");
   process.exit(1);
-}
-
-// Roles a candidate can pursue regardless of specific country match.
-const KEEP_REGIONS = new Set(["Africa", "Nigeria", "Global", "Remote"]);
-
-async function fetchNewRoles({ country, roleCluster }) {
-  const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-  let query = supabase
-    .from("jobs")
-    .select("title, company, apply_url, role_cluster, eligibility_region, posted_at, location, source")
-    .in("source", ACTIVE_JOB_SOURCES)
-    .gte("posted_at", since)
-    .order("posted_at", { ascending: false })
-    .limit(500);
-
-  const { data, error } = await query;
-  if (error) throw new Error(error.message);
-
-  let jobs = (data || []).filter((j) => isActiveJobSource(j) && KEEP_REGIONS.has(j.eligibility_region));
-
-  // country preference: keep explicitly-that-country roles PLUS global/remote
-  // (never narrow to ONLY that country — global/remote is always relevant too)
-  if (country) {
-    jobs = jobs.filter(
-      (j) => j.eligibility_region === "Nigeria" || j.eligibility_region === "Africa" ||
-             (j.location || "").toLowerCase().includes(country.toLowerCase()) ||
-             ["Global", "Remote"].includes(j.eligibility_region)
-    );
-  }
-  if (roleCluster) {
-    jobs = jobs.filter((j) => j.role_cluster === roleCluster);
-  }
-
-  return jobs;
-}
-
-function groupByCluster(jobs) {
-  const groups = {};
-  for (const j of jobs) {
-    const key = j.role_cluster || "Other";
-    (groups[key] ||= []).push(j);
-  }
-  // biggest groups first, same as OpenRemote's layout
-  return Object.entries(groups).sort((a, b) => b[1].length - a[1].length);
-}
-
-function buildEmailHtml({ jobs, unsubscribeToken }) {
-  const groups = groupByCluster(jobs);
-  const weekOf = new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
-
-  const sections = groups
-    .map(([cluster, list]) => {
-      const rows = list
-        .slice(0, 15) // cap per section so the email doesn't become enormous
-        .map(
-          (j) => `
-        <tr>
-          <td style="padding:8px 0; border-bottom:1px solid #eee;">
-            <a href="${j.apply_url}" style="color:#2563eb; text-decoration:none; font-weight:600;">${escapeHtml(j.title)}</a>
-            <div style="color:#666; font-size:13px;">${escapeHtml(j.company || "")} · ${escapeHtml(j.location || j.eligibility_region)}</div>
-          </td>
-        </tr>`
-        )
-        .join("");
-      return `
-      <h3 style="margin:24px 0 8px; font-size:16px; color:#111;">${escapeHtml(cluster)} <span style="color:#888; font-weight:normal;">(${list.length})</span></h3>
-      <table style="width:100%; border-collapse:collapse;">${rows}</table>`;
-    })
-    .join("");
-
-  return `
-  <div style="font-family:system-ui,-apple-system,sans-serif; max-width:600px; margin:0 auto; padding:20px;">
-    <h1 style="font-size:20px; color:#111;">${jobs.length} new eligible roles this week</h1>
-    <p style="color:#666; font-size:14px;">Week of ${weekOf} — roles you can actually get, not just roles that exist.</p>
-    ${sections || "<p>No new eligible roles matched your preferences this week — check back soon.</p>"}
-    <p style="margin-top:32px; font-size:12px; color:#999;">
-      <a href="${SITE_URL}/app" style="color:#2563eb;">Open JobCopilot</a> to search anytime.<br/>
-      <a href="${SITE_URL}/digest/unsubscribe?token=${unsubscribeToken}" style="color:#999;">Unsubscribe</a>
-    </p>
-  </div>`;
-}
-
-function escapeHtml(s = "") {
-  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
 async function sendOne(to, html, subject) {
@@ -145,7 +63,7 @@ async function run() {
 
   let subscribers;
   if (testArg) {
-    subscribers = [{ email: testArg, country: null, role_cluster: null, unsubscribe_token: "test" }];
+    subscribers = [{ email: testArg, country: args.find(a=>a.startsWith("--country="))?.slice(10) || null, role_cluster: args.find(a=>a.startsWith("--role="))?.slice(7) || null, unsubscribe_token: "test" }];
   } else {
     const { data, error } = await supabase
       .from("digest_subscribers")
@@ -161,23 +79,29 @@ async function run() {
     return;
   }
 
+  // Complete discovery before sending so a failed page cannot produce a partial digest.
+  const feeds = await buildDigestFeeds({db:supabase,preferences:subscribers});
   let sent = 0, failed = 0, skippedEmpty = 0;
   for (const sub of subscribers) {
-    const jobs = await fetchNewRoles({ country: sub.country, roleCluster: sub.role_cluster });
+    const feed = feeds.get(digestPreferenceKey(sub));
+    if (feed.reason) { console.log(`  Skipped subscriber: ${feed.reason}`); skippedEmpty++; continue; }
+    const jobs = feed.jobs;
     if (jobs.length === 0) { skippedEmpty++; continue; } // don't email an empty digest
-    const html = buildEmailHtml({ jobs, unsubscribeToken: sub.unsubscribe_token });
+    const html = buildDigestEmail({ jobs, unsubscribeToken: sub.unsubscribe_token, siteUrl:SITE_URL, apiUrl:API_URL });
     const subject = `${jobs.length} new eligible roles this week`;
     const ok = await sendOne(sub.email, html, subject);
     if (ok) {
       sent++;
       if (!dryRun && !testArg) {
-        await supabase.from("digest_subscribers").update({ last_sent_at: new Date().toISOString() }).eq("email", sub.email);
+        const {error} = await supabase.from("digest_subscribers").update({ last_sent_at: new Date().toISOString() }).eq("email", sub.email);
+        if (error) { failed++; console.error(`Digest delivery timestamp failed: ${error.message}`); }
       }
     } else failed++;
     await new Promise((r) => setTimeout(r, 250)); // gentle pacing, respects Resend's rate limits
   }
 
   console.log(`\n📊 DONE — sent: ${sent} | failed: ${failed} | skipped (no new matches): ${skippedEmpty}\n`);
+  if (failed) process.exitCode = 1;
 }
 
 run().catch((e) => { console.error(e); process.exit(1); });
