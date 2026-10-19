@@ -88,7 +88,7 @@ export function jobTrust(job, now = Date.now()) {
 // Stable across backend ranking and the merge of independent Briefing searches.
 export function compareTrustResults(a, b, now = Date.now()) {
   const postedTime = job => {
-    const at = timestamp(job?.posted_at);
+    const at = job?.elig_signals?.source?.publication_unknown ? NaN : timestamp(job?.posted_at);
     return Number.isFinite(at) ? at : -Infinity;
   };
   return jobTrust(a, now).bucket - jobTrust(b, now).bucket
