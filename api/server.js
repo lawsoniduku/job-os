@@ -133,13 +133,18 @@ async function verifiedRanking(intent, filters = {}) {
     const rawJobs=await searchPool(intent);
     const retrieved = performance.now();
     const preliminary = rankCandidates(rawJobs, intent, filters);
+    const scored = performance.now();
     const checked = await verifyCandidates(preliminary.results, { budgetMs: 2000, persist: false });
+    const verified = performance.now();
     const ranked = rankCandidates(checked, intent, filters, Date.now(), true);
+    const finished = performance.now();
     const exclusionReasons={...preliminary.exclusionReasons};
     for(const [reason,count] of Object.entries(ranked.exclusionReasons)) exclusionReasons[reason]=(exclusionReasons[reason]||0)+count;
     console.log('Search exclusions:',exclusionReasons);
     console.log('Search timing:', { retrieval_ms: Math.round(retrieved - started), checks_and_ranking_ms: Math.round(performance.now() - retrieved), total_ms: Math.round(performance.now() - started) });
     const value = { ...ranked, exclusionReasons, evaluated: rawJobs.length,
+      timings: { started, retrieval: retrieved-started, scoring: scored-retrieved,
+        verification: verified-scored, final_ranking: finished-verified },
       excluded: preliminary.excluded + ranked.excluded,
       duplicates: preliminary.duplicates + ranked.duplicates,
       verificationPending: ranked.results.filter(j => j.verification?.status !== 'ok').length,
@@ -148,6 +153,16 @@ async function verifiedRanking(intent, filters = {}) {
     };
     return value;
   });
+}
+
+// Standard response diagnostics distinguish request work from reused rankings.
+function searchTiming(res, ranked, requestStarted) {
+  const entries = [`app;dur=${(performance.now()-requestStarted).toFixed(1)}`];
+  if (ranked.timings?.started >= requestStarted) {
+    for (const key of ['retrieval','scoring','verification','final_ranking'])
+      entries.push(`${key};dur=${ranked.timings[key].toFixed(1)}`);
+  } else entries.push('ranking_cache;desc="reused"');
+  res.set('Server-Timing', entries.join(', '));
 }
 
 function publicIntent(intent, filters = {}) {
@@ -166,6 +181,7 @@ app.get("/health", async (_req, res) => {
 // SEARCH
 // ============================================================
 app.get("/ai/search", searchLimit, async (req, res) => {
+  const requestStarted = performance.now();
   try {
     const { q, limit: limitParam = "20", offset: offsetParam = "0", country: profileCountry } = req.query;
     if (!q) return res.status(400).json({ error: "Missing query" });
@@ -224,6 +240,7 @@ app.get("/ai/search", searchLimit, async (req, res) => {
       ? `No matching roles for "${q}". Try broader terms.`
       : `Found ${totalAvailable} ${intent.cluster || "matching"} role${totalAvailable !== 1 ? "s" : ""}${locPart}${filteredPart}. ${ranked.locationConfirmed} have positive location evidence; ${ranked.locationUnconfirmed} need country confirmation.`;
 
+    searchTiming(res, ranked, requestStarted);
     res.json({
       query: q,
       sort: "newest",
@@ -772,6 +789,7 @@ Instructions:
 // produce a new search query (graceful fallback).
 // ============================================================
 app.post("/ai/refine", searchLimit, async (req, res) => {
+  const requestStarted = performance.now();
   try {
     const { refinement = "", activeIntent, limit: limitParam = 20, offset: offsetParam = 0 } = req.body;
     const limit = Math.max(1, Math.min(parseInt(limitParam) || 20, 50));
@@ -856,6 +874,7 @@ app.post("/ai/refine", searchLimit, async (req, res) => {
     if (employmentFilter) parts.push(employmentFilter.replace("_", "-"));
     const description = parts.length ? `Filtered to ${parts.join(", ")}` : "Refined";
 
+    searchTiming(res, ranked, requestStarted);
     res.json({
       type: "refined",
       sort: "newest",
