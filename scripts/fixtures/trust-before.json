@@ -1,0 +1,18 @@
+{
+  "provenance": "Synthetic offline fixture. Not a production metric.",
+  "jobs": [
+    {
+      "id": "00000000-0000-0000-0000-000000000001",
+      "source": "jobhive",
+      "ats_source": "bamboohr",
+      "title": "Operations Analyst",
+      "company": "Offline fixture",
+      "location": "Remote",
+      "description": "Help the team plan work, support colleagues and document processes. Help the team plan work, support colleagues and document processes. Help the team plan work, support colleagues and document processes. Help the team plan work, support colleagues and document processes. Help the team plan work, support colleagues and document processes. ",
+      "apply_url": "https://fixture.bamboohr.com/careers/1",
+      "posted_at": "2026-10-18T12:00:00Z",
+      "created_at": "2026-10-18T12:00:00Z",
+      "last_seen_at": "2026-10-19T10:00:00Z"
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "generatedAt": "2026-10-19T12:00:00.000Z",
+  "country": "nigeria",
+  "rows": 1,
+  "discoveryAgeDays": 180,
+  "definitions": {
+    "confidentEligibility": "Eligible=true and confidence=certain/likely from the deterministic engine for the target country; model-only coverage is separate.",
+    "verifiedAvailability": "Same independent availability policy used by job cards (fresh, current, identified posting evidence).",
+    "pendingInference": "Discoverable, no current-version inference, needsInference=true and engine returns Remote — region unconfirmed.",
+    "deadLinkShare": "Confirmed dead rows divided by all stored rows for that source, including hidden/retired rows.",
+    "unknownAvailability": "Discoverable rows without current verified availability; reasons and ATS counts included.",
+    "scope": "Freshness, source and closure gates only; no role query or personal skill fit. Each page is read at request time, not a transactionally frozen snapshot."
+  },
+  "sources": [
+    {
+      "source": "jobhive",
+      "rows": 1,
+      "discoverable": 1,
+      "confidentEligibility": 1,
+      "verifiedAvailability": 1,
+      "pendingInference": 0,
+      "currentInference": 1,
+      "auditableInference": 1,
+      "deadLinks": 0,
+      "unknownAvailability": 0,
+      "unknownReasons": {},
+      "platforms": {
+        "bamboohr": {
+          "discoverable": 1,
+          "pendingInference": 0,
+          "unknownAvailability": 0
+        }
+      },
+      "confidentEligibilityPct": 100,
+      "verifiedAvailabilityPct": 100,
+      "deadLinkPct": 0,
+      "unknownAvailabilityPct": 0,
+      "availabilityNeedsExplanation": false
+    }
+  ]
+}

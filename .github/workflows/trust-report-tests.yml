@@ -1,0 +1,21 @@
+name: Trust report checks
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: node --test scripts/trust_report.test.js
+      - name: Fixture accounting only (no credentials)
+        run: |
+          node scripts/trust_report.js --fixture scripts/fixtures/trust-before.json --at 2026-10-19T12:00:00Z --json > /tmp/trust-before.json
+          node scripts/trust_report.js --fixture scripts/fixtures/trust-after.json --at 2026-10-19T12:00:00Z --json > /tmp/trust-after.json

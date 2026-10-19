@@ -1,0 +1,12 @@
+{
+  "provenance": "User-supplied production baseline; not independently queried during this work.",
+  "date": "2026-10-19",
+  "aiEligibilityVerdicts": 111,
+  "storedJobs": 31126,
+  "pendingDiscoverableJobhive": { "bamboohr": 1943, "icims": 192 },
+  "unknownAvailabilityPct": { "icims": 90.9, "recruitee": 90.1, "phenom": 82.2, "ycombinator": 100 },
+  "deadLinkPct": { "bamboohr": 29.7, "lever": 65.8, "myjobmag": 35.5 },
+  "orphanApplications": 253,
+  "after": null,
+  "afterStatus": "Pending user-run migrations, backfill and read-only report. No production calls made."
+}
