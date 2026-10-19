@@ -1,5 +1,5 @@
 import { activeJobSources, isActiveJobSource } from './sourcePolicy.js';
-import { getAliasesForCluster, scoreJobLocally, SIGNALS_VERSION } from "./roleIntelligence.js";
+import { getAliasesForCluster, scoreJobLocally, checkEligibility, SIGNALS_VERSION } from "./roleIntelligence.js";
 import { applyVerification, nonVacancyReason } from "./postingVerification.js";
 import { canonicalUrl } from "../ingest/core/dedup.js";
 
@@ -143,22 +143,30 @@ export function compareSearchResults(a, b) {
 }
 
 export function rankCandidates(rows, intent, filters = {}, now = Date.now(), postingChecksApplied = false) {
-  const scored = rows.map((sourceJob) => {
-    // Consult persisted employer evidence before source text can exclude the job.
-    // This also retains confirmed restrictions/closure through transient failures.
+  const exclusionReasons = {};
+  const matching = [];
+  const exclude = reason => {exclusionReasons[reason]=(exclusionReasons[reason] || 0)+1;};
+  for (const sourceJob of rows) {
+    // Employer evidence must be applied before source geography can exclude a
+    // job. These decisive gates cannot be changed by its title/relevance score.
     const job = sourceJob.verification ? sourceJob : sourceJob.elig_signals?.verification
       ? applyVerification(sourceJob, sourceJob.elig_signals.verification) : sourceJob;
-    const r = scoreJobLocally(job, intent);
-    return { ...job, score: r.score, eligibility: r.eligibility, offTarget: r.offTarget, match_breakdown: r.breakdown, match_reason: r.eligibility.reason };
-  });
-  const exclusionReasons = {};
-  const matching = scored.filter((j) => {
-    const reason = !isActiveJobSource(j) ? 'retired_source' : j.verification?.status === 'dead' ? 'closed'
-      : j.offTarget ? 'role_mismatch' : j.eligibility.eligible === false ? 'location_eligibility'
+    const earlyReason = !isActiveJobSource(job) ? 'retired_source'
+      : job.verification?.status === 'dead' ? 'closed' : null;
+    if (earlyReason) {exclude(earlyReason);continue;}
+    const eligibility = intent.locationCountry ? checkEligibility(job,intent.locationCountry) : null;
+    // Dual role/location failures are counted by location; exclusion totals do not change.
+    if (eligibility?.eligible === false) {exclude('location_eligibility');continue;}
+
+    // All eligible/uncertain candidates retain the full scorer and its remote
+    // requirement checks, reusing the same country verdict instead of rereading it.
+    const r = scoreJobLocally(job, intent, eligibility);
+    const j = {...job,score:r.score,eligibility:r.eligibility,offTarget:r.offTarget,
+      match_breakdown:r.breakdown,match_reason:r.eligibility.reason};
+    const reason = j.offTarget ? 'role_mismatch' : j.eligibility.eligible === false ? 'location_eligibility'
       : nonVacancyReason(j) ? 'non_vacancy' : !matchesFilters(j,filters,now) ? 'filters_or_freshness' : null;
-    if (reason) exclusionReasons[reason]=(exclusionReasons[reason] || 0)+1;
-    return !reason;
-  });
+    if (reason) exclude(reason); else matching.push(j);
+  }
   matching.sort(compareSearchResults);
   const urls = new Set(), contents = new Set();
   const results = matching.filter((j) => {
@@ -170,5 +178,5 @@ export function rankCandidates(rows, intent, filters = {}, now = Date.now(), pos
     if (key) contents.add(key);
     return true;
   });
-  return { results, evaluated: scored.length, excluded: scored.length - matching.length, duplicates: matching.length - results.length, exclusionReasons };
+  return { results, evaluated: rows.length, excluded: rows.length - matching.length, duplicates: matching.length - results.length, exclusionReasons };
 }

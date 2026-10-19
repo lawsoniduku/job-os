@@ -2057,13 +2057,16 @@ const ELIG_MAX = 35;   // how sure we are it's actually open to you
 const BONUS_MAX = 15;  // freshness + salary listed
 const BONUS_FLOOR = 12; // how far a stale posting can be pushed down
 
-export function scoreJobLocally(job, intent) {
+export function scoreJobLocally(job, intent, precomputedEligibility = null) {
   const title = ` ${(job.title || "").toLowerCase()} `;
   const desc = (job.description || "").toLowerCase();
 
-  // STEP 1: eligibility gate
+  // STEP 1: eligibility gate. The ranking pipeline can reuse the verdict it
+  // just computed for this same job/country; every default caller is unchanged.
   let eligibility = { eligible: true, confidence: "possible", reason: "" };
-  if (intent.locationCountry) {
+  if (precomputedEligibility) {
+    eligibility = {...precomputedEligibility};
+  } else if (intent.locationCountry) {
     eligibility = checkEligibility(job, intent.locationCountry);
   } else {
     // Without the user's country, remote is a working arrangement, not an
