@@ -18,6 +18,7 @@ import { fetchWorkable } from "./connectors/ats/workable.js";
 import { fetchSmartRecruiters } from "./connectors/ats/smartrecruiters.js";
 import { fetchTeamtailor } from "./connectors/feeds/teamtailor.js";
 import { fetchBreezy } from "./connectors/feeds/breezy.js";
+import { fetchMyJobMag } from "./connectors/feeds/myjobmag.js";
 import {
   GREENHOUSE_COMPANIES, LEVER_COMPANIES, ASHBY_COMPANIES,
   WORKABLE_COMPANIES, SMARTRECRUITERS_COMPANIES,
@@ -31,11 +32,11 @@ dotenv.config();
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
 async function run() {
-  console.log("\n🚀 INGESTION PIPELINE v3.3 (direct employer ATS)\n========================================\n");
+  console.log("\n🚀 INGESTION PIPELINE v3.3 (employer ATS + MyJobMag Nigeria)\n========================================\n");
 
-  // 1. FETCH — direct company ATS boards and employer-owned feeds only.
-  // JobHive has its own bounded importer/workflow; aggregator connectors are retired.
-  console.log("Fetching direct employer ATS boards...");
+  // 1. FETCH — employer boards plus the retained MyJobMag Nigeria feed.
+  // JobHive has its own bounded importer/workflow; six other boards stay retired.
+  console.log("Fetching employer ATS boards and MyJobMag Nigeria...");
   const settled = await Promise.allSettled([
     fetchGreenhouse(GREENHOUSE_COMPANIES),
     fetchLever(LEVER_COMPANIES),
@@ -44,8 +45,9 @@ async function run() {
     fetchSmartRecruiters(SMARTRECRUITERS_COMPANIES || []),
     fetchTeamtailor(),
     fetchBreezy(),
+    fetchMyJobMag(),
   ]);
-  const sourceNames = ["greenhouse", "lever", "ashby", "workable", "smartrecruiters", "teamtailor", "breezy"];
+  const sourceNames = ["greenhouse", "lever", "ashby", "workable", "smartrecruiters", "teamtailor", "breezy", "myjobmag"];
   let jobs = [], sourceFailures = 0;
   settled.forEach((result, index) => {
     if (result.status === "fulfilled") jobs.push(...result.value);

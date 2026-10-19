@@ -3,10 +3,11 @@
 Reviewed 2026-10-18 against the surgical working tree. This is a code and contract map, not a claim that every authenticated flow has been exercised in production.
 
 Source policy updated 2026-10-19: the native pipeline now fetches direct employer
-ATS/career sites only (Greenhouse, Lever, Ashby, Workable, SmartRecruiters,
-Teamtailor and Breezy). JobHive remains separate, and employer-authored postings
-remain supported. Live aggregator connectors were removed; earlier audit
-descriptions are historical. Existing database rows and application snapshots
+ATS/career sites (Greenhouse, Lever, Ashby, Workable, SmartRecruiters,
+Teamtailor and Breezy) plus the retained MyJobMag Nigeria feed. JobHive remains
+separate, and employer-authored postings remain supported. Six other boards
+(Arbeitnow, Jobicy, Himalayas, We Work Remotely, Jobspresso and Remotive) are retired;
+earlier audit descriptions of those connectors are historical. Existing database rows and application snapshots
 are not deleted by source retirement. `api/sourcePolicy.js` restricts search,
 digests and ongoing verification/inference/enrichment to maintained sources.
 Retired board URLs cannot bypass discovery policy under a JobHive source label.
@@ -22,7 +23,7 @@ Retired board URLs cannot bypass discovery policy under a JobHive source label.
 
 | Producer | Authoritative record | Search projection and ownership rule |
 |---|---|---|
-| Native direct ATS/career-site connectors | External employer posting | `ingest/pipeline.js` normalizes, tags, deduplicates and writes `jobs`. Native connector ownership must survive overlap with JobHive. |
+| Native ATS/career-site connectors and MyJobMag Nigeria | External employer posting or retained Nigeria feed | `ingest/pipeline.js` normalizes, tags, deduplicates and writes `jobs`. Native connector ownership must survive overlap with JobHive. |
 | JobHive CSV importer | Upstream ATS dataset row | `ingest/import_jobhive.js` streams one ATS slice, rejects out-of-scope rows, normalizes/tags, deduplicates, then uses `core/jobhiveRefreshWriter.js`. Existing rows are refreshed only when owned by JobHive for the same ATS; IDs, creation time and application links survive. Native ingestion continues to use the separate insert-only `core/jobhiveWriter.js`. |
 | Employer console | `job_postings`, organization-scoped | `api/employer.js` mirrors open postings into `jobs` with `source=ats_source=employer` and `/apply/:postingId`. Draft/closed postings are removed from search. JobHive and stale pruning must not acquire ownership of this projection. |
 | Eligibility extraction/inference | Posting evidence, not applicant identity | Versioned `jobs.elig_signals` supports lean search; inference and verification may add evidence. A source refresh must recompute source-derived signals when content changes without discarding conclusive employer verification. |

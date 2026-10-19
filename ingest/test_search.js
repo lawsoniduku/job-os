@@ -289,7 +289,7 @@ test('older current-year employer-confirmed roles survive both ranking passes wi
 test('early exclusions retain source and closure precedence over country checks',()=>{
   const rows=[
     job('Greaser',{id:'country-and-role',location:'Paris, France'}),
-    job('Greaser',{id:'retired',source:'myjobmag',location:'Paris, France'}),
+    job('Greaser',{id:'retired',source:'remotive',location:'Paris, France'}),
     job('Greaser',{id:'closed',location:'Paris, France',verification:{status:'dead'}}),
     job('Virtual Assistant',{id:'possible',location:'Remote',description:'Provide administrative support.'}),
     job('Virtual Assistant',{id:'confirmed',location:'Worldwide',description:'Work from anywhere.'}),
