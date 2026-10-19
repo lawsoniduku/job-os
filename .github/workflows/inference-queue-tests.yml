@@ -3,12 +3,14 @@ on:
   pull_request:
     paths:
       - 'supabase/migrations/017_inference_queue.sql'
+      - 'supabase/migrations/020_inference_discovery_freshness.sql'
       - 'scripts/test_inference_queue.sql'
       - '.github/workflows/inference-queue-tests.yml'
   push:
     branches: [main]
     paths:
       - 'supabase/migrations/017_inference_queue.sql'
+      - 'supabase/migrations/020_inference_discovery_freshness.sql'
       - 'scripts/test_inference_queue.sql'
       - '.github/workflows/inference-queue-tests.yml'
 permissions:
@@ -36,5 +38,5 @@ jobs:
       PGDATABASE: jobos_inference_test_ci
     steps:
       - uses: actions/checkout@v4
-      - name: Exercise migration 017 in disposable PostgreSQL only
+      - name: Exercise inference migrations in disposable PostgreSQL only
         run: psql --no-psqlrc --set ON_ERROR_STOP=1 --file scripts/test_inference_queue.sql

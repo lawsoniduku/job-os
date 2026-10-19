@@ -17,12 +17,13 @@ create role authenticated nologin;
 create role service_role nologin;
 create table public.jobs (
   id uuid primary key, title text, company text, location text, description text,
-  source text, apply_url text, link_status text,
+  source text, apply_url text, link_status text, last_seen_at timestamptz,
   posted_at timestamp without time zone, created_at timestamp without time zone, elig_signals jsonb
 );
 grant select, update on public.jobs to service_role;
 
 \ir ../supabase/migrations/017_inference_queue.sql
+\ir ../supabase/migrations/020_inference_discovery_freshness.sql
 
 begin;
 insert into public.jobs(id,title,company,location,description,source,apply_url,link_status,posted_at,created_at,elig_signals)
@@ -74,6 +75,13 @@ begin
     '00000000-0000-4000-8000-000000000017'::uuid,'00000000-0000-4000-8000-000000000018'::uuid] then
     raise exception 'Wrong pending server selection: %',rows;
   end if;
+  -- Source-stale rows must not consume model calls, while recently checked
+  -- current openings retain the same discovery exception as search.
+  update public.jobs set last_seen_at='2026-08-01T00:00:00Z' where id='00000000-0000-4000-8000-000000000012';
+  if exists(select 1 from public.pending_inference_jobs(array['jobhive'],2,5,'2026-04-22T12:00:00Z','2026-10-19T12:00:00Z',null,null,1000) where id='00000000-0000-4000-8000-000000000012') then raise exception 'Stale source reached model queue'; end if;
+  update public.jobs set elig_signals=elig_signals||'{"verification":{"status":"ok","checked_at":"2026-10-19T11:00:00Z"}}'::jsonb where id='00000000-0000-4000-8000-000000000012';
+  if not exists(select 1 from public.pending_inference_jobs(array['jobhive'],2,5,'2026-04-22T12:00:00Z','2026-10-19T12:00:00Z',null,null,1000) where id='00000000-0000-4000-8000-000000000012') then raise exception 'Recent employer proof lost source visibility'; end if;
+  update public.jobs set last_seen_at=null,elig_signals='{"v":4,"hardExclusion":"obsolete"}'::jsonb where id='00000000-0000-4000-8000-000000000012';
   select * into first_row from public.pending_inference_jobs(array['jobhive'],2,5,'2026-04-22T12:00:00Z','2026-10-19T12:00:00Z',null,null,1);
   select * into second_row from public.pending_inference_jobs(array['jobhive'],2,5,'2026-04-22T12:00:00Z','2026-10-19T12:00:00Z',first_row.posted_at at time zone 'UTC',first_row.id,1);
   if first_row.id <> '00000000-0000-4000-8000-000000000001' or second_row.id <> '00000000-0000-4000-8000-000000000002' then

@@ -12,8 +12,14 @@ on:
         description: "Lookback; blank uses MAX_DISCOVERY_AGE_DAYS (currently 180)"
         default: ""
       limit:
-        description: "Max postings (each may make one retry)"
+        description: "Max postings; quota budgets may defer remaining work"
         default: "300"
+      max_requests:
+        description: "Background model-call budget; keep capacity for live product AI"
+        default: "100"
+      max_tokens:
+        description: "Background token budget; actual usage replaces reservations"
+        default: "60000"
       scan:
         description: "Max server-selected queue candidates to examine"
         default: "20000"
@@ -50,6 +56,13 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Restore quota reset observations
+        uses: actions/cache/restore@v4
+        with:
+          path: inference-quota.json
+          key: inference-quota-v1-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            inference-quota-v1-${{ runner.os }}-${{ github.ref_name }}-
       - name: Capture trust baseline
         if: github.event_name == 'workflow_dispatch' && inputs.trust_reports
         env:
@@ -65,8 +78,16 @@ jobs:
           # Repository variable wins over the legacy secret. Blank uses the
           # validated client default openai/gpt-oss-120b.
           GROQ_MODEL: ${{ vars.GROQ_MODEL || secrets.GROQ_MODEL }}
-          INFER_CONCURRENCY: "2"
-          INFER_PACE_MS: "1200"
+          # Admission uses observed account headers. A serial background worker
+          # avoids bursting a shared organization quota ahead of live users.
+          INFER_CONCURRENCY: "1"
+          INFER_MAX_REQUESTS: ${{ inputs.max_requests || vars.INFER_MAX_REQUESTS || '100' }}
+          INFER_MAX_TOKENS: ${{ inputs.max_tokens || vars.INFER_MAX_TOKENS || '60000' }}
+          INFER_REQUEST_RESERVE: ${{ vars.INFER_REQUEST_RESERVE || '100' }}
+          INFER_TOKEN_RESERVE: ${{ vars.INFER_TOKEN_RESERVE || '1000' }}
+          INFER_MAX_QUOTA_WAIT_MS: "60000"
+          INFER_QUOTA_STATE_PATH: inference-quota.json
+          INFER_PACE_MS: "2200"
           INPUT_DAYS: ${{ inputs.days }}
           INPUT_LIMIT: ${{ inputs.limit || '300' }}
           INPUT_SCAN: ${{ inputs.scan || '20000' }}
@@ -81,12 +102,33 @@ jobs:
           if [ -n "$INPUT_CURSOR" ]; then args+=(--cursor "$INPUT_CURSOR"); fi
           if [ "$INPUT_ALL" = "true" ]; then args+=(--all); fi
           node ingest/infer_pending.js "${args[@]}"
+      - name: Preserve quota reset observations
+        if: always() && hashFiles('inference-quota.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: inference-quota.json
+          key: inference-quota-v1-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Capture trust after enrichment
         if: always() && github.event_name == 'workflow_dispatch' && inputs.trust_reports
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: node scripts/trust_report.js --country nigeria --json > trust-after.json
+      - name: Show enrichment outcome and deferred work
+        if: always()
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import {readFile,appendFile} from 'node:fs/promises';
+          let audit;
+          try {audit=JSON.parse(await readFile('inference-audit.json','utf8'));}
+          catch {await appendFile(process.env.GITHUB_STEP_SUMMARY,'Inference did not produce a readable audit. Inspect the failed step.\n');process.exit(0);}
+          const rows=[['Selected',audit.selected??0],['Saved',audit.written??0],['Resolved',audit.resolved??0],['Unclear',audit.unclear??0],['Skipped changed postings',audit.skipped??0],['Deferred pending work',audit.deferred??0],['Provider calls',audit.calls??0],['Failed calls',audit.callFailures??0]];
+          let body='### Eligibility enrichment\n\n| Outcome | Count |\n|---|---:|\n'+rows.map(([label,value])=>`| ${label} | ${value} |`).join('\n')+'\n\n';
+          if(audit.deferReason)body+=`Deferred: ${audit.deferReason}. ${audit.retryAt ? `Retry after ${audit.retryAt}.`:'Per-run budget reached; the next scheduled run starts with newest pending work.'}\n\n`;
+          if(audit.fatal)body+='The run stopped on an operational failure; inspect the audit and failed step.\n';
+          await appendFile(process.env.GITHUB_STEP_SUMMARY,body);
+          NODE
       - name: Keep inference audit (also on failure)
         if: always()
         uses: actions/upload-artifact@v4
@@ -94,6 +136,7 @@ jobs:
           name: inference-audit-${{ github.run_id }}
           path: |
             inference-audit.json
+            inference-quota.json
             trust-before.json
             trust-after.json
           if-no-files-found: warn
