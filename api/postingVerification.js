@@ -4,12 +4,15 @@ import { cleanText } from '../ingest/core/normalize.js';
 import { extractEligibilitySignals, SIGNALS_VERSION } from './roleIntelligence.js';
 import { OBSERVED_POSTING_HOSTS } from './postingHosts.js';
 
-// v4 requires exact posting identity and records the actual HTTP evidence.
-export const VERIFICATION_VERSION = 4;
+// v5 adds exact MyJobMag proof and required Recruitee application locations.
+export const VERIFICATION_VERSION = 5;
 const TTL = 6 * 60 * 60 * 1000;
 const cache = new Map();
 const recruiteeTenant = hostname => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.recruitee\.com$/i.test(hostname);
 const icimsTenant = hostname => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.icims\.com$/i.test(hostname);
+// This custom host's same-origin public offer endpoint was checked against a
+// live, exact Tether vacancy on Oct 19. Other custom hosts keep structured checks.
+const observedRecruiteeApiHost = hostname => hostname==='careers.tether.io';
 const customRecruitee = hostname => Object.hasOwn(OBSERVED_POSTING_HOSTS.recruitee, hostname);
 const phenomHost = hostname => Object.hasOwn(OBSERVED_POSTING_HOSTS.phenom, hostname);
 const myjobmagHost = hostname => ['myjobmag.com','www.myjobmag.com'].includes(hostname);
@@ -48,10 +51,43 @@ function postingRoute(u) {
   if (icimsTenant(u.hostname)) return u.pathname.match(/^\/jobs\/(\d+)\/(?:[^/]+\/)?job\/?$/i)?.[1] || null;
   if (phenomHost(u.hostname)) return u.pathname.match(/^\/(?:(?:global|[a-z]{2}(?:-[a-z]{2})?)\/){0,2}job\/([a-z0-9_-]+)(?:\/[^/]+)?\/?$/i)?.[1] || null;
   if (customRecruitee(u.hostname)) return u.pathname.match(/^\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?o\/([a-z0-9][a-z0-9-]*)(?:\/c\/new)?\/?$/i)?.[1] || null;
-  if (myjobmagHost(u.hostname)) return u.pathname.match(/^\/job\/([a-z0-9][a-z0-9-]*)\/?$/i)?.[1] || null;
+  if (myjobmagHost(u.hostname)) {
+    if(u.pathname==='/a_fields.php') {
+      const ids=u.searchParams.getAll('id');
+      return ids.length===1 && /^[1-9]\d*$/.test(ids[0]) ? `id:${ids[0]}` : null;
+    }
+    const numeric=u.pathname.match(/^\/job\/([1-9]\d*)\/([a-z0-9][a-z0-9-]*)\/?$/i);
+    return numeric ? `id:${numeric[1]}` : u.pathname.match(/^\/job\/([a-z0-9][a-z0-9-]*)\/?$/i)?.[1] || null;
+  }
   return null;
 }
-function exactStructuredIdentity(posting, requested, current) {
+function exactMyJobMagIdentity(posting, requested, current, html) {
+  // The live RSS links numeric IDs; the publisher redirects these to canonical
+  // slugs. Its JobPosting omits URL/identifier, but the main heading retains the
+  // exact ID. Bind all three signals, never a recommended card or a 200 index.
+  if(!myjobmagHost(current.hostname) || !postingRoute(current) || current.pathname==='/a_fields.php') return false;
+  const explicit=list(posting.url || posting.mainEntityOfPage).filter(Boolean);
+  if(explicit.length && !explicit.some(value=>{
+    try { const u=new URL(typeof value==='object'?value['@id']:value,current); return allowed(u) && myjobmagHost(u.hostname) && u.pathname===current.pathname; } catch {return false;}
+  })) return false;
+  const canonicals=[...html.matchAll(/<link\b[^>]*>/gi)].filter(m=>/\brel=["']canonical["']/i.test(m[0]));
+  if(canonicals.length!==1) return false;
+  const href=canonicals[0][0].match(/\bhref=["']([^"']+)["']/i)?.[1];
+  try { const canonical=new URL(decode(href),current); if(!allowed(canonical) || canonical.origin!==current.origin || canonical.pathname!==current.pathname) return false; } catch {return false;}
+  const main=[...html.matchAll(/<h2\b[^>]*\bid=["']job([1-9]\d*)["'][^>]*>([\s\S]*?)<\/h2>/gi)].filter(m=>{
+    const title=m[2].match(/<span\b[^>]*\bclass=["']subjob-title["'][^>]*>([\s\S]*?)<\/span>/i)?.[1];
+    return normalizedTitle(title)===normalizedTitle(posting.title);
+  });
+  if(main.length!==1) return false;
+  const requestedRoute=postingRoute(requested);
+  return requestedRoute?.startsWith('id:') ? requestedRoute===`id:${main[0][1]}` : requested.pathname===current.pathname;
+}
+function exactStructuredIdentity(posting, requested, current, html) {
+  if(myjobmagHost(requested.hostname)) {
+    const exact=exactMyJobMagIdentity(posting,requested,current,html);
+    if(requested.pathname==='/a_fields.php') return exact;
+    if(exact) return true;
+  }
   // A recommended vacancy can have the same title. Its URL must still identify
   // this vacancy on this origin. Ignore tracking queries only on ID-bound paths.
   const urls=list(posting.url || posting.mainEntityOfPage).map(v=>typeof v==='object'?v?.['@id']:v).filter(Boolean);
@@ -100,6 +136,10 @@ export function parseJobPosting(html) {
   }
   return found;
 }
+function retryAfterMs(value) {
+  if(/^\d+(?:\.\d+)?$/.test(value || '')) return Math.max(0,Math.ceil(Number(value)*1000));
+  const at=Date.parse(value);return Number.isFinite(at)?Math.max(0,at-Date.now()):60000;
+}
 async function readResponse(url, fetcher, signal, expectedOrigin=new URL(url).origin, observe=()=>{}) {
   let current = new URL(url);
   const originMatches=u=>u.origin===expectedOrigin || (myjobmagHost(new URL(expectedOrigin).hostname) && myjobmagHost(u.hostname));
@@ -109,7 +149,7 @@ async function readResponse(url, fetcher, signal, expectedOrigin=new URL(url).or
     // fails must not inherit the prior endpoint's redirect HTTP status.
     observe({checked_url:current.href,http_status:undefined});
     const r = await fetcher(current.href, {redirect:'manual',signal,headers:{'User-Agent':'JobCopilotVerification/1.0','Accept':'application/json,text/html'}});
-    observe({checked_url:current.href,http_status:r.status});
+    observe({checked_url:current.href,http_status:r.status,...(r.status===429?{retry_after_ms:retryAfterMs(r.headers.get('retry-after'))}:{})});
     if ([301,302,303,307,308].includes(r.status)) {
       const next = new URL(r.headers.get('location'),current);
       if(!allowed(next) || !originMatches(next)) throw new Error('Unexpected employer redirect');
@@ -131,7 +171,7 @@ async function readResponse(url, fetcher, signal, expectedOrigin=new URL(url).or
 // a malformed or ambiguous deadline cannot prove that a vacancy is closed.
 function explicitTimestamp(value) {
   if(typeof value !== 'string') return NaN;
-  const normalized=value.trim().replace(/ UTC$/, 'Z').replace(' ', 'T');
+  const normalized=value.trim().replace(/ UTC$/, 'Z').replace(' ', 'T').replace(/([+-]\d{2})(\d{2})$/, '$1:$2');
   const m=normalized.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/);
   if(!m) return NaN;
   const [,year,month,day,hour,minute,second]=m.map(Number);
@@ -142,7 +182,7 @@ export async function verifyPosting(job, {fetcher=fetch, now=Date.now(), timeout
   const at = new Date(now).toISOString();
   let observation={evidence_url:job.apply_url};
   const observe=details=>{observation={...observation,...details};};
-  const unknown = reason => ({v:VERIFICATION_VERSION,status:'unknown',checked_at:at,...observation,reason});
+  const unknown = reason => ({v:VERIFICATION_VERSION,status:'unknown',checked_at:at,...observation,reason,...(/^(?:Source cannot yet be verified|Unsupported employer vacancy URL)$/.test(reason)?{retryable:false}:{})});
   const closed = result => ({...result,v:VERIFICATION_VERSION,checked_at:at,...observation});
   const ctrl = new AbortController(), timer = setTimeout(()=>ctrl.abort(),timeoutMs);
   const abort=()=>ctrl.abort();
@@ -155,7 +195,7 @@ export async function verifyPosting(job, {fetcher=fetch, now=Date.now(), timeout
     const read=(url,origin=new URL(url).origin)=>readResponse(url,fetcher,ctrl.signal,origin,observe);
     const strictStructured=icimsTenant(u.hostname) || phenomHost(u.hostname) || customRecruitee(u.hostname) || myjobmagHost(u.hostname);
     if(strictStructured && !postingRoute(u)) return unknown('Unsupported employer vacancy URL');
-    const recruitee=recruiteeTenant(u.hostname);
+    const recruitee=recruiteeTenant(u.hostname) || observedRecruiteeApiHost(u.hostname);
     const offerPath=path.match(/^\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?o\/([a-z0-9][a-z0-9-]*)(?:\/c\/new)?\/?$/i);
     if(recruitee && !offerPath) return unknown('Unsupported employer vacancy URL');
     const gh=path.match(/^\/([^/]+)\/jobs\/(\d+)/);
@@ -172,11 +212,16 @@ export async function verifyPosting(job, {fetcher=fetch, now=Date.now(), timeout
       if(typeof j.description!=='string' || !cleanText(decode(j.description),Infinity)) return unknown('Posting description is missing');
       if(j.requirements!=null && typeof j.requirements!=='string') return unknown('Employer requirements unavailable');
       provider='employer';
-      // For remote vacancies, country/city/locations describe office metadata,
-      // not applicant residency. The full body still supplies hiring limits.
+      // A generic Remote label is only work mode. A visible, mandatory
+      // application location choice supplies this vacancy's actual locations.
+      // Otherwise office metadata alone cannot narrow explicit global hiring.
       const remote=j.remote===true;
       const location=typeof j.location==='string' ? j.location.trim() : '';
-      payload={title:j.title,description:[j.description,typeof j.requirements==='string'?j.requirements:''].filter(Boolean).join('\n'),location:location || (remote?'Remote':list(j.locations).map(locationText).filter(Boolean).join('; ') || locationText(j)),remote};
+      const requiredLocations=j.location_question_visible===true && j.locations_question_required===true
+        && ['multiple_choice','single_choice','dropdown'].includes(j.locations_question_type)
+        ? list(j.locations).map(locationText).filter(Boolean).join('; ') : '';
+      payload={title:j.title,description:[j.description,typeof j.requirements==='string'?j.requirements:''].filter(Boolean).join('\n'),location:requiredLocations || location || (remote?'Remote':list(j.locations).map(locationText).filter(Boolean).join('; ') || locationText(j)),remote,
+        ...(requiredLocations ? {location_evidence:'Employer application requires a listed work location'} : {})};
     } else if(['job-boards.greenhouse.io','boards.greenhouse.io'].includes(u.hostname) && gh) {
       const r=await read(`https://boards-api.greenhouse.io/v1/boards/${gh[1]}/jobs/${gh[2]}`);
       if(r.status)return closed(r);
@@ -219,7 +264,7 @@ export async function verifyPosting(job, {fetcher=fetch, now=Date.now(), timeout
         if(/verify you are human|checking your browser|just a moment|attention required|enable javascript and cookies|performing security verification/i.test(r.text.slice(0,5000))) return unknown('Source verification blocked');
         const postings=parseJobPosting(r.text);
         const requested=new URL(job.apply_url);
-        const j=postings.find(j=>normalizedTitle(j.title)===normalizedTitle(job.title) && (strictStructured ? exactStructuredIdentity(j,requested,u) : exactExistingStructuredIdentity(j,requested,u)));
+        const j=postings.find(j=>normalizedTitle(j.title)===normalizedTitle(job.title) && (strictStructured ? exactStructuredIdentity(j,requested,u,r.text) : exactExistingStructuredIdentity(j,requested,u)));
         if(!j) return unknown('Exact vacancy could not be verified');
         if(j.validThrough && structuredExpiration(j.validThrough)<now) return closed({status:'dead',reason:'Posting has expired'});
         let loc=list(j.applicantLocationRequirements?.length?j.applicantLocationRequirements:j.applicantLocationRequirements || j.jobLocation).map(locationText).filter(Boolean).join('; ');
