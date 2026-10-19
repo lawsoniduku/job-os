@@ -792,7 +792,7 @@ function JobCard({ job, onTailor, onReport, user }) {
 
       <div className="jc-meta">
         {sal && <span className="sal">{sal}</span>}
-        {job.posted_at && <span>{fmtPosted(job.posted_at)}</span>}
+        {job.elig_signals?.source?.publication_unknown ? <span>Posting date unknown</span> : job.posted_at && <span>{fmtPosted(job.posted_at)}</span>}
         {job.source && <span>{job.source}</span>}
       </div>
 
@@ -1146,7 +1146,7 @@ function applySignal(job) {
   const src = (job.ats_source || job.source || "").toLowerCase();
   const direct = DIRECT_ATS.some((a) => src.includes(a));
   let ageDays = null;
-  if (job.posted_at) ageDays = Math.floor((Date.now() - new Date(job.posted_at).getTime()) / 86400000);
+  if (job.posted_at && !job.elig_signals?.source?.publication_unknown) ageDays = Math.floor((Date.now() - new Date(job.posted_at).getTime()) / 86400000);
 
   // Freshness drives the headline read.
   if (ageDays != null && ageDays <= 2) {

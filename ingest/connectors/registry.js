@@ -73,6 +73,7 @@ export const LEVER_COMPANIES = [
 
 // ── ASHBY ──────────────────────────────────────────────────────
 export const ASHBY_COMPANIES = [
+  { slug: "testgorilla", name: "TestGorilla" }, // Public board verified October 19, 2026; no geography hint.
   // Nigerian / African ✅
   { slug: "sabi",     name: "Sabi",   region: "Africa"  },
   { slug: "lemfi",    name: "LemFi",  region: "Nigeria" },

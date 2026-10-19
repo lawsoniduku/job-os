@@ -24,14 +24,16 @@ import {
   WORKABLE_COMPANIES, SMARTRECRUITERS_COMPANIES,
 } from "./connectors/registry.js";
 import { looksEnglishJob } from "./core/language.js";
-import { dedupe } from "./core/dedup.js";
+import { canonicalUrl } from "./core/dedup.js";
 import { tagJob } from "./core/tag.js";
-import { createJobhiveWriter } from "./core/jobhiveWriter.js";
+import { createNativeRefreshWriter } from "./core/nativeRefreshWriter.js";
 
 dotenv.config();
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
 async function run() {
+  // Order overlapping imports by collection start, independently of publication.
+  const observedAt = new Date().toISOString();
   console.log("\n🚀 INGESTION PIPELINE v3.3 (employer ATS + MyJobMag Nigeria)\n========================================\n");
 
   // 1. FETCH — employer boards plus the retained MyJobMag Nigeria feed.
@@ -53,6 +55,9 @@ async function run() {
     if (result.status === "fulfilled") jobs.push(...result.value);
     else {
       sourceFailures++;
+      // Keep independently successful employers, but never report a source
+      // outage as a successful empty board or touch unseen jobs.
+      if (Array.isArray(result.reason?.partialJobs)) jobs.push(...result.reason.partialJobs);
       console.error(`❌ ${sourceNames[index]} fetch failed: ${result.reason?.message || result.reason}`);
     }
   });
@@ -67,8 +72,14 @@ async function run() {
   jobs = jobs.filter((j) => looksEnglishJob(j));
   console.log(`🌍 English-only: ${jobs.length} (dropped ${before - jobs.length} non-English)`);
 
-  // 3. DEDUP (url + content key)
-  jobs = dedupe(jobs);
+  // 3. Deduplicate exact application identities. Distinct URLs with matching
+  // titles/locations can be separate positions, and both owned rows need refresh.
+  const seenUrls = new Set();
+  jobs = jobs.filter(job => {
+    const url = canonicalUrl(job.apply_url);
+    if (!url || seenUrls.has(url)) return false;
+    seenUrls.add(url); return true;
+  });
   console.log(`🧹 Unique: ${jobs.length}`);
 
   // 4. TAG (role_cluster, seniority, remote_type, eligibility_region)
@@ -81,51 +92,27 @@ async function run() {
   const reachable = africaCount + globalCount + remoteCount;
   console.log(`🏷  Tagged. Africa/Nigeria: ${africaCount} | Global: ${globalCount} | Remote: ${remoteCount} | → Reachable: ${reachable}`);
 
-  // Use the same bounded retries and malformed-row isolation as JobHive.
+  // Refresh only the source that owns each URL. Preserve independent evidence.
   const BATCH = 50;
   let ok = 0, fail = 0;
-  const acceptedUrls = [];
+  let inserted = 0, updated = 0, collisions = 0, partial = 0, stale = 0;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const upsertBatch = createJobhiveWriter(supabase);
+  const upsertBatch = createNativeRefreshWriter(supabase, { observedAt });
 
   for (let i = 0; i < jobs.length; i += BATCH) {
-    const batch = jobs.slice(i, i + BATCH).map(({ _region_hint, ...row }) => row);
+    const batch = jobs.slice(i, i + BATCH);
     const result = await upsertBatch(batch);
     ok += result.accepted;
     fail += result.failedRows.length;
-    const failedUrls = new Set(result.failedRows.map((j) => j.apply_url));
-    acceptedUrls.push(...batch.filter((j) => !failedUrls.has(j.apply_url)).map((j) => j.apply_url));
+    inserted += result.inserted; updated += result.updated;
+    collisions += result.collisions; partial += result.partialSkipped; stale += result.staleSkipped;
     await sleep(150); // gentle pacing so we don't overwhelm the connection
   }
-  console.log(`\n✅ ACCEPTED (including existing): ${ok} | ❌ FAILED: ${fail}`);
-
-  // 6. TOUCH last_seen_at for EVERY job seen this run (new or existing).
-  // The upsert above ignores duplicates, so it never refreshes existing rows.
-  // We separately stamp last_seen_at = now() for all apply_urls in this batch,
-  // updating ONLY that column (so cleaned descriptions / reclassified clusters
-  // are never overwritten). This powers the nightly stale-job prune: jobs that
-  // stop appearing in feeds stop being touched, and age out after 60 days.
-  const nowIso = new Date().toISOString();
-  const urls = [...new Set(acceptedUrls.filter(Boolean))];
-  let touched = 0, touchFailures = 0;
-  for (let i = 0; i < urls.length; i += BATCH) {
-    const slice = urls.slice(i, i + BATCH);
-    try {
-      const { error } = await supabase
-        .from("jobs")
-        .update({ last_seen_at: nowIso })
-        .in("apply_url", slice);
-      if (error) throw new Error(error.message);
-      touched += slice.length;
-    } catch (error) {
-      touchFailures += slice.length;
-      console.error(`❌ Freshness update failed for ${slice.length} candidates: ${error.message}`);
-    }
-    await sleep(120);
-  }
-  console.log(`🕒 last_seen refresh accepted: ${touched} | failed: ${touchFailures}\n`);
-  if (sourceFailures || fail || touchFailures) {
-    console.error(`Incomplete ingestion: ${sourceFailures} source failures, ${fail} failed rows, ${touchFailures} failed freshness updates`);
+  console.log(`\n✅ Saved: ${ok} (${inserted} new, ${updated} refreshed) | collisions: ${collisions} | incomplete: ${partial} | stale: ${stale} | ❌ failed: ${fail}`);
+  // There is deliberately no separate URL-only last_seen UPDATE: a rejected
+  // observation or another owner's URL must not gain source freshness.
+  if (sourceFailures || fail) {
+    console.error(`Incomplete ingestion: ${sourceFailures} source failures, ${fail} failed rows`);
     process.exitCode = 1;
   }
 }

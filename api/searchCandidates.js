@@ -117,7 +117,7 @@ export function matchesFilters(job, filters, now = Date.now()) {
   if (!publicationIsDiscoverable(job, now)) return false;
   const f = sanitizeFilters(filters);
   if (f.salFloor && ![job.salary_min, job.salary_max].some((s) => s != null && Number(s) >= f.salFloor)) return false;
-  if (f.maxAgeDays && !(Date.parse(job.posted_at) >= now - f.maxAgeDays * DAY)) return false;
+  if (f.maxAgeDays && (job.elig_signals?.source?.publication_unknown || !(Date.parse(job.posted_at) >= now - f.maxAgeDays * DAY))) return false;
   if (f.sourceFilter && ![job.source, job.ats_source].some((s) => String(s || "").toLowerCase().split(/[:/]/).includes(f.sourceFilter))) return false;
   if (f.employmentFilter && String(job.employment_type || "").toLowerCase().replace(/[- ]/g, "_") !== f.employmentFilter) return false;
   if (f.seniorityFilter) {

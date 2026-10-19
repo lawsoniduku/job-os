@@ -42,7 +42,12 @@ async function fetchBoard({ slug, name, region }) {
           title: j.text,
           company: name,
           location,
-          description: j.descriptionPlain || j.description || "",
+          // The main introduction omits lists and the additional/closing
+          // sections, which frequently contain residence/authorisation rules.
+          description: [j.openingPlain || j.opening, j.descriptionPlain || j.description,
+            ...(Array.isArray(j.lists) ? j.lists.flatMap(section => [section.text, section.content]) : []),
+            j.additionalPlain || j.additional, j.closingPlain || j.closing,
+          ].filter(Boolean).join("\n\n"),
           apply_url: j.hostedUrl,
           department: j.categories?.team || null,
           employment_type: j.categories?.commitment || null,

@@ -25,20 +25,26 @@ async function fetchBoard({ slug, name, region }) {
   const url = `https://api.smartrecruiters.com/v1/companies/${slug}/postings?limit=100`;
   const res = await axios.get(url, { timeout: 12000, headers: UA });
   return (res.data?.content || [])
-    .map((p) =>
-      normalizeJob(
+    .map((p) => {
+      const sections = p.jobAd?.sections || {};
+      const description = ['companyDescription', 'jobDescription', 'qualifications', 'additionalInformation']
+        .map(key => sections[key]?.text).filter(Boolean).join("\n\n");
+      const job = normalizeJob(
         {
           title: p.name,
           company: name || p.company?.name || slug,
           location: loc(p),
-          description: p.jobAd?.sections?.jobDescription?.text || p.releasedDate ? (p.name || "") : "",
+          description: description || p.name || "",
           apply_url: `https://jobs.smartrecruiters.com/${slug}/${p.id}`,
           posted_at: p.releasedDate || null,
           created_at: p.releasedDate || null,
         },
         { source: "smartrecruiters", ats: "smartrecruiters", company: name, region }
-      )
-    )
+      );
+      return job ? { ...job, _source_observation: {
+        description_complete: Boolean(sections.jobDescription?.text && sections.qualifications?.text),
+      } } : null;
+    })
     .filter(Boolean);
 }
 

@@ -1,0 +1,19 @@
+name: Native source integrity checks
+on:
+  pull_request:
+    paths: ['ingest/pipeline.js', 'ingest/core/nativeRefreshWriter.js', 'ingest/connectors/**', 'ingest/test_native*.js', 'ingest/test_publication_metadata.js', 'api/searchCandidates.js', 'shared/jobTrust.js', 'job-os-ui/src/views/Copilot.jsx', '.github/workflows/native-refresh-tests.yml']
+  push:
+    branches: [main]
+    paths: ['ingest/pipeline.js', 'ingest/core/nativeRefreshWriter.js', 'ingest/connectors/**', 'ingest/test_native*.js', 'ingest/test_publication_metadata.js', 'api/searchCandidates.js', 'shared/jobTrust.js', 'job-os-ui/src/views/Copilot.jsx', '.github/workflows/native-refresh-tests.yml']
+permissions:
+  contents: read
+jobs:
+  source-integrity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: node --test ingest/test_native_refresh.js ingest/test_native_connectors.js ingest/test_publication_metadata.js

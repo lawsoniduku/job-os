@@ -13,7 +13,7 @@
  */
 
 import axios from "axios";
-import { normalizeJob } from "../../core/normalize.js";
+import { normalizeJob, parseDate } from "../../core/normalize.js";
 
 const UA = { "User-Agent": "Mozilla/5.0 (compatible; job-copilot/3.1)", Accept: "application/json" };
 
@@ -45,9 +45,9 @@ function normalizeBreezyJob(p, site) {
   const fid = pickField(p, "friendly_id", "_id", "id");
   const apply = pickField(p, "url", "apply_url") ||
     (fid ? `https://${site.sub}.breezy.hr/p/${fid}` : `https://${site.sub}.breezy.hr/`);
-  const date = pickField(p, "published_date", "creation_date", "updated_date") || null;
+  const date = pickField(p, "published_date", "creation_date") || null;
 
-  return normalizeJob(
+  const job = normalizeJob(
     {
       title: typeof title === "string" ? title : String(title),
       company: site.name,
@@ -64,6 +64,10 @@ function normalizeBreezyJob(p, site) {
     },
     { source: "breezy", ats: "breezy", company: site.name, region: site.region }
   );
+  return job ? { ...job, _source_observation: {
+    updated_at: parseDate(p.updated_date),
+    description_complete: Boolean(p.description),
+  } } : null;
 }
 
 async function fetchOneSite(site) {
