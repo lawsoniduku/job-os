@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseIntent, scoreJobLocally, extractEligibilitySignals, SIGNALS_VERSION, getAliasesForCluster } from "../api/roleIntelligence.js";
+import { parseIntent, scoreJobLocally, checkEligibility, extractEligibilitySignals, SIGNALS_VERSION, getAliasesForCluster } from "../api/roleIntelligence.js";
 import { parseSalaryFloor, titlePattern, applyRoleQuery, fetchCandidates, rankCandidates, matchesFilters, compareSearchResults } from "../api/searchCandidates.js";
 
 const intent = parseIntent("virtual assistant jobs open to nigeria");
@@ -281,4 +281,44 @@ test('older current-year employer-confirmed roles survive both ranking passes wi
   assert.equal(rankCandidates(preliminary.results,intent,{},now,true).results.length,1);
   assert.equal(rankCandidates([raw],intent,{maxAgeDays:7},now).results.length,0);
   assert.equal(rankCandidates([{...raw,posted_at:'2025-12-01'}],intent,{},now).results.length,0);
+});
+
+// Decisive exclusions are checked before role scoring. A row failing both
+// geography and role is now counted by geography, while every visible score,
+// result and the total number excluded remain unchanged.
+test('early exclusions retain source and closure precedence over country checks',()=>{
+  const rows=[
+    job('Greaser',{id:'country-and-role',location:'Paris, France'}),
+    job('Greaser',{id:'retired',source:'myjobmag',location:'Paris, France'}),
+    job('Greaser',{id:'closed',location:'Paris, France',verification:{status:'dead'}}),
+    job('Virtual Assistant',{id:'possible',location:'Remote',description:'Provide administrative support.'}),
+    job('Virtual Assistant',{id:'confirmed',location:'Worldwide',description:'Work from anywhere.'}),
+  ];
+  const ranked=rankCandidates(rows,intent);
+  assert.equal(ranked.evaluated,5);
+  assert.equal(ranked.excluded,3);
+  assert.deepEqual(ranked.exclusionReasons,{location_eligibility:1,retired_source:1,closed:1});
+  assert.deepEqual(new Set(ranked.results.map(row=>row.id)),new Set(['possible','confirmed']));
+  for(const row of ranked.results) {
+    const expected=scoreJobLocally(rows.find(source=>source.id===row.id),intent);
+    assert.equal(row.score,expected.score);
+    assert.deepEqual(row.eligibility,expected.eligibility);
+  }
+});
+
+test('reusing a country verdict preserves every scorer rule including remote enforcement',()=>{
+  const rows=[
+    job('Virtual Assistant',{location:'Remote',description:'Support our team.'}),
+    job('Virtual Assistant',{location:'Worldwide',description:'Work from anywhere.'}),
+    job('Virtual Assistant',{location:'United States',description:'Candidates must reside in the United States.'}),
+    job('Virtual Assistant',{location:'Lagos, Nigeria',remote:false,description:'Provide administrative support in our office.'}),
+    job('Virtual Assistant',{location:'Worldwide',description:'Applicants must reside in Kenya.'}),
+  ];
+  for(const country of ['nigeria','us','uk']) for(const remote of [false,true]) {
+    const query={...intent,locationCountry:country,remoteOnly:remote};
+    for(const row of rows) assert.deepEqual(
+      scoreJobLocally(row,query,checkEligibility(row,country)),
+      scoreJobLocally(row,query),`${country} remote=${remote}: ${row.location}`);
+  }
+  assert.equal(scoreJobLocally(rows[3],{...intent,remoteOnly:true},checkEligibility(rows[3],'nigeria')).eligibility.eligible,false);
 });
