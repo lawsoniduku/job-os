@@ -739,11 +739,41 @@ function titleVariants(raw) {
   return variants;
 }
 
+// A phrase can match only if its first ASCII word occurs in the normalized
+// input. Index rules by that necessary condition, then run the same literal
+// boundary matcher in the original rule order. This prunes negative work;
+// it does not change classification weights, tie order or eligibility rules.
+const CLUSTER_RULES = [
+  ...ROLE_TAXONOMY.flatMap(entry => entry.aliases.filter(alias => alias.length >= 4)
+    .map(phrase => ({phrase,cluster:entry.cluster,weight:40+phrase.split(/\s+/).length*12+phrase.length}))),
+  ...Object.entries(SHORT_TOKENS).map(([phrase,cluster]) => ({phrase,cluster,weight:38})),
+  ...Object.entries(BARE_NOUN_HINTS).map(([phrase,cluster]) => ({phrase,cluster,weight:30})),
+  ...ROLE_TAXONOMY.flatMap(entry => entry.keywords.filter(keyword => keyword.length >= 3)
+    .map(phrase => ({phrase,cluster:entry.cluster,weight:4,additive:true}))),
+];
+const CLUSTER_RULE_INDEX = new Map();
+const UNINDEXED_CLUSTER_RULES = [];
+CLUSTER_RULES.forEach((rule,index) => {
+  const token=rule.phrase.toLowerCase().match(/[a-z0-9]+/)?.[0];
+  if(!token) {UNINDEXED_CLUSTER_RULES.push(index);return;}
+  if(!CLUSTER_RULE_INDEX.has(token))CLUSTER_RULE_INDEX.set(token,[]);
+  CLUSTER_RULE_INDEX.get(token).push(index);
+});
+const shortTitleCache = new Map();
+const TITLE_CACHE_LIMIT = 4096;
+const copyDetection = result => ({...result,all:{...result.all}});
+
 function detectCluster(query) {
   // Normalize separators: slashes, pipes, commas, parens become spaces so
   // titles like "Backend / API Engineer, Billing" match cleanly. Collapse
   // whitespace and pad so boundary regexes work at the edges.
   const raw = String(query);
+  const cacheable = raw.length <= 200;
+  if(cacheable && shortTitleCache.has(raw)) {
+    const hit=shortTitleCache.get(raw);
+    shortTitleCache.delete(raw);shortTitleCache.set(raw,hit);
+    return copyDetection(hit);
+  }
   const norm = (s) => ` ${s.toLowerCase().replace(/[\/|,()\[\]{}]+/g, " ").replace(/\s+/g, " ")} `;
   // Only build inverted variants for short, title-like input — never for a full
   // job description (which is long and would make the swap meaningless, plus
@@ -752,7 +782,7 @@ function detectCluster(query) {
   const queries = useVariants ? titleVariants(raw).map(norm) : [norm(raw)];
   const q = queries[0]; // primary/original form
   // hasPhrase across ANY variant — the inverted form is the same title.
-  const inAny = (phrase) => queries.some((qq) => hasPhrase(qq, phrase));
+  const inAny = (phrase) => queries.some((qq) => qq.includes(phrase.toLowerCase()) && hasPhrase(qq, phrase));
   const scores = {};
   // matchedPhrases: EVERY distinct phrase that matched, from ALL signal types
   // (aliases, short tokens, bare nouns, AND keywords) together. This matters:
@@ -772,30 +802,15 @@ function detectCluster(query) {
     (matchedPhrases[c] = matchedPhrases[c] || []).push(phrase);
   };
 
-  // 1. Multi-word / long aliases — strongest signal, weighted by specificity
-  for (const entry of ROLE_TAXONOMY) {
-    for (const alias of entry.aliases) {
-      if (alias.length < 4) continue; // very short aliases handled below
-      if (inAny(alias)) {
-        const specificity = alias.split(/\s+/).length * 12 + alias.length; // longer = better
-        bump(entry.cluster, 40 + specificity, alias);
-      }
-    }
+  const candidateRules = new Set(UNINDEXED_CLUSTER_RULES);
+  for(const token of new Set(queries.flatMap(query => query.match(/[a-z0-9]+/g) || []))) {
+    for(const index of CLUSTER_RULE_INDEX.get(token) || [])candidateRules.add(index);
   }
-  // 2. Curated short tokens (hr, pm, ux, qa...)
-  for (const [tok, cluster] of Object.entries(SHORT_TOKENS)) {
-    if (inAny(tok)) bump(cluster, 38, tok);
-  }
-  // 3. Bare role nouns (product, design, sales...)
-  for (const [noun, cluster] of Object.entries(BARE_NOUN_HINTS)) {
-    if (inAny(noun)) bump(cluster, 30, noun);
-  }
-  // 4. Skill keywords — additive nudges; skip <3 chars so "r"/"ai" can't dominate
-  for (const entry of ROLE_TAXONOMY) {
-    for (const kw of entry.keywords) {
-      if (kw.length < 3) continue;
-      if (inAny(kw)) add(entry.cluster, 4, kw);
-    }
+  // Sorting retains the exact insertion/tie behavior of the original four
+  // loops, including duplicate phrases that belong to different clusters.
+  for(const index of [...candidateRules].sort((a,b) => a-b)) {
+    const rule=CLUSTER_RULES[index];
+    if(inAny(rule.phrase)) (rule.additive ? add : bump)(rule.cluster,rule.weight,rule.phrase);
   }
 
   // De-duplicate nested/overlapping phrases per cluster: if phrase A is a
@@ -815,9 +830,14 @@ function detectCluster(query) {
   for (const [c, s] of Object.entries(scores)) {
     if (s > bestScore) { bestScore = s; best = c; }
   }
-  return best
+  const result = best
     ? { cluster: best, score: bestScore, distinctSignals: distinctSignals[best] || 0, all: scores }
     : { cluster: null, score: 0, distinctSignals: 0, all: {} };
+  if(cacheable) {
+    if(shortTitleCache.size >= TITLE_CACHE_LIMIT)shortTitleCache.delete(shortTitleCache.keys().next().value);
+    shortTitleCache.set(raw,copyDetection(result));
+  }
+  return result;
 }
 
 // ============================================================
