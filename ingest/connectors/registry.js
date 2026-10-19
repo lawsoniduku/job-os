@@ -16,8 +16,8 @@ export const GREENHOUSE_COMPANIES = [
   // Nigerian / African ✅
   { slug: "jumia",             name: "Jumia",       region: "Africa"  },
   { slug: "carbon",            name: "Carbon",      region: "Nigeria" },
-  { slug: "moniepoint",        name: "Moniepoint",  region: "Nigeria",
-    apiBase: "https://boards-api.eu.greenhouse.io"                    },
+  // Standard public API serves the EU application URLs; EU API returned 503.
+  { slug: "moniepoint",        name: "Moniepoint",  region: "Nigeria" },
   // Remote-first global ✅
   { slug: "automatticcareers", name: "Automattic"   },  // 82 countries [RF]
   { slug: "gitlab",            name: "GitLab"       },  // 65+ countries [RF]
