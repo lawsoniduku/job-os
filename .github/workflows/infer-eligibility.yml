@@ -1,47 +1,36 @@
-name: Infer eligibility (new jobs)
+name: Infer pending eligibility
 
-# Asks the model who may apply, for the recent postings the deterministic
-# engine could not judge, and stores the answer in jobs.elig_signals.infer.
-#
-# WHY ON A SCHEDULE RATHER THAN INSIDE INGEST: the pipeline upserts with
-# ignoreDuplicates, so it only ever touches a job on the run it first appears.
-# Groq's free tier rate-limits these calls (measured: 7 of 20 even when run
-# sequentially), so inline inference would permanently abandon roughly a third
-# of exactly the rows it exists to fix. Keyed on "inference is missing"
-# instead, a rate limit costs nothing but time — the row stays pending and the
-# next run picks it up, so coverage converges rather than leaking.
-#
-# WHY 30 MINUTES AFTER INGEST: ingest runs at 06:00 and 18:00 UTC. This gives
-# it time to finish so the new rows are actually there to be enriched.
-#
-# REQUIRED SECRETS — note GROQ_API_KEY in particular:
-#   SUPABASE_URL, SUPABASE_KEY   already used by every other workflow here
-#   GROQ_API_KEY                 THIS IS THE ONLY WORKFLOW THAT NEEDS IT.
-#                                Nothing else in the repo calls a model from
-#                                CI, so it will not already exist — create it
-#                                under Settings → Secrets and variables →
-#                                Actions. Without it the run exits 1 with a
-#                                message naming the missing key.
-#   GROQ_MODEL                   optional; falls back to llama-3.3-70b-versatile.
-
+# Pending is selected in Postgres before paging. Model failures stay pending;
+# provider failures >30% fail the run and retain the audit artifact.
 on:
   schedule:
-    - cron: "30 6 * * *"    # after the 06:00 ingest
-    - cron: "30 18 * * *"   # after the 18:00 ingest
+    - cron: "30 6 * * *"
+    - cron: "30 18 * * *"
   workflow_dispatch:
     inputs:
       days:
-        description: "How far back to look for pending rows"
-        default: "14"
+        description: "Lookback; blank uses MAX_DISCOVERY_AGE_DAYS (currently 180)"
+        default: ""
       limit:
-        description: "Max model calls this run (cost ceiling)"
+        description: "Max postings (each may make one retry)"
         default: "300"
+      scan:
+        description: "Max server-selected queue candidates to examine"
+        default: "20000"
+      page_size:
+        description: "Queue page size (1-1000)"
+        default: "500"
+      max_pages:
+        description: "Max queue pages this run"
+        default: "40"
+      cursor:
+        description: "Resume cursor from the previous inference audit (optional)"
+        default: ""
       all:
-        description: "Ignore the date window and process the whole corpus (the backfill decision — expensive)"
+        description: "Remove SQL date bound; discovery and deterministic gates still apply"
         type: boolean
         default: false
 
-# Never let two runs enrich the same rows at once.
 concurrency:
   group: infer-eligibility
   cancel-in-progress: false
@@ -49,32 +38,44 @@ concurrency:
 jobs:
   infer:
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          # 22, like every other workflow here, and not lower: @supabase/
-          # supabase-js constructs a RealtimeClient at createClient() time and
-          # that needs a native WebSocket, which Node gained in 22. On 20 this
-          # throws before a single line of our code runs.
           node-version: 22
           cache: npm
       - run: npm ci
-
       - name: Infer eligibility
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           LLM_PROVIDER: groq
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          GROQ_MODEL: ${{ secrets.GROQ_MODEL }}
-          # Rate limiting, not parallelism, is the constraint here. Raising
-          # these makes runs fail faster, not finish faster.
+          # Repository variable wins over the legacy secret. Blank uses the
+          # validated client default openai/gpt-oss-120b.
+          GROQ_MODEL: ${{ vars.GROQ_MODEL || secrets.GROQ_MODEL }}
           INFER_CONCURRENCY: "2"
           INFER_PACE_MS: "1200"
+          INPUT_DAYS: ${{ inputs.days }}
+          INPUT_LIMIT: ${{ inputs.limit || '300' }}
+          INPUT_SCAN: ${{ inputs.scan || '20000' }}
+          INPUT_PAGE_SIZE: ${{ inputs.page_size || '500' }}
+          INPUT_MAX_PAGES: ${{ inputs.max_pages || '40' }}
+          INPUT_CURSOR: ${{ inputs.cursor }}
+          INPUT_ALL: ${{ inputs.all }}
+        shell: bash
         run: |
-          node ingest/infer_pending.js \
-            --days ${{ github.event.inputs.days || '14' }} \
-            --limit ${{ github.event.inputs.limit || '300' }} \
-            ${{ github.event.inputs.all == 'true' && '--all' || '' }}
+          args=(--limit "$INPUT_LIMIT" --scan "$INPUT_SCAN" --page-size "$INPUT_PAGE_SIZE" --max-pages "$INPUT_MAX_PAGES" --audit inference-audit.json)
+          if [ -n "$INPUT_DAYS" ]; then args+=(--days "$INPUT_DAYS"); fi
+          if [ -n "$INPUT_CURSOR" ]; then args+=(--cursor "$INPUT_CURSOR"); fi
+          if [ "$INPUT_ALL" = "true" ]; then args+=(--all); fi
+          node ingest/infer_pending.js "${args[@]}"
+      - name: Keep inference audit (also on failure)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: inference-audit-${{ github.run_id }}
+          path: inference-audit.json
+          if-no-files-found: warn
+          retention-days: 30
