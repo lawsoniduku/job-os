@@ -586,3 +586,32 @@ test('provider recheck scopes the server query without changing other eligibilit
  assert.ok(calls.some(([n,k,v])=>n==='eq' && k==='source' && v==='jobhive'));
  assert.throws(()=>verificationQuery({from:()=>q},{atsSource:'../../invalid'}),/ATS/);
 });
+
+const jazzJob={...job,title:'Customer Support Specialist',apply_url:'https://example.applytojob.com/apply/aBcDe12345/Customer-Support-Specialist'};
+const jazzLd=(extra={})=>ld({title:jazzJob.title,url:jazzJob.apply_url,description:'Provide customer support. Open to candidates worldwide.',jobLocationType:'TELECOMMUTE',...extra});
+test('JazzHR exact structured posting earns availability without inventing country eligibility',async()=>{
+ const v=await verifyPosting(jazzJob,{fetcher:async()=>response(jazzLd())});
+ assert.equal(v.status,'ok');assert.equal(v.identity,'exact');assert.equal(v.provider,'employer');
+ assert.equal(checkEligibility(applyVerification(jazzJob,compactVerification(v)),'nigeria').confidence,'certain');
+ const generic=await verifyPosting(jazzJob,{fetcher:async()=>response(jazzLd({description:'Provide customer support.',jobLocation:undefined}))});
+ assert.equal(checkEligibility(applyVerification(jazzJob,compactVerification(generic)),'nigeria').confidence,'possible');
+});
+test('JazzHR aliases retain case-sensitive vacancy identity and employer country restrictions',async()=>{
+ const old='https://example.applytojob.com/apply/jobs/details/aBcDe12345';
+ const v=await verifyPosting({...jazzJob,apply_url:old},{fetcher:async url=>url===old?response('',302,{location:jazzJob.apply_url}):response(jazzLd({description:'Customer support.',jobLocation:{address:{addressCountry:'US'}}}))});
+ assert.equal(v.status,'ok');assert.equal(checkEligibility(applyVerification(jazzJob,compactVerification(v)),'nigeria').eligible,false);
+ for(const url of [jazzJob.apply_url.replace('aBcDe12345','aBcDe12346'),jazzJob.apply_url.replace('aBcDe12345','abcde12345'),jazzJob.apply_url.replace('example.','other.')])
+  assert.equal((await verifyPosting(jazzJob,{fetcher:async()=>response(jazzLd({url}))})).status,'unknown');
+});
+test('JazzHR indexes, lookalike hosts and arbitrary paths cannot be fetched as vacancies',async()=>{
+ for(const apply_url of ['https://applytojob.com/apply/aBcDe12345','https://nested.example.applytojob.com/apply/aBcDe12345','https://example.applytojob.com.evil.test/apply/aBcDe12345','https://example.applytojob.com/apply/jobs','https://example.applytojob.com/api/private']){
+  let calls=0;assert.equal((await verifyPosting({...jazzJob,apply_url},{fetcher:async()=>{calls++;return response(jazzLd());}})).status,'unknown');assert.equal(calls,0);
+ }
+});
+test('JazzHR confirms removal only for 404/410, exact index redirects or expired structured proof',async()=>{
+ for(const [status,want] of [[404,'dead'],[410,'dead'],[403,'unknown'],[429,'unknown'],[503,'unknown']])
+  assert.equal((await verifyPosting(jazzJob,{fetcher:async()=>response('',status)})).status,want);
+ for(const location of ['/apply','/apply/jobs'])assert.equal((await verifyPosting(jazzJob,{fetcher:async()=>response('',302,{location})})).status,'dead');
+ assert.equal((await verifyPosting(jazzJob,{fetcher:async()=>response(jazzLd({validThrough:'2020-01-01'}))})).status,'dead');
+ assert.equal((await verifyPosting(jazzJob,{fetcher:async()=>{throw new Error('timeout');}})).status,'unknown');
+});
