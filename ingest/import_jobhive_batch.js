@@ -3,10 +3,9 @@
  * ================================
  * Runs import_jobhive.js against a CURATED list of sources, one after another,
  * so you don't have to copy-paste 30+ commands by hand. This is for ONE-TIME
- * (or occasional) bulk backfills — NOT a daily cron. The daily cron
- * (.github/workflows/jobhive-import.yml) stays limited to the 5 small, proven
- * sources on purpose; downloading hundreds of MB to several GB every single
- * day would waste bandwidth on data that barely changes upstream.
+ * (or occasional) bulk backfills — NOT the daily cron. The bounded recurring
+ * inventory now lives in ingest/jobhive_plan.js; this broader batch also has
+ * optional platforms not enabled for recurring imports.
  *
  * Deliberately EXCLUDED from this list (and from the whole project):
  *   - National/government job boards (arbetsformedlingen, bundesagentur,

@@ -1,11 +1,21 @@
 name: Jobhive Bulk Import
 
-# Daily refresh of the five existing slices. Occasional bulk-import sources
-# are not refreshed by this workflow; see docs/jobhive-audit.md.
+# Every maintained slice refreshes daily. Expanded platforms have a smaller
+# new-row budget; existing owned postings refresh independently of that budget.
 on:
   schedule:
     - cron: "0 3 * * *" # 03:00 UTC / 04:00 Lagos; scheduled starts can be delayed.
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      sources:
+        description: "all, blank, or comma-separated maintained ATS names"
+        required: false
+        default: "all"
+      dry_run:
+        description: "Scan and classify without database reads or writes"
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -15,7 +25,21 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.sources.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - id: sources
+        run: node ingest/jobhive_plan.js
+        env:
+          JOBHIVE_SOURCES: ${{ inputs.sources || 'all' }}
   jobhive-import:
+    needs: plan
     name: Import ${{ matrix.ats }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -24,8 +48,7 @@ jobs:
       # reports that failure instead of silently turning it green.
       fail-fast: false
       max-parallel: 2
-      matrix:
-        ats: [icims, phenom, recruitee, ycombinator, bamboohr]
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -34,8 +57,16 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Import source
-        run: node ingest/import_jobhive.js "$JOBHIVE_ATS"
+        shell: bash
+        run: |
+          args=("$JOBHIVE_ATS" --max-new-rows "$MAX_NEW_ROWS" --max-new-bytes "$MAX_NEW_BYTES")
+          if [[ "$DRY_RUN" == "true" ]]; then args+=(--dry-run);
+          elif [[ "$DRY_RUN" != "false" ]]; then echo "Invalid dry_run"; exit 1; fi
+          node ingest/import_jobhive.js "${args[@]}"
         env:
           JOBHIVE_ATS: ${{ matrix.ats }}
+          MAX_NEW_ROWS: ${{ matrix.max_new_rows }}
+          MAX_NEW_BYTES: ${{ matrix.max_new_bytes }}
+          DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
