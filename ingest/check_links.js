@@ -28,6 +28,9 @@ const RECHECK_DAYS = num("--recheck-days", 7);
 const CONCURRENCY = num("--concurrency", 8);
 const sourceIndex=args.indexOf('--source');
 const source=sourceIndex>=0?args[sourceIndex+1]:null;
+const atsIndex=args.indexOf('--ats-source');
+const atsSource=atsIndex>=0?args[atsIndex+1]:null;
+if(atsIndex>=0 && !/^[a-z][a-z0-9_]{0,31}$/.test(atsSource || '')) throw new Error('Invalid --ats-source');
 if(source && !ACTIVE_JOB_SOURCES.includes(source)) throw new Error(`Unsupported --source: ${source}`);
 const TIMEOUT_MS = 12000;
 
@@ -192,7 +195,7 @@ async function selectBatch(batchSource, limit = Math.min(LIMIT, 500)) {
     // requests on listings already gated out by freshness or by region.
     // Persist each batch before selecting the next: rows leave the due queue.
     // Country filters are applied at search time; check every region.
-    const { data, error } = await verificationQuery(supabase,{limit,source:batchSource,recheckDays:RECHECK_DAYS});
+    const { data, error } = await verificationQuery(supabase,{limit,source:batchSource,atsSource,recheckDays:RECHECK_DAYS});
     if (!error) return data || [];
     console.log(`  ⚠️  ${batchSource} select failed (attempt ${a}/4): ${error.message}`);
     await sleep(1500 * a);

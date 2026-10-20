@@ -4,8 +4,8 @@ import { cleanText } from '../ingest/core/normalize.js';
 import { extractEligibilitySignals, SIGNALS_VERSION } from './roleIntelligence.js';
 import { OBSERVED_POSTING_HOSTS } from './postingHosts.js';
 
-// v5 adds exact MyJobMag proof and required Recruitee application locations.
-export const VERIFICATION_VERSION = 5;
+// v6 retains published Recruitee work locations even with a hidden application question.
+export const VERIFICATION_VERSION = 6;
 const TTL = 6 * 60 * 60 * 1000;
 const cache = new Map();
 const recruiteeTenant = hostname => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.recruitee\.com$/i.test(hostname);
@@ -212,16 +212,22 @@ export async function verifyPosting(job, {fetcher=fetch, now=Date.now(), timeout
       if(typeof j.description!=='string' || !cleanText(decode(j.description),Infinity)) return unknown('Posting description is missing');
       if(j.requirements!=null && typeof j.requirements!=='string') return unknown('Employer requirements unavailable');
       provider='employer';
-      // A generic Remote label is only work mode. A visible, mandatory
-      // application location choice supplies this vacancy's actual locations.
-      // Otherwise office metadata alone cannot narrow explicit global hiring.
+      // A generic Remote label is only work mode. Published offer locations
+      // still matter when the separate application preference is hidden.
+      // An optional office preference cannot narrow explicit worldwide hiring.
       const remote=j.remote===true;
       const location=typeof j.location==='string' ? j.location.trim() : '';
+      const description=[j.description,typeof j.requirements==='string'?j.requirements:''].filter(Boolean).join('\n');
+      const publishedLocations=list(j.locations).map(locationText).filter(Boolean).join('; ');
       const requiredLocations=j.location_question_visible===true && j.locations_question_required===true
         && ['multiple_choice','single_choice','dropdown'].includes(j.locations_question_type)
-        ? list(j.locations).map(locationText).filter(Boolean).join('; ') : '';
-      payload={title:j.title,description:[j.description,typeof j.requirements==='string'?j.requirements:''].filter(Boolean).join('\n'),location:requiredLocations || location || (remote?'Remote':list(j.locations).map(locationText).filter(Boolean).join('; ') || locationText(j)),remote,
-        ...(requiredLocations ? {location_evidence:'Employer application requires a listed work location'} : {})};
+        ? publishedLocations : '';
+      const genericLocation=/^(?:remote(?:\s+job)?|fully remote|work from home)?$/i.test(location);
+      const explicitWorldwide=extractEligibilitySignals({title:j.title,description:cleanText(decode(description),Infinity),location}).worldwideDesc;
+      const publishedFallback=genericLocation && !explicitWorldwide ? publishedLocations : '';
+      payload={title:j.title,description,location:requiredLocations || publishedFallback || location || (remote?'Remote':publishedLocations || locationText(j)),remote,
+        ...(requiredLocations ? {location_evidence:'Employer application requires a listed work location'}
+          : publishedFallback ? {location_evidence:'Employer posting lists these work locations'} : {})};
     } else if(['job-boards.greenhouse.io','boards.greenhouse.io'].includes(u.hostname) && gh) {
       const r=await read(`https://boards-api.greenhouse.io/v1/boards/${gh[1]}/jobs/${gh[2]}`);
       if(r.status)return closed(r);

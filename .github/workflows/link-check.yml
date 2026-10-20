@@ -20,6 +20,10 @@ on:
         description: "Recheck observations older than this many days"
         required: false
         default: "1"
+      ats_source:
+        description: "Optional ATS within a source, e.g. recruitee"
+        required: false
+        default: ""
 
 concurrency:
   group: posting-verification-${{ github.ref }}
@@ -44,10 +48,12 @@ jobs:
           [[ "$RECHECK_DAYS" =~ ^[1-9][0-9]*$ ]] || { echo "recheck_days must be a positive integer"; exit 1; }
           args=(--limit "$CHECK_LIMIT" --concurrency 24 --recheck-days "$RECHECK_DAYS")
           if [[ -n "$CHECK_SOURCE" ]]; then args+=(--source "$CHECK_SOURCE"); fi
+          if [[ -n "$CHECK_ATS" ]]; then args+=(--ats-source "$CHECK_ATS"); fi
           node ingest/check_links.js "${args[@]}"
         env:
           CHECK_LIMIT: ${{ inputs.limit || '12000' }}
           CHECK_SOURCE: ${{ inputs.source || '' }}
+          CHECK_ATS: ${{ inputs.ats_source || '' }}
           RECHECK_DAYS: ${{ inputs.recheck_days || '1' }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
