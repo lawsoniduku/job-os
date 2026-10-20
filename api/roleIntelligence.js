@@ -1734,7 +1734,9 @@ export function checkEligibility(job, country) {
     String(s || "")
       .replace(/([a-z])([A-Z])/g, "$1 $2")
       .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
-  const title = ` ${deglue(job.title).toLowerCase()} `;
+  // The explicit bracketed work-location adjective is a Philippines tag.
+  // Do not rewrite Philippine-based clients/offices/market descriptions.
+  const title = ` ${deglue(job.title).toLowerCase().replace(/(\(|\[)\s*philippine[-–—\s]+based\s*(\)|\])/g,'$1philippines-based$2')} `;
   const loc = deglue(job.location).toLowerCase();
   const region = (job.eligibility_region || "").toLowerCase();
   const isAfrican = country === "africa" || AFRICAN_COUNTRIES.has(country);

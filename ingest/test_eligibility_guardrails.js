@@ -6,6 +6,12 @@ import { verdictOf } from '../job-os-ui/src/lib/eligibility.js';
 const job = (extra = {}) => ({ title: 'Data Analyst', company: 'Acme', location: 'Remote', description: 'Analyse data and build reports.', ...extra });
 
 const scenarios = [
+  ['Philippine-based title tag excludes Nigeria despite a worldwide location', 'nigeria', {title:'Inbound & Outbound Caller (Philippine-based)',location:'Worldwide'}, 'excluded'],
+  ['Philippine-based title tag accepts a Philippines applicant', 'philippines', {title:'Inbound & Outbound Caller (Philippine-based)'}, 'certain'],
+  ['Philippine based square-bracket tag remains a location restriction', 'nigeria', {title:'Customer Support [Philippine based]',location:'Worldwide'}, 'excluded'],
+  ['Philippine customer market is not an applicant country restriction', 'nigeria', {title:'Customer Support (Philippine-based clients)',location:'Worldwide',description:'Open to candidates worldwide.'}, 'certain'],
+  ['Philippine office prose does not restrict worldwide hiring', 'nigeria', {title:'Customer Support',location:'Worldwide',description:'We support Philippine-based clients. Open to candidates worldwide.'}, 'certain'],
+  ['Local title alias cannot bypass an independent US residency requirement', 'philippines', {title:'Caller (Philippine-based)',description:'US only.'}, 'excluded'],
   ['Nigeria invitation is not worldwide', 'uk', { description: 'Open to Nigeria.' }, 'possible'],
   ['Africa invitation is not worldwide', 'canada', { description: 'Open to candidates in Africa.' }, 'possible'],
   ['Africa invitation accepts Kenya', 'kenya', { description: 'Open to candidates in Africa.' }, 'certain'],
