@@ -11,6 +11,7 @@ if(sources.some(source=>!maintained.has(source))) {
   process.exit(1);
 }
 const matrix={include:sources.map(ats=>({ats,
+  prefer_confirmed:!original.includes(ats),
   max_new_rows:original.includes(ats)?500:50,
   max_new_bytes:original.includes(ats)?10*1024*1024:1024*1024,
 }))};

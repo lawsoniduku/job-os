@@ -16,6 +16,7 @@ test('daily plan covers every original and newly maintained ATS exactly once',()
  for(const row of rows){
   assert.equal(row.max_new_rows,original.includes(row.ats)?500:50);
   assert.equal(row.max_new_bytes,original.includes(row.ats)?10*1024*1024:1024*1024);
+  assert.equal(row.prefer_confirmed,!original.includes(row.ats));
  }
  assert.equal(rows.filter(x=>added.includes(x.ats)).reduce((n,x)=>n+x.max_new_rows,0),700);
 });
@@ -30,6 +31,7 @@ test('workflow uses the shared daily plan, passes explicit budgets and keeps fai
  assert.match(workflow,/node ingest\/jobhive_plan\.js/);
  assert.match(workflow,/--max-new-rows/);assert.match(workflow,/--max-new-bytes/);
  assert.match(workflow,/--dry-run/);assert.match(workflow,/max-parallel: 2/);
+ assert.match(workflow,/--prefer-confirmed/);
  assert.doesNotMatch(workflow,/continue-on-error: true/);
  assert.match(workflow,/JOBHIVE_SOURCES: \$\{\{ inputs.sources/);
 });

@@ -60,6 +60,7 @@ jobs:
         shell: bash
         run: |
           args=("$JOBHIVE_ATS" --max-new-rows "$MAX_NEW_ROWS" --max-new-bytes "$MAX_NEW_BYTES")
+          if [[ "$PREFER_CONFIRMED" == "true" ]]; then args+=(--prefer-confirmed); fi
           if [[ "$DRY_RUN" == "true" ]]; then args+=(--dry-run);
           elif [[ "$DRY_RUN" != "false" ]]; then echo "Invalid dry_run"; exit 1; fi
           node ingest/import_jobhive.js "${args[@]}"
@@ -67,6 +68,7 @@ jobs:
           JOBHIVE_ATS: ${{ matrix.ats }}
           MAX_NEW_ROWS: ${{ matrix.max_new_rows }}
           MAX_NEW_BYTES: ${{ matrix.max_new_bytes }}
+          PREFER_CONFIRMED: ${{ matrix.prefer_confirmed && 'true' || 'false' }}
           DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}

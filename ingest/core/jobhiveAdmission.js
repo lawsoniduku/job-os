@@ -3,24 +3,26 @@ import {canonicalUrl,contentKey} from './dedup.js';
 const time=value=>Number.isFinite(Date.parse(value))?Date.parse(value):-Infinity;
 // Publication is the clock candidates see. Download/creation time never makes
 // an undated opening outrank a genuinely new one. Ties are reproducible.
-export function compareAdmission(a,b) {
- return time(b.row.posted_at)-time(a.row.posted_at)
+export function compareAdmission(a,b,{preferConfirmed=false}={}) {
+ return (preferConfirmed ? Number(b.confidence>0)-Number(a.confidence>0) : 0)
+  || time(b.row.posted_at)-time(a.row.posted_at)
   || b.confidence-a.confidence || a.url.localeCompare(b.url);
 }
 
 // Hold only the best bounded payload while streaming the full CSV. Existing
 // owned rows bypass this buffer and still refresh even with a zero intake cap.
-export function createJobhiveAdmission({maxRows=500,maxBytes=10*1024*1024}={}) {
+export function createJobhiveAdmission({maxRows=500,maxBytes=10*1024*1024,preferConfirmed=false}={}) {
  if(!Number.isSafeInteger(maxRows)||maxRows<0||!Number.isSafeInteger(maxBytes)||maxBytes<0)throw new Error('Invalid new-job admission budget');
  let entries=[],bytes=0,considered=0,duplicates=0;
  const byUrl=new Map(),byContent=new Map();
+ const compare=(a,b)=>compareAdmission(a,b,{preferConfirmed});
  function remove(entry) {
   entries.splice(entries.indexOf(entry),1);bytes-=entry.bytes;byUrl.delete(entry.url);
   if(byContent.get(entry.key)===entry)byContent.delete(entry.key);
  }
  function insert(entry) {
   let lo=0,hi=entries.length;
-  while(lo<hi){const mid=(lo+hi)>>>1;if(compareAdmission(entry,entries[mid])<0)hi=mid;else lo=mid+1;}
+  while(lo<hi){const mid=(lo+hi)>>>1;if(compare(entry,entries[mid])<0)hi=mid;else lo=mid+1;}
   entries.splice(lo,0,entry);bytes+=entry.bytes;byUrl.set(entry.url,entry);byContent.set(entry.key,entry);
  }
  return {
@@ -35,12 +37,12 @@ export function createJobhiveAdmission({maxRows=500,maxBytes=10*1024*1024}={}) {
    if(sameUrl){
     duplicates++;
     const oldAt=time(sameUrl.row.elig_signals?.source?.fetched_at),newAt=time(row.elig_signals?.source?.fetched_at);
-    if(newAt<oldAt || (newAt===oldAt&&compareAdmission(entry,sameUrl)>=0))return;
+    if(newAt<oldAt || (newAt===oldAt&&compare(entry,sameUrl)>=0))return;
     remove(sameUrl);
    }
    const sameContent=byContent.get(key);
-   if(sameContent){duplicates++;if(compareAdmission(entry,sameContent)>=0)return;remove(sameContent);}
-   if(entries.length===maxRows && compareAdmission(entry,entries.at(-1))>=0)return;
+   if(sameContent){duplicates++;if(compare(entry,sameContent)>=0)return;remove(sameContent);}
+   if(entries.length===maxRows && compare(entry,entries.at(-1))>=0)return;
    insert(entry);
    while(entries.length>maxRows||bytes>maxBytes)remove(entries.at(-1));
   },
