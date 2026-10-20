@@ -7,6 +7,17 @@ const INPUTS = ['title', 'company', 'location', 'description', 'country_iso', 'r
 const same = (left, right) => INPUTS.every(key => (left[key] ?? null) === (right[key] ?? null));
 const timestamp = value => Number.isFinite(Date.parse(value)) ? Date.parse(value) : null;
 const nonempty = value => String(value ?? '').trim().length > 0;
+function ownsLegacyCanonical(row, existing) {
+  if (existing.source !== 'remote_company' || existing.ats_source != null
+    || row.source !== 'greenhouse' || row.ats_source !== 'greenhouse'
+    || existing.company !== 'Canonical' || row.company !== 'Canonical') return false;
+  try {
+    const url = new URL(row.apply_url);
+    return row.apply_url === existing.apply_url && url.protocol === 'https:' && !url.username && !url.password
+      && (!url.port || url.port === '443') && url.hostname === 'job-boards.greenhouse.io'
+      && /^\/canonical\/jobs\/[1-9]\d*\/?$/.test(url.pathname);
+  } catch { return false; }
+}
 
 // Snapshot reads and inserts are batched. Only existing owned rows need a CAS
 // update; a race reloads that one URL rather than redownloading a source corpus.
@@ -25,7 +36,11 @@ export function createNativeRefreshWriter(db, {
       last_seen_at: _seen, ...input } = row;
     const previous = existing?.elig_signals || {}, priorSource = previous.source || {};
     if (existing) {
-      if (existing.source !== row.source || (existing.ats_source ?? null) !== (row.ats_source ?? null)) return { status: 'collision' };
+      // Reconcile the legacy Canonical source only when its own live board
+      // returns this exact URL. Do not globally enable an unknown source label
+      // or resurrect old rows absent from the employer's current board.
+      if ((existing.source !== row.source || (existing.ats_source ?? null) !== (row.ats_source ?? null))
+        && !ownsLegacyCanonical(row, existing)) return { status: 'collision' };
       if (timestamp(priorSource.fetched_at) > timestamp(fetchedAt)
         || (timestamp(priorSource.updated_at) !== null && timestamp(_source_observation.updated_at) !== null
           && timestamp(priorSource.updated_at) > timestamp(_source_observation.updated_at))) return { status: 'stale' };
@@ -64,7 +79,7 @@ export function createNativeRefreshWriter(db, {
       const prepared = prepare(row, existing, fetchedAt);
       if (prepared.status) return prepared.status;
       try {
-        let query = db.from('jobs').update(prepared.patch).eq('id', existing.id).eq('source', row.source);
+        let query = db.from('jobs').update(prepared.patch).eq('id', existing.id).eq('source', existing.source);
         query = existing.ats_source == null ? query.is('ats_source', null) : query.eq('ats_source', existing.ats_source);
         query = existing.elig_signals == null ? query.is('elig_signals', null) : query.eq('elig_signals', JSON.stringify(existing.elig_signals));
         const { data, error } = await query.select('id');

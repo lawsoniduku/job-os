@@ -6,6 +6,7 @@ import { hasRecentOpenEvidence } from '../api/jobFreshness.js';
 const now='2026-10-19T20:00:00.000Z';
 const role={title:'People Analyst',company:'Example',location:'Remote',description:'We hire worldwide. '+ 'Analyse people data. '.repeat(20),source:'lever',ats_source:'lever',apply_url:'https://jobs.lever.co/example/123',posted_at:'2026-09-01T00:00:00Z',created_at:'2026-09-01T00:00:00Z',remote:true};
 const clone=structuredClone;
+const canonicalRole={...role,title:'Graduate Customer Success Manager',company:'Canonical',source:'greenhouse',ats_source:'greenhouse',apply_url:'https://job-boards.greenhouse.io/canonical/jobs/6103331',location:'Home based - Worldwide'};
 function fakeDb(initial=[],{onUpdate,onInsert,failReads=false,failWrites=false}={}) {
  const rows=new Map(initial.map(row=>[row.apply_url,clone(row)])); let reads=0,writes=0;
  return {rows,get reads(){return reads;},get writes(){return writes;},from(){let filters=[],patch,batch,projection;
@@ -56,6 +57,33 @@ test('failed reads/writes never count as accepted or stamp freshness',async()=>{
  for(const options of [{failReads:true},{failWrites:true}]){const existing=stored(),db=fakeDb([existing],options);const result=await write(db)([role]);assert.equal(result.accepted,0);assert.equal(result.failedRows.length,1);assert.deepEqual(db.rows.get(role.apply_url),existing);}
 });
 test('dry run never contacts database',async()=>{assert.equal((await write(null,{dryRun:true})([role])).accepted,1);});
+
+test('live Canonical board adopts its exact legacy remote_company row without changing its ID',async()=>{
+ const existing=stored({...canonicalRole,source:'remote_company',ats_source:null});
+ existing.elig_signals.verification={v:5,status:'unknown',reason:'Previous check'};
+ const db=fakeDb([existing]);const result=await write(db)([canonicalRole]);
+ const saved=db.rows.get(canonicalRole.apply_url);
+ assert.equal(result.updated,1);assert.equal(result.inserted,0);assert.equal(saved.id,existing.id);
+ assert.equal(saved.source,'greenhouse');assert.equal(saved.ats_source,'greenhouse');
+ assert.deepEqual(saved.elig_signals.verification,existing.elig_signals.verification);
+});
+test('legacy adoption cannot claim other employers, hosts, schemes, source owners or ATS identities',async()=>{
+ for(const override of [{source:'employer'},{source:'jobhive'},{company:'Different employer'},
+   {ats_source:'lever'},{apply_url:'https://attacker.example/canonical/jobs/6103331'},
+   {apply_url:'https://job-boards.greenhouse.io/another/jobs/6103331'},
+   {apply_url:'http://job-boards.greenhouse.io/canonical/jobs/6103331'}]){
+  const existing=stored({...canonicalRole,source:'remote_company',ats_source:null,...override});
+  const incoming={...canonicalRole,apply_url:existing.apply_url};
+  const db=fakeDb([existing]);const result=await write(db)([incoming]);
+  assert.equal(result.collisions,1);assert.deepEqual(db.rows.get(existing.apply_url),existing);
+ }
+});
+test('legacy adoption retries concurrent evidence and refuses a new employer owner',async()=>{
+ let raced=false;const existing=stored({...canonicalRole,source:'remote_company',ats_source:null});
+ const db=fakeDb([existing],{onUpdate(rows){if(raced)return;raced=true;rows.get(canonicalRole.apply_url).source='employer';}});
+ const result=await write(db)([canonicalRole]);assert.equal(result.updated,0);assert.equal(result.collisions,1);
+ assert.equal(db.rows.get(canonicalRole.apply_url).source,'employer');
+});
 
 test('collection order and proof invalidation use distinct clocks',async()=>{
  const existing=stored();existing.elig_signals.verification={v:4,status:'ok',checked_at:'2026-10-19T19:30:00Z'};
