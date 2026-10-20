@@ -2,19 +2,24 @@ import {ACTIVE_JOB_SOURCES} from '../../api/sourcePolicy.js';
 import {VERIFICATION_VERSION} from '../../api/postingVerification.js';
 import {publicationFilter,sourceVisibilityFilter} from '../../api/jobFreshness.js';
 
-export function verificationQuery(db,{limit=500,source=null,atsSource=null,recheckDays=1,now=Date.now()}={}) {
+export function verificationQuery(db,{limit=500,source=null,atsSource=null,postingUrl=null,recheckDays=1,now=Date.now()}={}) {
   if(source && !ACTIVE_JOB_SOURCES.includes(source)) throw new Error(`Unsupported --source: ${source}`);
   if(atsSource && !/^[a-z][a-z0-9_]{0,31}$/.test(atsSource)) throw new Error('Invalid ATS source');
+  if(postingUrl) {
+    let url;try{url=new URL(postingUrl);}catch{throw new Error('Invalid posting URL');}
+    if(url.protocol!=='https:' || url.username || url.password || url.port)throw new Error('Invalid posting URL');
+  }
   const staleBefore=new Date(now-recheckDays*864e5).toISOString();
   let q=db.from('jobs')
     .select('id, source, ats_source, apply_url, title, company, link_status, link_checked_at, elig_signals')
     .in('source',ACTIVE_JOB_SOURCES)
     .or(sourceVisibilityFilter(now))
-    .or(publicationFilter(now))
-    .or(`link_checked_at.is.null,link_checked_at.lt.${staleBefore},elig_signals->verification->>v.is.null,elig_signals->verification->>v.neq.${VERIFICATION_VERSION}`);
+    .or(publicationFilter(now));
   // Unsupported shapes cannot gain evidence by repeating the same code. A new
   // verifier version automatically makes them due again; search retains them.
-  q=q.or(`elig_signals->verification->>retryable.is.null,elig_signals->verification->>retryable.neq.false,elig_signals->verification->>v.is.null,elig_signals->verification->>v.neq.${VERIFICATION_VERSION}`);
+  if(postingUrl)q=q.eq('apply_url',postingUrl);
+  else q=q.or(`link_checked_at.is.null,link_checked_at.lt.${staleBefore},elig_signals->verification->>v.is.null,elig_signals->verification->>v.neq.${VERIFICATION_VERSION}`)
+    .or(`elig_signals->verification->>retryable.is.null,elig_signals->verification->>retryable.neq.false,elig_signals->verification->>v.is.null,elig_signals->verification->>v.neq.${VERIFICATION_VERSION}`);
   if(source)q=q.eq('source',source);
   if(atsSource)q=q.eq('ats_source',atsSource);
   return q.order('link_checked_at',{ascending:true,nullsFirst:true}).order('id',{ascending:true}).limit(limit);
