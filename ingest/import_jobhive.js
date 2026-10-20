@@ -42,6 +42,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const args = process.argv.slice(2);
 const ats = args[0];
 const dryRun = args.includes("--dry-run");
+const preferConfirmed = args.includes('--prefer-confirmed');
 const supabase = dryRun ? null : createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 const limitIdx = args.indexOf("--limit");
 const keepLimit = limitIdx > -1 ? parseInt(args[limitIdx + 1], 10) : Infinity;
@@ -145,7 +146,7 @@ async function run() {
   const failedRows = []; // rows that failed mid-stream, retried once more after stream ends
   const failedExistingRows = [];
   let batch = [], existingBatch = [];
-  const admission = createJobhiveAdmission({maxRows:maxNewRows,maxBytes:maxNewBytes});
+  const admission = createJobhiveAdmission({maxRows:maxNewRows,maxBytes:maxNewBytes,preferConfirmed});
   const regionTally = {};
   const keptRegionTally = {};
 
@@ -270,7 +271,7 @@ async function run() {
   duplicate += intake.duplicates;
   budgetSkipped += intake.budgetSkipped;
   batch = admission.rows();
-  console.log(`   newest-first admission: ${intake.selected} selected; ${intake.selectedBytes} buffered bytes; ${intake.considered} candidates considered`);
+  console.log(`   ${preferConfirmed?'confirmed-eligibility-first, then newest':'newest-first'} admission: ${intake.selected} selected; ${intake.selectedBytes} buffered bytes; ${intake.considered} candidates considered`);
   for (let i=0;i<batch.length;i+=BATCH) {
     collectWrite(await upsertBatch(batch.slice(i,i+BATCH)));
     await sleep(SLEEP_MS);

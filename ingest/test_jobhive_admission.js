@@ -22,3 +22,13 @@ test('missing company names do not collapse unrelated employers into one content
 test('later contradictory source observation removes an earlier buffered URL without declaring closure',()=>{
  const q=createJobhiveAdmission();q.offer(row(1,{elig_signals:{source:{fetched_at:'2026-10-18'}}}));q.reject(row(1,{elig_signals:{source:{fetched_at:'2026-10-19'}}}));assert.equal(q.rows().length,0);
 });
+test('bounded expansion reserves intake for evidenced eligibility before newer unconfirmed jobs',()=>{
+ const a=createJobhiveAdmission({maxRows:2,maxBytes:100000,preferConfirmed:true});
+ const make=(id,date)=>({title:'Support '+id,company:'Example',location:'Remote',apply_url:'https://example.com/'+id,posted_at:date});
+ const uncertain=make('uncertain','2026-10-20'),older=make('global','2026-10-16'),newer=make('emea','2026-10-19');
+ a.offer(uncertain,{confidence:'possible'});a.offer(older,{confidence:'certain'});a.offer(newer,{confidence:'likely'});
+ assert.deepEqual(a.rows().map(x=>x.title),['Support emea','Support global']);
+ const sparse=createJobhiveAdmission({maxRows:2,maxBytes:100000,preferConfirmed:true});
+ sparse.offer(uncertain,{confidence:'possible'});sparse.offer(older,{confidence:'certain'});
+ assert.deepEqual(sparse.rows().map(x=>x.title),['Support global','Support uncertain']);
+});

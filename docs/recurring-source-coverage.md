@@ -19,7 +19,13 @@ Existing owned records refresh independently of the new-row budget.
 
 The importer still applies language, publication, deadline, source observation
 and deterministic country eligibility gates, deduplicates application identities,
-and selects new candidates newest-first. No eligibility rules are weakened and
+and selects the added platforms' new candidates with certain/likely deterministic
+eligibility before unconfirmed candidates, newest-first within each group.
+The original five keep their previous newest-first admission order.
+Unconfirmed jobs still fill spare capacity; this is intake priority, not a new
+eligibility verdict. It prevents newer generic Remote rows from exhausting a
+small intake budget before evidenced worldwide/Nigeria/EMEA roles are reached.
+No eligibility rules are weakened and
 no missing dates are replaced with import dates. Unknown remote scope remains
 unconfirmed. The version-controlled retention policy remains separate.
 
