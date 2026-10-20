@@ -2162,6 +2162,12 @@ export function scoreJobLocally(job, intent, precomputedEligibility = null) {
     const analyticsTitle = titleAliasHit || /\b(?:analytics|business intelligence|bi)\b/i.test(titleNorm);
     const otherProfession = /\b(?:benefits|compensation|compliance|geoint|crypto|trader|annotation|annotator|collection)\b/i.test(titleNorm);
     roleMatch = (!!analyticsTitle && !otherProfession) || exactTitleHit;
+    // A subject taught is not the analyst profession. Keep explicit teaching
+    // searches, but do not let a stale Data Analytics label admit faculty.
+    const academicTitle = /^\s*(?:(?:senior|assistant|associate|adjunct|visiting|clinical|research|principal|emeritus|online|remote)\s+)*(?:professor|lecturer|instructor|tutor|teacher)\b/.test(title)
+      || /\b(?:data analytics|business intelligence|data science|analytics)\s+(?:instructor|lecturer|professor|tutor|teacher)\s*$/.test(title);
+    const academicQuery = /\b(?:professor|lecturer|instructor|tutor|teacher|teaching)\b/i.test(intent.rawQuery || (intent.keywords || []).join(' '));
+    if(academicTitle && !academicQuery)roleMatch=false;
   }
   const offTarget = !roleMatch;
 

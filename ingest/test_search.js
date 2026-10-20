@@ -5,6 +5,23 @@ import { parseSalaryFloor, titlePattern, applyRoleQuery, fetchCandidates, rankCa
 
 const intent = parseIntent("virtual assistant jobs open to nigeria");
 const job = (title, extra = {}) => ({ id: title, source: "jobhive", apply_url: "https://example.com/jobs/" + encodeURIComponent(extra.id || extra.company || title), title, company: "Example", location: "Lagos, Nigeria", description: "Administrative support for our team in Nigeria.", posted_at: new Date().toISOString(), ...extra });
+test('BI analyst searches exclude academic appointments even with matching subject keywords',()=>{
+ const bi=parseIntent('BI analyst jobs open to Nigeria');
+ for(const title of ['Senior Lecturer Accounting and Data Analytics','Professor Accounting and Data Analytics',
+  'Assistant Professor in Business Intelligence','Data Analytics Instructor']){
+  const row=job(title,{role_cluster:'Data Analytics'});
+  assert.equal(scoreJobLocally(row,bi).offTarget,true,title);
+  assert.equal(rankCandidates([row],bi).results.length,0,title);
+ }
+ for(const title of ['Business Intelligence Analyst','Head of BI & Analytics','Data Analyst - Education Products','Data Analyst - Teacher Products'])
+  assert.equal(scoreJobLocally(job(title),bi).offTarget,false,title);
+});
+test('explicit academic searches retain teaching appointments in the requested subject',()=>{
+ for(const [query,title] of [['data analytics instructor jobs Nigeria','Data Analytics Instructor'],
+  ['professor business intelligence jobs Nigeria','Professor Business Intelligence'],
+  ['lecturer data analytics Nigeria','Senior Lecturer Accounting and Data Analytics']])
+  assert.equal(scoreJobLocally(job(title),parseIntent(query)).offTarget,false,query);
+});
 const unrelated = [
   "Head, Commercial Finance and Procurement", "Head of Air Freight", "Research Assistant - Kaduna",
   "Research Assistant - Oyo", "Research Assistant - Sokoto", "Assistant Valuation Manager, Transaction Services",
