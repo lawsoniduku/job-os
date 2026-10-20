@@ -4,12 +4,13 @@ import { cleanText } from '../ingest/core/normalize.js';
 import { extractEligibilitySignals, SIGNALS_VERSION } from './roleIntelligence.js';
 import { OBSERVED_POSTING_HOSTS } from './postingHosts.js';
 
-// v6 retains published Recruitee work locations even with a hidden application question.
-export const VERIFICATION_VERSION = 6;
+// v7 adds exact JazzHR posting identity; v6 fixed published Recruitee work locations.
+export const VERIFICATION_VERSION = 7;
 const TTL = 6 * 60 * 60 * 1000;
 const cache = new Map();
 const recruiteeTenant = hostname => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.recruitee\.com$/i.test(hostname);
 const icimsTenant = hostname => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.icims\.com$/i.test(hostname);
+const jazzhrTenant = hostname => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.applytojob\.com$/i.test(hostname);
 // This custom host's same-origin public offer endpoint was checked against a
 // live, exact Tether vacancy on Oct 19. Other custom hosts keep structured checks.
 const observedRecruiteeApiHost = hostname => hostname==='careers.tether.io';
@@ -17,7 +18,7 @@ const customRecruitee = hostname => Object.hasOwn(OBSERVED_POSTING_HOSTS.recruit
 const phenomHost = hostname => Object.hasOwn(OBSERVED_POSTING_HOSTS.phenom, hostname);
 const myjobmagHost = hostname => ['myjobmag.com','www.myjobmag.com'].includes(hostname);
 const hosts = ['bamboohr.com', 'apply.workable.com', 'jobs.ashbyhq.com', 'api.ashbyhq.com', 'job-boards.greenhouse.io', 'boards.greenhouse.io', 'boards-api.greenhouse.io', 'boards-api.eu.greenhouse.io', 'api.lever.co', 'jobs.lever.co', 'canonical.com'];
-const allowed = (u) => u.protocol === 'https:' && !u.username && !u.password && (!u.port || u.port === '443') && (recruiteeTenant(u.hostname) || icimsTenant(u.hostname) || customRecruitee(u.hostname) || phenomHost(u.hostname) || myjobmagHost(u.hostname) || hosts.some(h => u.hostname === h || (h === 'bamboohr.com' && u.hostname.endsWith('.bamboohr.com'))));
+const allowed = (u) => u.protocol === 'https:' && !u.username && !u.password && (!u.port || u.port === '443') && (recruiteeTenant(u.hostname) || icimsTenant(u.hostname) || jazzhrTenant(u.hostname) || customRecruitee(u.hostname) || phenomHost(u.hostname) || myjobmagHost(u.hostname) || hosts.some(h => u.hostname === h || (h === 'bamboohr.com' && u.hostname.endsWith('.bamboohr.com'))));
 const list = v => v == null ? [] : Array.isArray(v) ? v : [v];
 function countryName(v) {
   const name = typeof v === 'object' ? v?.name : v;
@@ -39,6 +40,7 @@ export function nonVacancyReason(job) {
 }
 export function redirectedToIndex(original, final) {
   const a = new URL(original), b = new URL(final);
+  if (jazzhrTenant(a.hostname) && a.origin===b.origin && postingRoute(a) && /^\/apply(?:\/jobs)?\/?$/.test(b.pathname)) return true;
   // Only a recognised listing index proves removal. Login/locale/tracking
   // redirects are not evidence that a vacancy is closed. Numeric IDs can be 1 digit.
   return a.pathname !== b.pathname && /^\/(?:careers|jobs|(?:[^/]+\/)?careers)?\/?$/i.test(b.pathname);
@@ -48,6 +50,8 @@ function decode(s) {
 }
 const normalizedTitle = s => cleanText(decode(s),Infinity).toLowerCase().replace(/[^\p{L}\p{N}]/gu,'');
 function postingRoute(u) {
+  if (jazzhrTenant(u.hostname)) return u.pathname.match(/^\/apply\/jobs\/details\/([A-Za-z0-9_-]{6,64})\/?$/)?.[1]
+    || u.pathname.match(/^\/apply\/([A-Za-z0-9_-]{6,64})(?:\/[A-Za-z0-9_-]+)?\/?$/)?.[1] || null;
   if (icimsTenant(u.hostname)) return u.pathname.match(/^\/jobs\/(\d+)\/(?:[^/]+\/)?job\/?$/i)?.[1] || null;
   if (phenomHost(u.hostname)) return u.pathname.match(/^\/(?:(?:global|[a-z]{2}(?:-[a-z]{2})?)\/){0,2}job\/([a-z0-9_-]+)(?:\/[^/]+)?\/?$/i)?.[1] || null;
   if (customRecruitee(u.hostname)) return u.pathname.match(/^\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?o\/([a-z0-9][a-z0-9-]*)(?:\/c\/new)?\/?$/i)?.[1] || null;
@@ -193,7 +197,7 @@ export async function verifyPosting(job, {fetcher=fetch, now=Date.now(), timeout
     if(!allowed(u)) return unknown('Source cannot yet be verified');
     let path = u.pathname, provider = 'structured posting', payload;
     const read=(url,origin=new URL(url).origin)=>readResponse(url,fetcher,ctrl.signal,origin,observe);
-    const strictStructured=icimsTenant(u.hostname) || phenomHost(u.hostname) || customRecruitee(u.hostname) || myjobmagHost(u.hostname);
+    const strictStructured=icimsTenant(u.hostname) || jazzhrTenant(u.hostname) || phenomHost(u.hostname) || customRecruitee(u.hostname) || myjobmagHost(u.hostname);
     if(strictStructured && !postingRoute(u)) return unknown('Unsupported employer vacancy URL');
     const recruitee=recruiteeTenant(u.hostname) || observedRecruiteeApiHost(u.hostname);
     const offerPath=path.match(/^\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?o\/([a-z0-9][a-z0-9-]*)(?:\/c\/new)?\/?$/i);
