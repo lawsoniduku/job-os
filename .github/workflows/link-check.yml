@@ -24,9 +24,13 @@ on:
         description: "Optional ATS within a source, e.g. recruitee"
         required: false
         default: ""
+      posting_url:
+        description: "Optional exact stored posting URL; checks just that listing"
+        required: false
+        default: ""
 
 concurrency:
-  group: posting-verification-${{ github.ref }}
+  group: posting-verification-${{ github.ref }}-${{ inputs.posting_url && 'single' || 'batch' }}
   cancel-in-progress: false
 
 jobs:
@@ -49,11 +53,13 @@ jobs:
           args=(--limit "$CHECK_LIMIT" --concurrency 24 --recheck-days "$RECHECK_DAYS")
           if [[ -n "$CHECK_SOURCE" ]]; then args+=(--source "$CHECK_SOURCE"); fi
           if [[ -n "$CHECK_ATS" ]]; then args+=(--ats-source "$CHECK_ATS"); fi
+          if [[ -n "$CHECK_POSTING" ]]; then args+=(--posting-url "$CHECK_POSTING"); fi
           node ingest/check_links.js "${args[@]}"
         env:
           CHECK_LIMIT: ${{ inputs.limit || '12000' }}
           CHECK_SOURCE: ${{ inputs.source || '' }}
           CHECK_ATS: ${{ inputs.ats_source || '' }}
+          CHECK_POSTING: ${{ inputs.posting_url || '' }}
           RECHECK_DAYS: ${{ inputs.recheck_days || '1' }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}

@@ -586,6 +586,30 @@ test('provider recheck scopes the server query without changing other eligibilit
  assert.ok(calls.some(([n,k,v])=>n==='eq' && k==='source' && v==='jobhive'));
  assert.throws(()=>verificationQuery({from:()=>q},{atsSource:'../../invalid'}),/ATS/);
 });
+test('exact posting recheck uses its unique URL without waiting for the bulk due window',()=>{
+ const calls=[];const q={};for(const n of ['select','in','or','order','limit','eq'])q[n]=(...args)=>{calls.push([n,...args]);return q;};
+ const postingUrl='https://hardrockdigital.recruitee.com/o/bi-analyst-7/c/new';
+ verificationQuery({from:()=>q},{source:'jobhive',postingUrl});
+ assert.ok(calls.some(([n,k,v])=>n==='eq' && k==='apply_url' && v===postingUrl));
+ assert.ok(!calls.some(([n,v])=>n==='or' && v.includes('link_checked_at.lt.')));
+ assert.throws(()=>verificationQuery({from:()=>q},{postingUrl:'http://127.0.0.1/private'}),/posting URL/);
+});
+test('Recruitee tenant requests share pacing and provider cooldown without affecting other ATS',async()=>{
+ let tick=0;const calls=[],sleeps=[];
+ const scheduler=createVerificationScheduler({now:()=>tick,recruiteeIntervalMs:600,sleep:async ms=>{sleeps.push(ms);tick+=ms;},
+  verify:async row=>{calls.push(row.apply_url);return {status:'unknown',http_status:429,retry_after_ms:60000};}});
+ const first={...recruiteeJob,apply_url:'https://one.recruitee.com/o/role'};
+ await scheduler(first);
+ const deferred=await scheduler({...first,apply_url:'https://two.recruitee.com/o/role'});
+ assert.equal(deferred.deferred,true);assert.equal(calls.length,1);
+ await scheduler(job);assert.equal(calls.length,2);
+ tick=61000;await scheduler(first);await scheduler(job);
+ assert.equal(calls.length,4);
+ let at=0;const started=[];
+ const paced=createVerificationScheduler({now:()=>at,recruiteeIntervalMs:600,sleep:async ms=>{at+=ms;},verify:async()=>{started.push(at);return {status:'ok'};}});
+ await paced(first);await paced({...first,apply_url:'https://two.recruitee.com/o/role'});
+ assert.deepEqual(started,[0,600]);
+});
 
 const jazzJob={...job,title:'Customer Support Specialist',apply_url:'https://example.applytojob.com/apply/aBcDe12345/Customer-Support-Specialist'};
 const jazzLd=(extra={})=>ld({title:jazzJob.title,url:jazzJob.apply_url,description:'Provide customer support. Open to candidates worldwide.',jobLocationType:'TELECOMMUTE',...extra});

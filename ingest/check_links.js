@@ -30,6 +30,9 @@ const sourceIndex=args.indexOf('--source');
 const source=sourceIndex>=0?args[sourceIndex+1]:null;
 const atsIndex=args.indexOf('--ats-source');
 const atsSource=atsIndex>=0?args[atsIndex+1]:null;
+const postingIndex=args.indexOf('--posting-url');
+const postingUrl=postingIndex>=0?args[postingIndex+1]:null;
+if(postingIndex>=0 && !postingUrl)throw new Error('Missing --posting-url');
 if(atsIndex>=0 && !/^[a-z][a-z0-9_]{0,31}$/.test(atsSource || '')) throw new Error('Invalid --ats-source');
 if(source && !ACTIVE_JOB_SOURCES.includes(source)) throw new Error(`Unsupported --source: ${source}`);
 const TIMEOUT_MS = 12000;
@@ -195,7 +198,7 @@ async function selectBatch(batchSource, limit = Math.min(LIMIT, 500)) {
     // requests on listings already gated out by freshness or by region.
     // Persist each batch before selecting the next: rows leave the due queue.
     // Country filters are applied at search time; check every region.
-    const { data, error } = await verificationQuery(supabase,{limit,source:batchSource,atsSource,recheckDays:RECHECK_DAYS});
+    const { data, error } = await verificationQuery(supabase,{limit:postingUrl?1:limit,source:batchSource,atsSource,postingUrl,recheckDays:RECHECK_DAYS});
     if (!error) return data || [];
     console.log(`  ⚠️  ${batchSource} select failed (attempt ${a}/4): ${error.message}`);
     await sleep(1500 * a);
@@ -206,7 +209,7 @@ async function selectBatch(batchSource, limit = Math.min(LIMIT, 500)) {
 async function run() {
   console.log(`\n🔗 LINK CHECK${dryRun ? " (DRY RUN)" : ""} — batch ${LIMIT}, recheck older than ${RECHECK_DAYS}d`);
   await assertLivenessColumns();
-  let checked = 0, written = 0;
+  let checked = 0, written = 0, deferred = 0;
   const by = { ok: 0, dead: 0, unknown: 0 };
   const diagnostics={};
   const deadline = Date.now() + 44 * 60 * 1000;
@@ -221,7 +224,9 @@ async function run() {
     await Promise.all(Array.from({length: CONCURRENCY}, async () => {
       while (queue.length && Date.now() < deadline) {
         const row = queue.shift();
-        const verification = retainVerificationEvidence(compactVerification(await scheduledVerification(row, {timeoutMs: 12000})), row.elig_signals?.verification);
+        const observation=await scheduledVerification(row, {timeoutMs: 12000});
+        if(observation.deferred){deferred++;continue;}
+        const verification = retainVerificationEvidence(compactVerification(observation), row.elig_signals?.verification);
         const status = verification.status === 'ok' ? 'ok' : verification.status === 'dead' ? 'dead' : 'unknown';
         recordVerificationSummary(diagnostics,row,verification);
         results.push({...row,status,verification}); by[status]++; checked++;
@@ -236,8 +241,11 @@ async function run() {
       if (!dryRun) process.exitCode=1;
       break;
     }
+    // Unattempted cooldown rows retain their old timestamp/version and remain
+    // due. Stop rather than spin through the same due page or fake a check.
+    if(deferred || postingUrl)break;
   }
-  console.log(`Verification complete: ${checked} checked, ${written} saved. Unverified listings remain available with uncertainty labels.`);
+  console.log(`Verification complete: ${checked} checked, ${written} saved, ${deferred} deferred without advancing check metadata. Unverified listings remain available with uncertainty labels.`);
   printVerificationSummary(diagnostics);
   console.log("");
 }
