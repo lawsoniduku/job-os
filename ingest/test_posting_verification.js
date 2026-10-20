@@ -223,7 +223,7 @@ test('Recruitee reads the exact tenant offer and does not turn office metadata i
  }
 });
 test('Recruitee generic remote remains unconfirmed while full requirements retain residency restrictions',async()=>{
- const v=await verifyPosting(recruiteeJob,{fetcher:async()=>response(recruiteeOffer({description:'People operations support.',requirements:'Remote team administration.'}))});
+ const v=await verifyPosting(recruiteeJob,{fetcher:async()=>response(recruiteeOffer({description:'People operations support.',requirements:'Remote team administration.',locations:[]}))});
  assert.equal(checkEligibility(applyVerification(recruiteeJob,compactVerification(v)),'nigeria').confidence,'possible');
  const restricted=await verifyPosting(recruiteeJob,{fetcher:async()=>response(recruiteeOffer({requirements:'Required experience. '.repeat(400)+'Applicants must be based in the United States.'}))});
  assert.equal(restricted.status,'ok');assert.match(restricted.description,/Applicants must be based in the United States/);
@@ -534,6 +534,30 @@ test('Recruitee mandatory locations retain Nigeria alternatives; optional office
  }
 });
 
+test('Hard Rock shape retains published US work location when application location question is hidden',async()=>{
+ const hardrock={...recruiteeJob,title:'BI Analyst',apply_url:'https://hardrockdigital.recruitee.com/o/bi-analyst-7/c/new'};
+ const offer=recruiteeOffer({id:2608764,slug:'bi-analyst-7',title:'BI Analyst',remote:true,location:'Remote job',
+  description:'Build business intelligence dashboards for the Finance team.',requirements:'Experience with SQL and business intelligence.',
+  location_question_visible:false,locations_question_required:true,locations_question_type:'multiple_choice',
+  locations:[{name:'United States',city:'United States',state:'Florida',country:'United States',country_code:'US'}]});
+ const v=await verifyPosting(hardrock,{fetcher:async()=>response(offer)});
+ assert.equal(v.status,'ok');assert.match(v.location,/Florida, United States/);
+ const compact=compactVerification(v),applied=applyVerification(hardrock,compact);
+ assert.equal(checkEligibility(applied,'nigeria').eligible,false);
+ assert.equal(checkEligibility(applied,'us').eligible,true);
+ assert.equal(rankCandidates([applied],parseIntent('BI analyst jobs Nigeria'),{},Date.now(),true).results.length,0);
+});
+test('published Recruitee locations remain usable without mandatory application preferences',async()=>{
+ for(const location of ['Remote job','Remote','']){
+  const v=await verifyPosting(recruiteeJob,{fetcher:async()=>response(recruiteeOffer({location,
+   description:'Provide operations support.',requirements:'Relevant operations experience.',
+   location_question_visible:false,locations_question_required:false,
+   locations:[{city:'Belgrade',country:'Serbia'},{city:'Lagos',country:'Nigeria'}]}))});
+  assert.match(v.location,/Serbia/);assert.match(v.location,/Nigeria/);
+  assert.equal(checkEligibility(applyVerification(recruiteeJob,compactVerification(v)),'nigeria').eligible,true);
+ }
+});
+
 import {createSourceVerificationSelector} from './core/verificationQueue.js';
 test('verification rotates bounded source pages so a broad backlog cannot starve a small source',async()=>{
  const calls=[];const pending={jobhive:[[{id:'h1'}],[{id:'h2'}],[]],myjobmag:[[{id:'m1'}],[]]};
@@ -554,4 +578,11 @@ test('verification source selection rejects unsafe page sizes and incomplete-loo
  let calls=0;const select=createSourceVerificationSelector(async()=>{calls++;return null;},{source:'jobhive'});
  for(const n of [0,501,1.5,NaN])await assert.rejects(select(n),/page size/);
  assert.equal(calls,0);await assert.rejects(select(500),/invalid page/);
+});
+test('provider recheck scopes the server query without changing other eligibility gates',()=>{
+ const calls=[];const q={};for(const n of ['select','in','or','order','limit','eq'])q[n]=(...args)=>{calls.push([n,...args]);return q;};
+ verificationQuery({from:()=>q},{source:'jobhive',atsSource:'recruitee'});
+ assert.ok(calls.some(([n,k,v])=>n==='eq' && k==='ats_source' && v==='recruitee'));
+ assert.ok(calls.some(([n,k,v])=>n==='eq' && k==='source' && v==='jobhive'));
+ assert.throws(()=>verificationQuery({from:()=>q},{atsSource:'../../invalid'}),/ATS/);
 });

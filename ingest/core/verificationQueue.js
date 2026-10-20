@@ -2,8 +2,9 @@ import {ACTIVE_JOB_SOURCES} from '../../api/sourcePolicy.js';
 import {VERIFICATION_VERSION} from '../../api/postingVerification.js';
 import {publicationFilter,sourceVisibilityFilter} from '../../api/jobFreshness.js';
 
-export function verificationQuery(db,{limit=500,source=null,recheckDays=1,now=Date.now()}={}) {
+export function verificationQuery(db,{limit=500,source=null,atsSource=null,recheckDays=1,now=Date.now()}={}) {
   if(source && !ACTIVE_JOB_SOURCES.includes(source)) throw new Error(`Unsupported --source: ${source}`);
+  if(atsSource && !/^[a-z][a-z0-9_]{0,31}$/.test(atsSource)) throw new Error('Invalid ATS source');
   const staleBefore=new Date(now-recheckDays*864e5).toISOString();
   let q=db.from('jobs')
     .select('id, source, ats_source, apply_url, title, company, link_status, link_checked_at, elig_signals')
@@ -15,6 +16,7 @@ export function verificationQuery(db,{limit=500,source=null,recheckDays=1,now=Da
   // verifier version automatically makes them due again; search retains them.
   q=q.or(`elig_signals->verification->>retryable.is.null,elig_signals->verification->>retryable.neq.false,elig_signals->verification->>v.is.null,elig_signals->verification->>v.neq.${VERIFICATION_VERSION}`);
   if(source)q=q.eq('source',source);
+  if(atsSource)q=q.eq('ats_source',atsSource);
   return q.order('link_checked_at',{ascending:true,nullsFirst:true}).order('id',{ascending:true}).limit(limit);
 }
 
