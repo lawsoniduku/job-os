@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 /**
  * api/employer.js — the employer side: post · screen · feedback · match.
  * ======================================================================
@@ -21,6 +20,7 @@ import { classifyJob, extractEligibilitySignals, SIGNALS_VERSION } from "./roleI
 import { generateJSON, isLLMHealthy } from "../lib/llm.js";
 import { normalizeCriteria, validateReview } from "../shared/hiringWorkflow.js";
 import { employerSearchDescription } from "./employerPosting.js";
+import {hiringDocumentsRouter} from './hiringDocuments.js';
 import { hiringRouter } from "./hiring.js";
 import { draftJD, runScoringQueue } from "./ats.js";
 
@@ -76,6 +76,7 @@ export function employerRouter({ supabase, requireAuth, requireEmployer, optiona
     const register=r[method].bind(r);
     r[method]=(path,...handlers)=>register(path,...handlers.map(handler=>(req,res,next)=>Promise.resolve().then(()=>handler(req,res,next)).catch(next)));
   }
+  r.use(hiringDocumentsRouter({supabase,requireAuth,requireEmployer,searchLimit}));
   r.use(hiringRouter({supabase,requireAuth,requireEmployer,searchLimit,llmLimit}));
 
   /* ══════════════════════════════════════════════════════════════════
@@ -258,24 +259,9 @@ ${text.slice(0, 12000)}`;
 
     if (error) return res.status(503).json({ error: "Couldn't load your postings." });
 
-    const ids = (postings || []).map((p) => p.id);
-    const counts = {};
-    if (ids.length) {
-      const { data: subs } = await supabase
-        .from("posting_submissions")
-        .select("posting_id, stage")
-        .eq("org_id", req.orgId)
-        .in("posting_id", ids);
-
-      for (const s of subs || []) {
-        const c = (counts[s.posting_id] ||= { total: 0, awaiting: 0 });
-        c.total++;
-        // "Awaiting" is anything the employer hasn't decided on. It is the
-        // number that should make someone open the queue, so it counts
-        // undecided stages rather than unread rows.
-        if (s.stage === "new" || s.stage === "screening") c.awaiting++;
-      }
-    }
+    const {data:totals,error:countError}=await supabase.rpc('hiring_posting_counts',{p_org:req.orgId,p_actor:req.user.id});
+    if(countError)return dbFail(res,countError,"Could not load applicant counts.");
+    const counts=Object.fromEntries((totals || []).map(row=>[row.posting_id,row.counts]));
 
     res.json({
       postings: (postings || []).map((p) => ({ ...p, counts: counts[p.id] || { total: 0, awaiting: 0 } })),
@@ -391,52 +377,21 @@ ${text.slice(0, 12000)}`;
       return res.status(400).json({ error: "50 CVs at a time is the limit - split the batch." });
     }
 
-    // Same CV twice is a real accident (a folder dragged in twice), and it
-    // would double-charge the model and show the recruiter a phantom
-    // second applicant. Deduped on the text itself, not the filename,
-    // because the same CV often arrives under two names.
-    const { data: existing } = await supabase
-      .from("posting_submissions").select("cv_text, cv_filename")
-      .eq("posting_id", posting.id).eq("source", "upload");
-    const seen = new Set((existing || []).map((e) => fingerprint(e.cv_text)));
-
-    const rows = [];
-    let skipped = 0;
-    for (const c of incoming) {
-      const text = String(c?.text || "").trim().slice(0,50000);
-      if (text.length < 80) { skipped++; continue; }   // an empty or unreadable file
-      const fp = fingerprint(text);
-      if (seen.has(fp)) { skipped++; continue; }
-      seen.add(fp);
-      rows.push({
-        posting_id: posting.id,
-        org_id: req.orgId,
-        candidate_id: null,
-        source: "upload",
-        cv_text: text.slice(0, 50000),
-        cv_filename: String(c?.filename || "").slice(0, 260) || null,
-        uploaded_by: req.user.id,
-        stage: "new",
-        score_status: "pending",
-      });
+    const candidates=[];let added=0,skipped=0;
+    for(let i=0;i<incoming.length;i++) {
+      const c=incoming[i],text=String(c?.text || '').trim().slice(0,50000);
+      if(text.length<80){skipped++;candidates.push({index:i,error:'Not enough readable CV text.'});continue;}
+      const {data,error}=await supabase.rpc('add_hiring_upload',{p_org:req.orgId,p_actor:req.user.id,p_posting:posting.id,p_text:text,p_filename:String(c.filename || '').slice(0,200)});
+      if(error)return dbFail(res,error,"Could not finish this import. Retrying will keep CVs already saved.");
+      const row=data?.[0];if(!row)return res.status(503).json({error:'Could not confirm the CV import. Please retry.'});
+      if(row.added)added++;else skipped++;
+      candidates.push({index:i,id:row.id,added:row.added});
     }
-
-    if (!rows.length) {
-      return res.status(400).json({
-        error: skipped ? "Those were already uploaded, or the text couldn't be read." : "No usable CVs.",
-        skipped,
-      });
-    }
-
-    const { data: inserted, error } = await supabase
-      .from("posting_submissions").insert(rows).select("id");
-    if (error) return dbFail(res, error, "Couldn't save those CVs - try again.");
-
     // Responds immediately; scoring drains in the background at a pace the
     // free tier tolerates. The UI watches score_status rather than waiting.
     runScoringQueue(supabase, posting.id).catch(() => {});
 
-    res.status(201).json({ added: inserted.length, skipped, scoring: true });
+    res.status(201).json({ added, skipped, candidates, scoring: true });
   });
 
   // Full CV text for ONE submission. Split out because the queue used to
@@ -461,15 +416,18 @@ ${text.slice(0, 12000)}`;
     // cv_text is deliberately NOT selected - see GET /employer/submissions/
     // :id/cv. Everything the queue renders comes from the summary and the
     // structured fields; the document itself is fetched on demand.
-    const { data: subs, error } = await supabase
+    const cursor=typeof req.query.after==='string'?req.query.after:null;
+    if(cursor&&!/^[0-9a-f-]{36}$/i.test(cursor))return res.status(400).json({error:'Invalid applicant cursor.'});
+    let applicantQuery = supabase
       .from("posting_submissions")
       .select("id, candidate_id, source, applicant_name, applicant_email, cv_filename, " +
               "cv_skills, cv_years, country, availability, summary, match_score, match_reason, " +
               "score_status, score_retry_at, score_retry_reason, stage, created_at, decided_at, updated_at, stage_entered_at, assessment")
       .eq("posting_id", req.params.id)
       .eq("org_id", req.orgId)
-      .order("match_score", { ascending: false, nullsFirst: false })
-      .order("created_at", { ascending: true });
+      .order("id", { ascending: true }).limit(250);
+    if(cursor)applicantQuery=applicantQuery.gt("id",cursor);
+    const {data:subs,error}=await applicantQuery;
 
     if (error) return res.status(503).json({ error: "Couldn't load applicants." });
 
@@ -488,7 +446,7 @@ ${text.slice(0, 12000)}`;
     }
 
     res.json({
-      posting,
+      posting,next_cursor:subs?.length===250?subs.at(-1).id:null,
       // So the UI can say "scoring 12 of 30" and stop polling when it hits
       // zero, rather than guessing from whether any score is still null.
       scoring: {
@@ -895,13 +853,7 @@ export async function mirrorToJobs(supabase, posting, org, existingJobId) {
 // A stable, short handle so an anonymous candidate can be referred to
 // ("candidate 7f3a") without ever showing a name. Not a security boundary -
 // the real protection is that identity columns are never selected.
-function fingerprint(text = "") {
-  // Cheap content hash for spotting the same CV uploaded twice. Normalises
-  // whitespace first, because the same document exported twice differs in
-  // spacing far more often than in words.
-  const norm = String(text).toLowerCase().replace(/\s+/g, " ").trim();
-  return createHash('sha256').update(norm).digest('hex');
-}
+
 
 // A stable, non-reversible-looking handle for an anonymous candidate card.
 // Not a security boundary — the real protection is that identity columns are

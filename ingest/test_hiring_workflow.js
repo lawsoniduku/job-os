@@ -33,3 +33,9 @@ test('dashboard reports active overdue work and actual current stages',()=>{
  const m=hiringMetrics([{stage:'new',created_at:'2026-10-01',review:{next_action:'Review',due_at:'2026-10-20'}},{stage:'hired',created_at:'2026-10-01',review:{next_action:'Old',due_at:'2026-10-20'}}],Date.parse('2026-10-22'));
  assert.equal(m.total,2);assert.equal(m.overdue,1);assert.equal(m.waiting,1);assert.equal(m.stages.hired,1);
 });
+import {compareHiringCandidates} from '../shared/hiringWorkflow.js';
+test('completed semantic assessments rank ahead of queued CVs and literal mention scores',()=>{
+ const base={created_at:'2026-10-01',assessment:{method:'semantic_role_match'},score_status:'done'};
+ const rows=[{...base,id:'pending',score_status:'pending',match_score:100},{...base,id:'literal',assessment:{method:'literal_cv_evidence'},match_score:100},{...base,id:'weaker',match_score:40},{...base,id:'stronger',match_score:80}];
+ assert.deepEqual(rows.sort(compareHiringCandidates).map(r=>r.id),['stronger','weaker','literal','pending']);
+});

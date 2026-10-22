@@ -208,12 +208,12 @@ export default function PostingEditor({ posting, onCancel, onSaved, showToast })
 
         <section className="emp-criteria-editor">
           <h2>What should CV review look for?</h2>
-          <p>Up to 12 concrete skills or responsibilities. Each match shows the original CV quote. Anything not mentioned stays for your review.</p>
+          <p>Up to 12 concrete skills or responsibilities. Each match shows the original CV quote. Equivalent experience counts; unclear evidence becomes an interview question.</p>
           <div className="emp-row-2">
             <label className="field"><span className="field-label">Required · one per line</span><textarea rows={5} value={f.required_criteria} onChange={set("required_criteria")} placeholder={"Customer service\nMicrosoft Excel\nZendesk"}/></label>
             <label className="field"><span className="field-label">Preferred · one per line</span><textarea rows={5} value={f.preferred_criteria} onChange={set("preferred_criteria")} placeholder={"Salesforce\nTechnical support"}/></label>
           </div>
-          <span className="field-hint">Use short, specific terms for reliable mention detection. You make every hiring decision. Saving changed criteria rescans existing applicants.</span>
+          <span className="field-hint">Describe the actual skills, responsibilities and experience the role needs. You make every hiring decision. Saving changed criteria rescans existing applicants.</span>
         </section>
         {error && <div className="auth-error">{error}</div>}
 

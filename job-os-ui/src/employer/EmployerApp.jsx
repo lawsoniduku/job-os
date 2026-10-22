@@ -10,7 +10,6 @@
  */
 import { useState, useEffect, useCallback } from "react";
 import { useSession } from "../lib/useSession";
-import { useTheme } from "../lib/useTheme";
 import AuthModal from "../AuthModal";
 import { getMe, createOrg, listPostings, updatePosting } from "../lib/employerApi";
 import PostingEditor from "./PostingEditor";
@@ -22,7 +21,6 @@ import "./employer.css";
 
 export default function EmployerApp() {
   const { user, loading, signOut } = useSession();
-  const { theme, toggleTheme } = useTheme();
 
   const [org, setOrg] = useState(null);
   const [checkingOrg, setCheckingOrg] = useState(true);
@@ -79,10 +77,9 @@ export default function EmployerApp() {
       <div className="emp-gate">
         <div className="emp-gate-card">
           <div className="emp-wordmark"><span className="dot" />JobCopilot <span className="emp-badge">for employers</span></div>
-          <h1>Hire people who can actually take the job.</h1>
+          <h1>Less CV chaos. More great conversations.</h1>
           <p>
-            Post a role, screen applicants who arrive already checked against it, and
-            tell every one of them where they stand — in a click, not a paragraph.
+            Bring your CVs, set what matters for the role, and move from a pile of applications to an evidence-backed shortlist. Original documents and human decisions, together.
           </p>
           <button className="btn primary lg" onClick={() => setShowAuth(true)}>Sign in to continue</button>
           <a className="emp-alt" href="/">I'm looking for work instead</a>
@@ -98,13 +95,13 @@ export default function EmployerApp() {
 
   return (
     <div className="emp-app">
-      <nav className="emp-rail">
+      <nav className="emp-rail" aria-label="Hiring navigation">
         <a className="emp-wordmark" href="/employer">
-          <span className="dot" />JobCopilot <span className="emp-badge">hiring</span>
+          <span className="emp-brand-symbol">✳</span><span>JobCopilot<small>RECRUITING WORKSPACE</small></span>
         </a>
 
         <div className="emp-org">
-          <div className="emp-org-name">{org.name}</div>
+          <span className="emp-org-avatar">{org.name.slice(0,1)}</span><div className="emp-org-name">{org.name}</div>
           <div className="emp-org-sub">
             {org.verified_at
               ? <span className="emp-verified">Verified employer</span>
@@ -113,10 +110,10 @@ export default function EmployerApp() {
         </div>
 
         <button className="btn primary emp-new" onClick={() => { setEditing("form");setView("role"); }}>
-          New role
+          ＋ Create a role
         </button>
 
-        <button className={`btn emp-overview-nav ${view==="overview"?"primary":""}`} onClick={()=>{setEditing(null);setView("overview");}}>Hiring overview</button>
+        <button className={`btn emp-overview-nav ${view==="overview"?"primary":""}`} onClick={()=>{setEditing(null);setView("overview");}}>▦ &nbsp; Hiring overview</button><div className="emp-rail-label">YOUR ROLES <span>{postings.length}</span></div>
         <div className="emp-postings">
           {postings.length === 0 && (
             <p className="emp-rail-empty">No roles yet. Post one and it appears in candidate search straight away.</p>
@@ -140,13 +137,13 @@ export default function EmployerApp() {
         <div className="emp-rail-foot">
           <div className="emp-user">{user.email}</div>
           <div className="rail-mini">
-            <button onClick={toggleTheme}>{theme === "dark" ? "Light" : "Dark"}</button>
+            <a href="/">Candidate experience ↗</a>
             <button onClick={async () => { await signOut(); window.location.href = "/"; }}>Sign out</button>
           </div>
         </div>
       </nav>
 
-      <main className="emp-main">
+      <main className="emp-main"><div className="emp-topbar"><span>Workspace <span>/</span> {view==="overview"?"Overview":selected?.title || "New role"}</span><span className="emp-topbar-person"><span className="emp-small-avatar">{user.email?.slice(0,1).toUpperCase()}</span>Your hiring desk</span></div><div className="emp-content">
         {/* Describing the role is the default way in; the form is the
             escape hatch, reachable from inside the composer and used
             automatically when the model is unavailable. Editing an
@@ -189,8 +186,8 @@ export default function EmployerApp() {
 
         {!editing && view==="role" && selected && (
           <>
-            <header className="emp-head">
-              <div>
+            <header className="emp-head emp-role-head">
+              <div><span className="eyebrow">ROLE WORKSPACE</span>
                 <h1>{selected.title}</h1>
                 <div className="emp-head-meta">
                   <span className={`emp-status s-${selected.status}`}>{selected.status}</span>
@@ -218,6 +215,8 @@ export default function EmployerApp() {
               </div>
             </header>
 
+            <div className="emp-role-brief"><div><span className="eyebrow">THE ROLE AT A GLANCE</span><p>{selected.description?.split(/\n\s*\n/).find(s=>s.trim().length>30)?.replace(/^[A-Z \n]+\n/,'').slice(0,360) || "Add a role description to tell candidates what they will own."}</p><div className="emp-role-facts"><span>◎ {selected.remote_type || "Arrangement not stated"}</span><span>◷ {selected.employment_type?.replaceAll("_"," ") || "Employment type not stated"}</span><span>⌁ {selected.eligible_countries?.join(", ") || "Hiring countries not stated"}</span></div></div><div className="emp-role-rubric"><span className="emp-spark">✳</span><strong>{selected.screening_criteria?.length || 0} screening criteria</strong><p>One consistent assessment for every CV.</p><button onClick={()=>setEditing(selected)}>Review criteria ↗</button></div></div>
+
             <div className="emp-tabs">
               <button className={tab === "applicants" ? "active" : ""} onClick={() => setTab("applicants")}>
                 Applicants{selected.counts.total > 0 ? ` (${selected.counts.total})` : ""}
@@ -236,7 +235,7 @@ export default function EmployerApp() {
             {tab === "matches" && <MatchList posting={selected} showToast={showToast} />}
           </>
         )}
-      </main>
+      </div></main>
 
       <div className={`toast ${toast ? "show" : ""}`} role="status"><span className="t-dot" />{toast}</div>
     </div>
@@ -286,7 +285,7 @@ function OrgSetup({ onCreated }) {
   return (
     <div className="emp-gate">
       <form className="emp-gate-card" onSubmit={submit}>
-        <div className="emp-wordmark"><span className="dot" />JobCopilot <span className="emp-badge">hiring</span></div>
+        <div className="emp-wordmark"><span className="emp-brand-symbol">✳</span><span>JobCopilot<small>RECRUITING WORKSPACE</small></span></div>
         <h1>Set up your company</h1>
         <p>This is what candidates see on your postings.</p>
 

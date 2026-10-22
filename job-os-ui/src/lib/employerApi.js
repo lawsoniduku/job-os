@@ -94,7 +94,16 @@ export const draftPosting = ({ brief, answers }) =>
   call("/employer/postings/draft", { method: "POST", body: { brief, answers }, timeoutMs: 90000, attempts: 2 });
 
 /* ── screen ───────────────────────────────────────────────── */
-export const listSubmissions = (postingId) => call(`/employer/postings/${postingId}/submissions`);
+export async function listSubmissions(postingId) {
+ const submissions=[];let after=null,result;
+ for(let page=0;page<200;page++) {
+  result=await call(`/employer/postings/${postingId}/submissions${after?'?after='+after:''}`);
+  submissions.push(...result.submissions);after=result.next_cursor;
+  if(!after)break;
+  if(page===199)throw Error('Too many applicants to load. Narrow this role before continuing.');
+ }
+ return {...result,submissions,scoring:{total:submissions.length,outstanding:submissions.filter(s=>['pending','scoring'].includes(s.score_status)).length,failed:submissions.filter(s=>s.score_status==='failed').length}};
+}
 
 // The CV text for one applicant. Separate from the queue because the queue
 // carries fifty summaries, not fifty documents.
@@ -108,26 +117,29 @@ export const getSubmissionCv = (id) => call(`/employer/submissions/${id}/cv`, { 
  * should carry on a mobile connection, and because a partial failure should
  * cost one chunk rather than the whole drop.
  */
-export async function uploadCandidates(postingId, candidates, onProgress) {
-  const CHUNK = 10;
-  let added = 0, skipped = 0;
-  for (let i = 0; i < candidates.length; i += CHUNK) {
-    const slice = candidates.slice(i, i + CHUNK);
-    try {
-      const r = await call(`/employer/postings/${postingId}/candidates`, {
-        method: "POST", body: { candidates: slice }, timeoutMs: 60000, attempts: 2,
-      });
-      added += r.added || 0;
-      skipped += r.skipped || 0;
-    } catch (e) {
-      // A chunk that is entirely duplicates comes back 400; that is a
-      // skip, not a failure, and must not abort the rest of the drop.
-      if (e.status === 400) skipped += slice.length;
-      else throw e;
-    }
-    onProgress?.(Math.min(i + CHUNK, candidates.length), candidates.length);
-  }
-  return { added, skipped };
+export async function uploadCandidates(postingId,candidates,onProgress) {
+ let added=0,skipped=0;const errors=[];
+ for(let i=0;i<candidates.length;i++) {
+  const c=candidates[i];
+  try {
+   const r=await call(`/employer/postings/${postingId}/candidates`,{method:'POST',body:{candidates:[{text:c.text,filename:c.filename}]},timeoutMs:60000});
+   added+=r.added;skipped+=r.skipped;
+   const row=r.candidates?.[0];
+   if(row?.error)errors.push({filename:c.filename,error:row.error,file:c.file});
+   if(row?.id&&c.file){try{await uploadOriginalCv(row.id,c.file);}catch(e){errors.push({filename:c.filename,error:'CV text saved; original upload failed: '+e.message,id:row.id,file:c.file});}}
+  }catch(e){errors.push({filename:c.filename,error:'CV import failed: '+e.message,file:c.file});}
+  onProgress?.(i+1,candidates.length);
+ }
+ return {added,skipped,errors};
+}
+export const getOriginalCv=id=>call(`/employer/submissions/${id}/document`);
+export async function uploadOriginalCv(id,file,candidate=false) {
+ const jwt=await token();if(!jwt)throw new ApiError('Sign in to continue.',401);
+ const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),60000);
+ try {
+  const r=await fetch(`${API}/${candidate?'candidate':'employer'}/submissions/${id}/document`,{method:'PUT',headers:{Authorization:'Bearer '+jwt,'Content-Type':'application/octet-stream','X-CV-Filename':encodeURIComponent(file.name)},body:file,signal:controller.signal});
+  const data=await r.json().catch(()=>({}));if(!r.ok)throw new ApiError(data.error || 'Could not store the original CV.',r.status);return data;
+ }finally{clearTimeout(timer);}
 }
 export const setStage = (id, stage) => call(`/employer/submissions/${id}`, { method: "PATCH", body: { stage } });
 
