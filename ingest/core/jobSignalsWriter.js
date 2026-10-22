@@ -7,8 +7,8 @@ export async function updateJobSignals(db, id, transform, {
   let row = snapshot, lastError = null;
   for (let attempt = 0; attempt < attempts; attempt++) {
     try {
-      if (!row) {
-        const read = await db.from('jobs').select(columns).eq('id', id).maybeSingle();
+      if (!row || !row.elig_signals_etag) {
+        const read = await db.from('jobs').select(columns + ',elig_signals_etag').eq('id', id).maybeSingle();
         if (read.error) throw new Error(read.error.message);
         if (!read.data) return {saved:false, skipped:true, error:null};
         row = read.data;
@@ -19,8 +19,8 @@ export async function updateJobSignals(db, id, transform, {
       const extra = typeof patch === 'function' ? patch(row, signals) : patch;
       let query = db.from('jobs').update({...extra, elig_signals:signals}).eq('id', id);
       for (const [key,value] of Object.entries(conditions)) query=query.eq(key,value);
-      query = previous === null ? query.is('elig_signals', null)
-        : query.filter('elig_signals', 'eq', JSON.stringify(previous));
+      if (!row.elig_signals_etag) throw new Error('Missing evidence etag; apply bounded_evidence_compare migration');
+      query = query.eq('elig_signals_etag', row.elig_signals_etag);
       const written = await query.select('id');
       if (written.error) throw new Error(written.error.message);
       if (written.data?.length) return {saved:true, skipped:false, error:null};
@@ -40,3 +40,4 @@ export function mergePostingObservation(previous, incoming) {
     .filter(Boolean).sort((a,b) => (Date.parse(b.checked_at)||0) - (Date.parse(a.checked_at)||0))[0];
   return known ? {...incoming,last_known:known} : incoming;
 }
+

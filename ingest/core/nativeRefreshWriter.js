@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { tagJob } from './tag.js';
 
 const SOURCES = new Set(['greenhouse', 'lever', 'ashby', 'workable', 'smartrecruiters', 'teamtailor', 'breezy', 'myjobmag']);
-const COLUMNS = 'id,source,ats_source,apply_url,title,company,location,description,country_iso,posted_at,created_at,remote,remote_type,eligibility_region,elig_signals,last_seen_at';
+const COLUMNS = 'elig_signals_etag,id,source,ats_source,apply_url,title,company,location,description,country_iso,posted_at,created_at,remote,remote_type,eligibility_region,elig_signals,last_seen_at';
 const INPUTS = ['title', 'company', 'location', 'description', 'country_iso', 'remote', 'remote_type', 'eligibility_region'];
 const same = (left, right) => INPUTS.every(key => (left[key] ?? null) === (right[key] ?? null));
 const timestamp = value => Number.isFinite(Date.parse(value)) ? Date.parse(value) : null;
@@ -81,7 +81,8 @@ export function createNativeRefreshWriter(db, {
       try {
         let query = db.from('jobs').update(prepared.patch).eq('id', existing.id).eq('source', existing.source);
         query = existing.ats_source == null ? query.is('ats_source', null) : query.eq('ats_source', existing.ats_source);
-        query = existing.elig_signals == null ? query.is('elig_signals', null) : query.eq('elig_signals', JSON.stringify(existing.elig_signals));
+        if (!existing.elig_signals_etag) throw new Error('Missing evidence etag; apply bounded_evidence_compare migration');
+      query = query.eq('elig_signals_etag', existing.elig_signals_etag);
         const { data, error } = await query.select('id');
         if (error) throw new Error(error.message);
         if (data?.length === 1) return 'updated';
@@ -155,3 +156,4 @@ export function createNativeRefreshWriter(db, {
     return result;
   };
 }
+

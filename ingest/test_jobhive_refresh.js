@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+const etag = row => createHash('sha256').update(JSON.stringify(row.elig_signals ?? null)).digest('hex');
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createJobhiveRefreshWriter } from './core/jobhiveRefreshWriter.js';
@@ -49,7 +51,7 @@ function fakeDb(initial = [], { onUpdate, failWrites = false, onInsert } = {}) {
       upsert(value) { batch = value; return q; },
       async maybeSingle() {
         const row = [...rows.values()].find(row => filters.every(([key, value]) => row[key] === value));
-        return { data: row ? clone(row) : null, error: null };
+        return { data: row ? {...clone(row),elig_signals_etag:etag(row)} : null, error: null };
       },
       select() {
         if (!patch && !batch) return q;
@@ -63,7 +65,7 @@ function fakeDb(initial = [], { onUpdate, failWrites = false, onInsert } = {}) {
           return Promise.resolve({ data: [{ id: row.id }], error: null });
         }
         onUpdate?.(rows);
-        const row = [...rows.values()].find(row => filters.every(([key, value]) => key === 'elig_signals' && value !== null ? JSON.stringify(row[key]) === value : (row[key] ?? null) === value));
+        const row = [...rows.values()].find(row => filters.every(([key, value]) => key === 'elig_signals_etag' ? etag(row) === value : key === 'elig_signals' && value !== null ? JSON.stringify(row[key]) === value : (row[key] ?? null) === value));
         if (!row) return Promise.resolve({ data: [], error: null });
         Object.assign(row, clone(patch));
         return Promise.resolve({ data: [{ id: row.id }], error: null });
@@ -368,7 +370,7 @@ test('streamed importer refreshes owned URLs despite foreign on-site policy and 
   const quote = value => '"' + String(value ?? '').replaceAll('"', '""') + '"';
   const csv = [headers.join(','), ...rows.map(row => headers.map(key => quote(row[key])).join(','))].join('\n');
   const preload = `
-    const records = new Map(${JSON.stringify(existing)}.map(row => [row.apply_url, row]));
+    const records = new Map(${JSON.stringify(existing)}.map(row => [row.apply_url, {...row, elig_signals_etag: "opaque-database-etag"}]));
     let patches = 0;
     globalThis.fetch = async (input, options = {}) => {
       const url = new URL(String(input));
@@ -404,3 +406,4 @@ test('streamed importer refreshes owned URLs despite foreign on-site policy and 
   assert.match(result.stdout, /inserted: 0/);
   assert.match(result.stdout, /foreign_onsite:\s*1/);
 });
+
