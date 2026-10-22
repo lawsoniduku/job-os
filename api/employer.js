@@ -20,6 +20,7 @@ import { classifyJob, extractEligibilitySignals, SIGNALS_VERSION } from "./roleI
 import { generateJSON, isLLMHealthy } from "../lib/llm.js";
 import { normalizeCriteria, validateReview } from "../shared/hiringWorkflow.js";
 import { employerSearchDescription } from "./employerPosting.js";
+import {hiringCommunicationsRouter,dispatchHiringMail} from './hiringCommunications.js';
 import {hiringDocumentsRouter} from './hiringDocuments.js';
 import { hiringRouter } from "./hiring.js";
 import { draftJD, runScoringQueue } from "./ats.js";
@@ -76,6 +77,7 @@ export function employerRouter({ supabase, requireAuth, requireEmployer, optiona
     const register=r[method].bind(r);
     r[method]=(path,...handlers)=>register(path,...handlers.map(handler=>(req,res,next)=>Promise.resolve().then(()=>handler(req,res,next)).catch(next)));
   }
+  r.use(hiringCommunicationsRouter({supabase,requireAuth,requireEmployer,searchLimit,dispatch:()=>dispatchHiringMail(supabase)}));
   r.use(hiringDocumentsRouter({supabase,requireAuth,requireEmployer,searchLimit}));
   r.use(hiringRouter({supabase,requireAuth,requireEmployer,searchLimit,llmLimit}));
 

@@ -1,3 +1,4 @@
+import {startHiringMailRecovery,hiringMailConfig} from './hiringMail.js';
 import { startScoringRecovery } from "./ats.js";
 import { createSearchCapabilities } from './searchCapabilities.js';
 /**
@@ -177,7 +178,7 @@ function publicIntent(intent, filters = {}) {
 
 app.get("/health", async (_req, res) => {
   const ok = await isLLMHealthy();
-  res.json({ status: "ok", service: "job-copilot-v3.1", model: llmConfig.model, ollama: ok ? "connected" : "offline" });
+  res.json({ status: "ok", service: "job-copilot-v3.1", model: llmConfig.model, recruiter_email_configured:hiringMailConfig().configured, ollama: ok ? "connected" : "offline" });
 });
 
 // ============================================================
@@ -1059,6 +1060,7 @@ app.listen(PORT, () => {
   // Warm tiny schema probes during startup instead of charging the first search.
   void loadSearchCapabilities();
   startScoringRecovery(supabase);
+  startHiringMailRecovery(supabase);
   console.log(`\n🚀 Job Copilot v3.1 → http://localhost:${PORT}`);
   console.log(`🤖 ${llmConfig.model} @ ${llmConfig.url}\n`);
 });

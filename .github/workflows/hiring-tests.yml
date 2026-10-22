@@ -21,7 +21,7 @@ jobs:
       - run: npm run test:search
       - run: npm ci --ignore-scripts --no-audit --no-fund
         working-directory: job-os-ui
-      - run: npx eslint src/employer/ReviewDesk.jsx src/employer/HiringOverview.jsx src/employer/ScreenQueue.jsx src/employer/PostingEditor.jsx src/employer/EmployerApp.jsx src/lib/employerApi.js
+      - run: npx eslint src/employer/CandidateCommunication.jsx src/employer/ReviewDesk.jsx src/employer/HiringOverview.jsx src/employer/ScreenQueue.jsx src/employer/PostingEditor.jsx src/employer/EmployerApp.jsx src/lib/employerApi.js
         working-directory: job-os-ui
       - run: node --test job-os-ui/src/lib/*.test.mjs job-os-ui/tests/*.test.mjs
       - run: npm run build

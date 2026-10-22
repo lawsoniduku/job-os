@@ -225,3 +225,7 @@ export const saveHiringReview=(id,review)=>call(`/employer/submissions/${id}/rev
 export const rescanApplicants=id=>call(`/employer/postings/${id}/rescan`,{method:'POST',attempts:1});
 
 export const requestAiHiringReview=id=>call(`/employer/submissions/${id}/analyze`,{method:'POST',attempts:1,timeoutMs:60000});
+
+export const getCandidateCommunications=id=>call(`/employer/submissions/${id}/communications`);
+export const communicateCandidate=(id,body)=>call(`/employer/submissions/${id}/communicate`,{method:'POST',body,attempts:1});
+export const retryCandidateEmail=id=>call(`/employer/messages/${id}/retry`,{method:'POST',attempts:1});

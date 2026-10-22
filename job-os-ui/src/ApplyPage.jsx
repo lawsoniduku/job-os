@@ -128,7 +128,7 @@ export default function ApplyPage({ postingId }) {
                 {busy ? "Sending…" : "Apply with my CV"}
               </button>
               <p className="field-hint">
-                Shares {file?.name || cv?.filename || "your saved CV"}, your country and availability with this hiring team for review against the role criteria. AI may assist their review; a person makes the hiring decision.
+                Shares {file?.name || cv?.filename || "your saved CV"}, your country and availability with this hiring team for review against the role criteria. The hiring team can email you about next steps and interviews. AI may assist review; a person makes the hiring decision.
               </p>
             </>
           )}
