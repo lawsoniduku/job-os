@@ -35,7 +35,7 @@ async function token() {
  * them to a sign-in screen, we ask supabase-js to refresh once and replay.
  * Only once — a genuine sign-out must not become an infinite loop.
  */
-async function call(path, { method = "GET", body, timeoutMs = 30000, attempts = 3, retryOn401 = true } = {}) {
+async function call(path, { method = "GET", body, timeoutMs = 30000, attempts = method === "GET" ? 3 : 1, retryOn401 = true } = {}) {
   const jwt = await token();
   if (!jwt) throw new ApiError("Sign in to continue.", 401, "no_session");
 
@@ -204,3 +204,12 @@ export const AVAILABILITY_LABELS = {
   "2_months": "2 months",
   "3_months_plus": "3+ months",
 };
+
+
+/* Private recruiter workspace. These routes never expose notes to candidates. */
+export const getHiringOverview=()=>call('/employer/overview');
+export const getHiringReview=id=>call(`/employer/submissions/${id}/review`);
+export const saveHiringReview=(id,review)=>call(`/employer/submissions/${id}/review`,{method:'PATCH',body:review,attempts:1});
+export const rescanApplicants=id=>call(`/employer/postings/${id}/rescan`,{method:'POST',attempts:1});
+
+export const requestAiHiringReview=id=>call(`/employer/submissions/${id}/analyze`,{method:'POST',attempts:1,timeoutMs:60000});

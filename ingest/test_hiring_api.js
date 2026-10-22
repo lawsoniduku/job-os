@@ -1,0 +1,48 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import express from 'express';
+import {createHiringDb,fixtureId as id} from './test_support/hiringDb.js';
+import {hiringApiDb} from './test_support/hiringApiDb.js';
+import {employerRouter} from '../api/employer.js';
+import {makeRequireAuth,makeRequireEmployer,makeOptionalAuth} from '../api/auth.js';
+import {runScoringQueue} from '../api/ats.js';
+test('recruiter journey: post, upload, scan, review, pipeline and candidate receipt',async()=>{
+ const db=await createHiringDb(),supabase=hiringApiDb(db),app=express();
+ app.use(express.json());app.use(employerRouter({supabase,requireAuth:makeRequireAuth(supabase),requireEmployer:makeRequireEmployer(supabase),optionalAuth:makeOptionalAuth(supabase),searchLimit:(_q,_s,n)=>n(),llmLimit:(_q,_s,n)=>n()}));
+ const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));
+ const origin='http://127.0.0.1:'+server.address().port;
+ const call=async(path,{method='GET',body,token='qa-token'}={})=>{const r=await fetch(origin+path,{method,headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});return {status:r.status,data:await r.json()};};
+ try {
+  assert.equal((await call('/employer/overview',{token:'wrong'})).status,401);
+  assert.equal((await call('/employer/overview',{token:'qa-candidate'})).status,403);
+  assert.equal((await call('/employer/postings',{method:'POST',body:{title:42}})).status,400,'malformed input cannot crash the server');
+  const created=await call('/employer/postings',{method:'POST',body:{title:'Customer Support Specialist',description:'Help our customers with SQL reports and support.',eligible_countries:['nigeria'],screening_criteria:[{label:'SQL',importance:'required'},{label:'Customer service',importance:'preferred'}],org_id:id(9)}});
+  assert.equal(created.status,201,JSON.stringify(created));assert.equal(created.data.posting.org_id,id(2),'client cannot choose another tenant');
+  const posting=created.data.posting.id;
+  const published=await call('/employer/postings/'+posting,{method:'PATCH',body:{status:'open'}});assert.equal(published.status,200,JSON.stringify(published));
+  assert.ok((await call('/postings/'+posting,{token:'none'})).data.posting.title);
+  const text='Built SQL reports for our customer service team. Resolved customer queries and documented reliable support procedures across several projects.';
+  const upload=await call(`/employer/postings/${posting}/candidates`,{method:'POST',body:{candidates:[{filename:'synthetic-cv.txt',text}]}});
+  assert.equal(upload.status,201,JSON.stringify(upload));assert.equal(upload.data.added,1);
+  await runScoringQueue(supabase,posting);
+  const queue=await call(`/employer/postings/${posting}/submissions`);
+  assert.equal(queue.status,200,JSON.stringify(queue));assert.equal(queue.data.submissions.length,1);
+  const s=queue.data.submissions[0];assert.equal(s.score_status,'done');assert.equal(s.assessment.criteria[0].evidence,'Built SQL reports for our customer service team.');
+  const detail=await call(`/employer/submissions/${s.id}/review`);assert.equal(detail.status,200);
+  const review=await call(`/employer/submissions/${s.id}/review`,{method:'PATCH',body:{expected_updated_at:detail.data.updated_at,stage:'interview',note:'Ask about reporting automation',next_action:'Book interview',due_at:'2026-01-01T10:00:00Z',scorecard:{recommendation:'yes',ratings:[{criterion_id:'criterion_1',rating:3},{criterion_id:'criterion_2',rating:2}]}}});
+  assert.equal(review.status,200,JSON.stringify(review));
+  assert.equal((await call(`/employer/submissions/${s.id}/review`,{method:'PATCH',body:{expected_updated_at:detail.data.updated_at,note:'Stale tab'}})).status,409);
+  const overview=await call('/employer/overview');assert.equal(overview.data.metrics.stages.interview,1);assert.equal(overview.data.metrics.overdue,1);assert.equal(overview.data.tasks[0].next_action,'Book interview');
+  assert.equal((await call(`/employer/submissions/${s.id}/cv`,{token:'qa-candidate'})).status,403);
+  await db.query("insert into job_postings(id,org_id,title,status) values ($1,$2,'Private job','open')",[id(6),id(9)]);
+  await db.query("insert into posting_submissions(id,org_id,posting_id,source,cv_text) values ($1,$2,$3,'upload','Private other-company CV')",[id(7),id(9),id(6)]);
+  assert.equal((await call(`/employer/submissions/${id(7)}/review`)).status,404);
+  assert.equal((await call(`/employer/submissions/${id(7)}/cv`)).status,404);
+  await db.query('insert into saved_cvs(user_id,cv_text) values ($1,$2)',[id(8),text]);
+  const receipt=await call(`/postings/${posting}/apply`,{method:'POST',token:'qa-candidate',body:{}});assert.equal(receipt.status,201,JSON.stringify(receipt));
+  const duplicate=await call(`/postings/${posting}/apply`,{method:'POST',token:'qa-candidate',body:{}});assert.equal(duplicate.status,200);assert.equal(duplicate.data.submission_id,receipt.data.submission_id);
+  const rejected=await call('/employer/feedback',{method:'POST',body:{submission_ids:[receipt.data.submission_id],decision:'rejected',reason_code:'missing_skill'}});assert.equal(rejected.status,201,JSON.stringify(rejected));assert.equal(rejected.data.sent,1);
+  assert.equal((await call(`/postings/${posting}/apply`,{method:'POST',token:'qa-candidate',body:{}})).data.already_applied,true);
+  assert.equal((await db.query('select stage from posting_submissions where id=$1',[receipt.data.submission_id])).rows[0].stage,'rejected');
+ }finally {server.closeAllConnections();await new Promise(r=>server.close(r));await db.close();}
+});

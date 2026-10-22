@@ -17,6 +17,7 @@ import PostingEditor from "./PostingEditor";
 import JDComposer from "./JDComposer";
 import ScreenQueue from "./ScreenQueue";
 import MatchList from "./MatchList";
+import HiringOverview from "./HiringOverview";
 import "./employer.css";
 
 export default function EmployerApp() {
@@ -29,6 +30,10 @@ export default function EmployerApp() {
   const [selectedId, setSelectedId] = useState(null);
   const [editing, setEditing] = useState(null);      // posting object, or "new"
   const [tab, setTab] = useState("applicants");
+  const [view,setView]=useState("overview");
+  const [reviewId,setReviewId]=useState(null);
+  const [orgError,setOrgError]=useState("");
+  const [orgRetry,setOrgRetry]=useState(0);
   const [toast, setToast] = useState(null);
   const [showAuth, setShowAuth] = useState(false);
 
@@ -39,14 +44,14 @@ export default function EmployerApp() {
 
   useEffect(() => {
     if (loading) return;
-    if (!user) { setCheckingOrg(false); return; }
+    if (!user) return;
     let cancelled = false;
     getMe()
       .then((r) => { if (!cancelled) setOrg(r.orgs?.[0] || null); })
-      .catch(() => { if (!cancelled) setOrg(null); })
+      .catch(e => { if (!cancelled) setOrgError(e.message); })
       .finally(() => { if (!cancelled) setCheckingOrg(false); });
     return () => { cancelled = true; };
-  }, [user, loading]);
+  }, [user, loading, orgRetry]);
 
   const refreshPostings = useCallback(async () => {
     if (!org) return;
@@ -59,9 +64,15 @@ export default function EmployerApp() {
     }
   }, [org, showToast]);
 
-  useEffect(() => { refreshPostings(); }, [refreshPostings]);
+  useEffect(() => {
+    if(!org)return;
+    let cancelled=false;
+    listPostings().then(r=>{if(!cancelled){setPostings(r.postings || []);setSelectedId(cur=>cur || r.postings?.[0]?.id || null);}}).catch(e=>{if(!cancelled)showToast(e.message);});
+    return()=>{cancelled=true;};
+  },[org,showToast]);
 
-  if (loading || checkingOrg) return <div className="emp-app" />;
+  if (loading || (user && checkingOrg)) return <div className="emp-loading" role="status">Loading your hiring workspace…</div>;
+  if(orgError)return <div className="emp-gate"><div className="emp-gate-card"><h1>Could not load your hiring workspace</h1><p role="alert">{orgError}</p><button className="btn primary" onClick={()=>{setCheckingOrg(true);setOrgError("");setOrgRetry(n=>n+1);}}>Try again</button></div></div>;
 
   if (!user) {
     return (
@@ -81,7 +92,7 @@ export default function EmployerApp() {
     );
   }
 
-  if (!org) return <OrgSetup onCreated={(o) => { setOrg(o); showToast(`${o.name} is set up.`); }} />;
+  if (!org) return <OrgSetup onCreated={(o) => { setOrg(o); setEditing("form");setView("role");showToast(`${o.name} is set up.`); }} />;
 
   const selected = postings.find((p) => p.id === selectedId) || null;
 
@@ -101,10 +112,11 @@ export default function EmployerApp() {
           </div>
         </div>
 
-        <button className="btn primary emp-new" onClick={() => { setEditing("new"); }}>
+        <button className="btn primary emp-new" onClick={() => { setEditing("form");setView("role"); }}>
           New role
         </button>
 
+        <button className={`btn emp-overview-nav ${view==="overview"?"primary":""}`} onClick={()=>{setEditing(null);setView("overview");}}>Hiring overview</button>
         <div className="emp-postings">
           {postings.length === 0 && (
             <p className="emp-rail-empty">No roles yet. Post one and it appears in candidate search straight away.</p>
@@ -113,7 +125,7 @@ export default function EmployerApp() {
             <button
               key={p.id}
               className={`emp-posting-item ${p.id === selectedId ? "active" : ""}`}
-              onClick={() => { setSelectedId(p.id); setTab("applicants"); }}
+              onClick={() => { setSelectedId(p.id); setTab("applicants");setView("role");setReviewId(null); }}
             >
               <div className="emp-pi-title">{p.title}</div>
               <div className="emp-pi-meta">
@@ -166,19 +178,16 @@ export default function EmployerApp() {
           />
         )}
 
-        {!editing && !selected && (
+        {!editing && view==="overview" && <HiringOverview postings={postings} onSelect={(id,applicantId)=>{setSelectedId(id);setReviewId(applicantId);setView("role");setTab("applicants");}}/>}
+        {!editing && view==="role" && !selected && (
           <div className="emp-empty">
             <h2>Nothing posted yet</h2>
-            <p>
-              A role you post here goes into the same search 53,000 other listings sit in —
-              except yours arrives with an eligibility filter attached, so the people who
-              see it can actually take it.
-            </p>
+            <p>Publish a role, set clear hiring locations and review all your applicants in one place.</p>
             <button className="btn primary lg" onClick={() => setEditing("new")}>Post your first role</button>
           </div>
         )}
 
-        {!editing && selected && (
+        {!editing && view==="role" && selected && (
           <>
             <header className="emp-head">
               <div>
@@ -195,6 +204,7 @@ export default function EmployerApp() {
                 </div>
               </div>
               <div className="emp-head-actions">
+                {selected.status==="open"&&<a className="btn" href={`/apply/${selected.id}`} target="_blank" rel="noreferrer">View live posting ↗</a>}
                 <button className="btn" onClick={() => setEditing(selected)}>Edit</button>
                 {selected.status === "draft" && (
                   <button className="btn primary" onClick={() => publish(selected, "open")}>Publish</button>
@@ -221,7 +231,7 @@ export default function EmployerApp() {
               // key={} so switching posting remounts with fresh focus,
               // selection and filter rather than carrying the previous
               // role's state onto a different set of people.
-              <ScreenQueue key={selected.id} postingId={selected.id} showToast={showToast} onChanged={refreshPostings} />
+              <ScreenQueue key={selected.id} postingId={selected.id} initialReviewId={reviewId} showToast={showToast} onChanged={refreshPostings} />
             )}
             {tab === "matches" && <MatchList posting={selected} showToast={showToast} />}
           </>
@@ -321,3 +331,4 @@ function OrgSetup({ onCreated }) {
     </div>
   );
 }
+

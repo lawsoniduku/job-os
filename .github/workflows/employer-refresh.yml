@@ -1,0 +1,33 @@
+name: Refresh employer job mirrors
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: Apply the normal employer mirror refresh
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: employer-mirror-refresh
+  cancel-in-progress: false
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Refresh existing open postings
+        shell: bash
+        run: |
+          args=()
+          if [[ "$APPLY" == "true" ]]; then args+=(--apply); fi
+          node ingest/refresh_employer_postings.js "${args[@]}"
+        env:
+          APPLY: ${{ inputs.apply && 'true' || 'false' }}
+          APP_URL: https://job-os-tau.vercel.app
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}

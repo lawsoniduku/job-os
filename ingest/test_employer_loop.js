@@ -194,6 +194,7 @@ async function run() {
       location: "Lagos / Remote", remote_type: "remote", employment_type: "full_time",
       seniority: "senior", salary_min: 60000, salary_max: 90000,
       eligible_countries: ["nigeria", "kenya"],
+      screening_criteria:[{label:"Python",importance:"required"},{label:"PostgreSQL",importance:"required"},{label:"Payments ledger",importance:"required"},{label:"Docker",importance:"preferred"}],
     },
   });
   if (postRes.status !== 201) { no(`create posting: ${postRes.status} ${JSON.stringify(postRes.data)}`); return; }
@@ -297,7 +298,7 @@ async function run() {
   /* ── bulk upload + ranking (016) ─────────────────────────── */
   console.log("\nbulk upload");
   const CVS = [
-    { filename: "strong.pdf", text: "Tomi Adeyemi. Senior Backend Engineer, 8 years. Python, Django, PostgreSQL at scale, Redis, Kafka, Docker, Kubernetes. Led the payments ledger rewrite at a Lagos fintech processing 2M transactions daily. Owned Postgres partitioning and query tuning. Mentored four engineers. Lagos, Nigeria. tomi@example.test" },
+    { filename: "strong.pdf", text: "Name: Tomi Adeyemi\nSenior Backend Engineer, 8 years. Python, Django, PostgreSQL at scale, Redis, Kafka, Docker, Kubernetes. Led the payments ledger rewrite at a Lagos fintech processing 2M transactions daily. Owned Postgres partitioning and query tuning. Mentored four engineers. Lagos, Nigeria. tomi@example.test" },
     { filename: "weak.pdf", text: "Chidi Okonkwo. Graphic designer, 4 years. Adobe Photoshop, Illustrator, InDesign, Figma. Brand identity work for small retail clients. Built social campaigns and print collateral. Certificate in visual communication. Abuja, Nigeria." },
     { filename: "middling.pdf", text: "Ama Mensah. Backend developer, 3 years. Node.js, Express, MongoDB, some PostgreSQL. Built REST APIs for an e-commerce platform. Familiar with Docker. Interested in moving into fintech. Accra, Ghana." },
   ];
@@ -328,8 +329,8 @@ async function run() {
   }
 
   queueState?.scoring?.outstanding === 0
-    ? ok(`ranking finished for all ${queueState.scoring.total}`)
-    : no(`${queueState?.scoring?.outstanding} still unranked after 2 minutes`);
+    ? ok(`CV scanning finished for all ${queueState.scoring.total}`)
+    : no(`${queueState?.scoring?.outstanding} still unscanned after 2 minutes`);
 
   const uploads = (queueState?.submissions || []).filter((s) => s.source === "upload");
   uploads.length === 3
@@ -355,11 +356,11 @@ async function run() {
   const mid = byFile["middling.pdf"]?.match_score;
   console.log(`         scores: strong=${strong} middling=${mid} weak=${weak}`);
   strong > weak
-    ? ok(`the matching engineer outranks the graphic designer (${strong} vs ${weak})`)
+    ? ok(`the matching engineer has greater criterion coverage than the graphic designer (${strong} vs ${weak})`)
     : no(`RANKING IS WRONG: designer ${weak} >= engineer ${strong}`);
   strong > mid
-    ? ok(`the senior outranks the junior (${strong} vs ${mid})`)
-    : no(`ranking questionable: junior ${mid} >= senior ${strong}`);
+    ? ok(`the CV with more criterion evidence has greater coverage (${strong} vs ${mid})`)
+    : no(`evidence coverage unexpected: middling CV ${mid} >= senior ${strong}`);
 
   // Names are read from the CV, because the recruiter already has them.
   byFile["strong.pdf"]?.candidate_ref?.includes("Tomi")
@@ -468,3 +469,4 @@ try {
   console.log(`\n${fail === 0 ? "OK" : "FAILED"} — ${pass} passed, ${fail} failed\n`);
   process.exit(fail === 0 ? 0 : 1);
 }
+

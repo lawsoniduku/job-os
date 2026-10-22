@@ -23,13 +23,20 @@
  */
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
-  listSubmissions, sendFeedback, uploadCandidates, getSubmissionCv,
+  listSubmissions, sendFeedback, uploadCandidates, getSubmissionCv, rescanApplicants,
   REASON_OPTIONS, REASON_LABELS, STAGE_LABELS, AVAILABILITY_LABELS,
 } from "../lib/employerApi";
+import ReviewDesk from "./ReviewDesk";
 import { extractTextFromFile } from "../lib/extractText";
 
-export default function ScreenQueue({ postingId, showToast, onChanged }) {
+export default function ScreenQueue({ postingId, initialReviewId, showToast, onChanged }) {
   const [subs, setSubs] = useState([]);
+  const [criteria,setCriteria]=useState([]);
+  const [reviewing,setReviewing]=useState(null);
+  const [query,setQuery]=useState("");
+  const [sort,setSort]=useState("oldest");
+  const [busy,setBusy]=useState(false);
+  const openedInitial=useRef(null);
   const [scoring, setScoring] = useState({ outstanding: 0, failed: 0, total: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -49,6 +56,7 @@ export default function ScreenQueue({ postingId, showToast, onChanged }) {
     try {
       const r = await listSubmissions(postingId);
       setSubs(r.submissions || []);
+      setCriteria(r.posting?.screening_criteria || []);
       setScoring(r.scoring || { outstanding: 0, failed: 0, total: 0 });
       setError(null);
     } catch (e) {
@@ -59,6 +67,7 @@ export default function ScreenQueue({ postingId, showToast, onChanged }) {
   }, [postingId]);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(()=>{if(initialReviewId&&subs.length&&openedInitial.current!==initialReviewId){openedInitial.current=initialReviewId;setReviewing(subs.find(s=>s.id===initialReviewId)||null);}},[initialReviewId,subs]);
 
   // Scoring is paced and asynchronous, so the list refreshes itself while
   // anything is outstanding and stops the moment nothing is. Polling only
@@ -66,8 +75,8 @@ export default function ScreenQueue({ postingId, showToast, onChanged }) {
   // progress indicator and a background tab burning someone's data.
   useEffect(() => {
     if (!scoring.outstanding) return;
-    const t = setTimeout(() => load(true), 4000);
-    return () => clearTimeout(t);
+    const t = setInterval(() => load(true), 4000);
+    return () => clearInterval(t);
   }, [scoring.outstanding, load]);
 
   function changeFilter(next) {
@@ -82,22 +91,22 @@ export default function ScreenQueue({ postingId, showToast, onChanged }) {
     : filter === "uploaded" ? s.source === "upload"
     : filter === "applied" ? s.source === "platform"
     : s.stage === filter
-  );
+  ).filter(s=>!query.trim() || [s.candidate_ref,s.summary,...s.cv_skills || []].some(x=>String(x || "").toLowerCase().includes(query.trim().toLowerCase()))).sort((a,b)=>sort==="evidence"?(b.match_score??-1)-(a.match_score??-1):sort==="newest"?Date.parse(b.created_at)-Date.parse(a.created_at):Date.parse(a.created_at)-Date.parse(b.created_at));
 
   /* -- keyboard ---------------------------------------------- */
   useEffect(() => {
     function onKey(e) {
-      if (rejecting || upload) return;
+      if (rejecting || upload || reviewing || busy) return;
       const tag = e.target.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       if (!visible.length) return;
 
       if (e.key === "j" || e.key === "ArrowDown") { e.preventDefault(); setFocus((i) => Math.min(i + 1, visible.length - 1)); }
       else if (e.key === "k" || e.key === "ArrowUp") { e.preventDefault(); setFocus((i) => Math.max(i - 1, 0)); }
-      else if (e.key === "a") { e.preventDefault(); advance([visible[focus].id]); }
-      else if (e.key === "r") { e.preventDefault(); setRejecting({ ids: [visible[focus].id], subs: [visible[focus]] }); }
-      else if (e.key === "x") { e.preventDefault(); toggleSelect(visible[focus].id); }
-      else if (e.key === "Enter") { e.preventDefault(); openCv(visible[focus]); }
+      else if (e.key === "a") { e.preventDefault(); advance([visible[Math.min(focus,visible.length-1)].id]); }
+      else if (e.key === "r") { e.preventDefault(); setRejecting({ ids: [visible[Math.min(focus,visible.length-1)].id], subs: [visible[Math.min(focus,visible.length-1)]] }); }
+      else if (e.key === "x") { e.preventDefault(); toggleSelect(visible[Math.min(focus,visible.length-1)].id); }
+      else if (e.key === "Enter") { e.preventDefault(); openCv(visible[Math.min(focus,visible.length-1)]); }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -130,6 +139,7 @@ export default function ScreenQueue({ postingId, showToast, onChanged }) {
   }
 
   async function advance(ids) {
+    if(busy)return;setBusy(true);
     try {
       const r = await sendFeedback({ submission_ids: ids, decision: "advanced" });
       showToast(describeSend(r, "advanced"));
@@ -138,10 +148,11 @@ export default function ScreenQueue({ postingId, showToast, onChanged }) {
       onChanged?.();
     } catch (e) {
       showToast(e.message);
-    }
+    } finally {setBusy(false);}
   }
 
   async function reject({ ids, reason_code, note }) {
+    if(busy)return;setBusy(true);
     try {
       const r = await sendFeedback({ submission_ids: ids, decision: "rejected", reason_code, note });
       showToast(describeSend(r, "rejected"));
@@ -151,12 +162,13 @@ export default function ScreenQueue({ postingId, showToast, onChanged }) {
       onChanged?.();
     } catch (e) {
       showToast(e.message);
-    }
+      throw e;
+    } finally {setBusy(false);}
   }
 
   /* -- bulk upload ------------------------------------------- */
   async function handleFiles(fileList) {
-    const files = [...fileList].filter((f) => /\.(pdf|docx?|txt|md)$/i.test(f.name));
+    const files = [...fileList].filter((f) => /\.(pdf|docx|txt|md)$/i.test(f.name));
     if (!files.length) { showToast("Only PDF, DOCX and TXT files can be read."); return; }
     if (files.length > 50) { showToast("50 CVs at a time - split the batch."); return; }
 
@@ -217,7 +229,7 @@ export default function ScreenQueue({ postingId, showToast, onChanged }) {
       <div className="emp-queue-bar">
         <div className="emp-filters">
           {[["open", "Open"], ["applied", "Applied here"], ["uploaded", "Uploaded"],
-            ["shortlisted", "Shortlisted"], ["rejected", "Rejected"], ["all", "All"]].map(([v, l]) => (
+            ["screening", "Screening"], ["shortlisted", "Shortlisted"], ["interview", "Interview"], ["offer", "Offer"], ["hired", "Hired"], ["rejected", "Rejected"], ["all", "All"]].map(([v, l]) => (
             <button key={v} className={`filter-pill ${filter === v ? "active" : ""}`} onClick={() => changeFilter(v)}>{l}</button>
           ))}
         </div>
@@ -225,12 +237,18 @@ export default function ScreenQueue({ postingId, showToast, onChanged }) {
           <button className="btn" onClick={() => fileRef.current?.click()}>Upload CVs</button>
           <input
             ref={fileRef} type="file" multiple hidden
-            accept=".pdf,.doc,.docx,.txt,.md"
+            accept=".pdf,.docx,.txt,.md"
             onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }}
           />
         </div>
       </div>
 
+      <div className="emp-search-tools">
+        <input aria-label="Search applicants" value={query} onChange={e=>{setQuery(e.target.value);setFocus(0);}} placeholder="Search CV summaries, skills or reference"/>
+        <select aria-label="Sort applicants" value={sort} onChange={e=>setSort(e.target.value)}><option value="oldest">Waiting longest first</option><option value="newest">Newest first</option><option value="evidence">CV evidence coverage</option></select>
+        <span>{visible.length} shown</span>
+      </div>
+      {criteria.length===0 && <div className="emp-nudge">Add screening criteria in Edit to scan each CV against the same requirements.</div>}
       {subs.length > 0 && (
         <div className="emp-queue-hint">
           <kbd>j</kbd><kbd>k</kbd> move · <kbd>a</kbd> advance · <kbd>r</kbd> reject · <kbd>x</kbd> select · <kbd>↵</kbd> CV
@@ -250,13 +268,13 @@ export default function ScreenQueue({ postingId, showToast, onChanged }) {
       {scoring.outstanding > 0 && (
         <div className="emp-progress">
           <div className="emp-progress-bar indeterminate"><span /></div>
-          Ranking {scoring.outstanding} of {scoring.total} against this role. They'll sort themselves as it finishes.
+          Scanning {scoring.outstanding} of {scoring.total} CVs for the criteria you set. You can review them now.
         </div>
       )}
 
       {scoring.failed > 0 && (
         <div className="emp-nudge">
-          {scoring.failed} CV{scoring.failed === 1 ? "" : "s"} couldn't be ranked — they're still listed, just unscored.
+          {scoring.failed} CV{scoring.failed === 1 ? "" : "s"} could not be scanned. <button className="btn" onClick={async()=>{try{await rescanApplicants(postingId);await load(true);}catch(e){showToast(e.message);}}}>Retry scans</button>
         </div>
       )}
 
@@ -314,12 +332,14 @@ export default function ScreenQueue({ postingId, showToast, onChanged }) {
               />
               <span className="emp-ref">{s.candidate_ref}</span>
               <Score value={s.match_score} status={s.score_status} />
+              {s.assessment?.criteria?.length>0 && <span className="emp-chip">CV mentions</span>}
               <span className={`emp-chip src-${s.source}`}>
                 {s.source === "upload" ? "Uploaded" : "Applied here"}
               </span>
               <span className={`emp-stage st-${s.stage}`}>{STAGE_LABELS[s.stage]}</span>
               <span className="emp-card-spacer" />
-              {!s.feedback && s.stage !== "rejected" && (
+              <button className="btn primary" onClick={e=>{e.stopPropagation();setReviewing(s);}}>Review applicant</button>
+              {!s.feedback && !["rejected","withdrawn","hired"].includes(s.stage) && (
                 <>
                   <button className="btn" onClick={(e) => { e.stopPropagation(); advance([s.id]); }}>Advance</button>
                   <button className="btn danger" onClick={(e) => { e.stopPropagation(); setRejecting({ ids: [s.id], subs: [s] }); }}>Reject</button>
@@ -345,7 +365,7 @@ export default function ScreenQueue({ postingId, showToast, onChanged }) {
                 {/* "Claimed" is not hedging - it is the honest word. These
                     are read from a CV the candidate wrote, and calling them
                     verified would be a lie the product can't back. */}
-                <span className="emp-skills-label">Claimed skills</span>
+                <span className="emp-skills-label">CV mentions</span>
                 {s.cv_skills.slice(0, 12).map((k) => <span key={k} className="kw-pill">{k}</span>)}
                 {s.cv_skills.length > 12 && <span className="emp-more">+{s.cv_skills.length - 12}</span>}
               </div>
@@ -371,6 +391,7 @@ export default function ScreenQueue({ postingId, showToast, onChanged }) {
         {subs.length > 0 && !visible.length && <p className="emp-rail-empty">Nothing in this filter.</p>}
       </div>
 
+      {reviewing && <ReviewDesk submission={reviewing} criteria={criteria} onClose={()=>setReviewing(null)} onSaved={()=>{load(true);onChanged?.();}} showToast={showToast}/>}
       {rejecting && (
         <RejectDialog
           subs={rejecting.subs}
@@ -436,7 +457,7 @@ function RejectDialog({ subs, onCancel, onSend }) {
 
         <div className="emp-modal-actions">
           <button className="btn" onClick={onCancel}>Cancel</button>
-          <button className="btn primary" disabled={!reason || busy} onClick={() => { setBusy(true); onSend(reason, note); }}>
+          <button className="btn primary" disabled={!reason || busy} onClick={async () => { setBusy(true); try{await onSend(reason, note);}catch{/* The queue displays the failure and keeps this dialog open. */}finally{setBusy(false);} }}>
             {busy ? "Sending..." : count === 1 ? "Send and reject" : `Send to all ${count}`}
           </button>
         </div>
@@ -450,7 +471,7 @@ function RejectDialog({ subs, onCancel, onSend }) {
 // them as 0 would read as the product being wrong about thirty people.
 function Score({ value, status }) {
   if (status === "pending" || status === "scoring") {
-    return <span className="emp-score pending" title="Being ranked against this role right now.">ranking</span>;
+    return <span className="emp-score pending" title="Scanning CV evidence for your screening criteria.">scanning</span>;
   }
   if (status === "failed") {
     return <span className="emp-score none" title="The model couldn't read this CV. Open it to judge yourself.">unranked</span>;
@@ -491,3 +512,4 @@ function ago(iso) {
   if (d < 30) return `${d}d ago`;
   return `${Math.floor(d / 30)}mo ago`;
 }
+

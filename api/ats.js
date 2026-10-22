@@ -1,5 +1,5 @@
 /**
- * api/ats.js - the AI half of the hiring console.
+ * api/ats.js - job drafting and durable CV evidence scanning.
  * ===============================================
  *
  * Two jobs, kept out of employer.js so that file stays about routing and
@@ -8,8 +8,7 @@
  *   draftJD()          plain language in, a posting out - or the few
  *                      questions we refuse to answer on the recruiter's
  *                      behalf
- *   runScoringQueue()  bulk CV ranking, paced to the free tier it actually
- *                      runs on
+ *   runScoringQueue()  bulk CV evidence scanning, independent of model quotas
  *
  * THE RULE BOTH SHARE. This product's whole claim to candidates is that
  * what they read is true. A model that invents a salary band or decides on
@@ -20,6 +19,8 @@
  * guess.
  */
 import { generateJSON, isLLMHealthy } from "../lib/llm.js";
+import { scanCriteria } from "../shared/hiringWorkflow.js";
+import { createHash } from "node:crypto";
 import { classifyJob } from "./roleIntelligence.js";
 
 /* ============================================================
@@ -219,147 +220,94 @@ export function renderJD(jd) {
 }
 
 /* ============================================================
-   BULK SCORING
+   CV EVIDENCE SCANNING
    ============================================================ */
 
-// Matches ingest/infer_pending.js, which measured this against the same
-// Groq free tier: concurrency 2 with ~1.2s spacing is what stopped it being
-// rate-limited. Raising either is how thirty CVs become thirty failures.
-const CONCURRENCY = Number(process.env.ATS_SCORE_CONCURRENCY || 2);
-const PACE_MS = Number(process.env.ATS_SCORE_PACE_MS || 1200);
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-// One run per posting at a time. In-memory because this API runs as a
-// single instance; if it is ever scaled out, this becomes a claim in
-// Postgres instead (score_status='scoring' already carries the state).
-const running = new Set();
-
-/**
- * Scores one CV against one posting, and writes the short description the
- * recruiter reads instead of opening the file.
- */
+// Scanning is local and evidence-based, so a provider outage cannot stall CV
+// review. A database lease is authoritative across restarts and API instances.
+const queued = new Map();
+let draining = null;
 export async function scoreCandidate({ posting, cvText }) {
-  const prompt = `Assess this CV against the role. Judge only on evidence in the CV. Do not reward confident writing, and do not penalise a plainly formatted CV.
-
-Return JSON:
-{
-  "score": 0-100,
-  "reason": "one sentence, max 25 words, naming the single strongest and single weakest point",
-  "summary": "2 sentences a recruiter can read instead of the CV: what this person has actually done, and what they are missing for THIS role",
-  "name": string|null,
-  "email": string|null,
-  "years": number|null,
-  "skills": string[]
-}
-
-"name" and "email" only if the CV states them. Never guess a name from an email address.
-"skills" are only skills the CV evidences, max 12.
-
-ROLE: ${posting.title}
-${posting.description ? posting.description.slice(0, 4000) : ""}
-
-CV:
-${cvText.slice(0, 9000)}`;
-
-  const out = await generateJSON(prompt, { maxTokens: 400, timeoutMs: 45000 });
-  if (!out) return null;
-
-  const score = Number(out.score);
+  const criteria = scanCriteria(cvText, posting.screening_criteria || []);
+  const mentioned = criteria.filter(c=>c.status==='mentioned').length;
+  const assessment = {
+    v:1, method:'literal_cv_evidence', at:new Date().toISOString(), criteria,
+    cv_hash:createHash('sha256').update(cvText || '').digest('hex'),
+    criteria_hash:createHash('sha256').update(JSON.stringify(posting.screening_criteria || [])).digest('hex'),
+    caveat:'Mentions are self-reported, not verified proficiency. Missing evidence needs human review.',
+  };
+  const contact={};
+  const name=String(cvText || '').match(/^name:\s*([^\r\n]{2,120})$/im)?.[1]?.trim();
+  const emails=[...new Set(String(cvText || '').match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [])];
+  if(name)contact.applicant_name=name;
+  if(emails.length===1)contact.applicant_email=emails[0];
   return {
-    match_score: Number.isFinite(score) ? Math.max(0, Math.min(100, Math.round(score))) : null,
-    match_reason: str(out.reason)?.slice(0, 300) || null,
-    summary: str(out.summary)?.slice(0, 700) || null,
-    applicant_name: str(out.name)?.slice(0, 120) || null,
-    applicant_email: str(out.email)?.slice(0, 200) || null,
-    cv_years: num(out.years),
-    cv_skills: arr(out.skills).slice(0, 12),
+    ...contact,
+    assessment,
+    match_score:criteria.length ? Math.round(100*mentioned/criteria.length) : null,
+    match_reason:criteria.length ? `${mentioned} of ${criteria.length} screening criteria mentioned in the CV.` : 'Set screening criteria to compare CV evidence.',
+    summary:criteria.length ? `${criteria.find(c=>c.evidence)?.evidence?.slice(0,250) || "No explicit criterion mentions found."} ${criteria.length-mentioned} criteria need a closer review.` : 'Ready for manual review. Add job-related criteria to scan this CV.',
   };
 }
-
-/**
- * Drains every pending submission on a posting, paced.
- *
- * Fire-and-forget by design: the upload responds the moment the rows exist,
- * because a recruiter who dropped thirty CVs should see thirty rows
- * immediately, not a spinner for two minutes. score_status is what the UI
- * reads to show progress, and a row that fails ends as 'failed' rather than
- * sitting at 'pending' forever pretending it is about to happen.
- */
-export async function runScoringQueue(supabase, postingId) {
-  if (running.has(postingId)) return;
-  running.add(postingId);
-
-  try {
-    const { data: posting } = await supabase
-      .from("job_postings").select("id, title, description").eq("id", postingId).maybeSingle();
-    if (!posting) return;
-
-    for (;;) {
-      const { data: batch } = await supabase
-        .from("posting_submissions")
-        .select("id, cv_text")
-        .eq("posting_id", postingId)
-        .eq("score_status", "pending")
-        .order("created_at", { ascending: true })
-        .limit(CONCURRENCY);
-
-      if (!batch?.length) break;
-
-      // Claim before working so a second run can't double-score them.
-      await supabase
-        .from("posting_submissions")
-        .update({ score_status: "scoring" })
-        .in("id", batch.map((b) => b.id));
-
-      if (!(await isLLMHealthy())) {
-        // Put them back rather than burning the batch: the model being
-        // down is temporary, and a 'failed' row invites a recruiter to
-        // conclude the CV was unreadable.
-        await supabase.from("posting_submissions")
-          .update({ score_status: "pending" }).in("id", batch.map((b) => b.id));
-        break;
-      }
-
-      await Promise.all(batch.map(async (row) => {
-        try {
-          const scored = row.cv_text ? await scoreCandidate({ posting, cvText: row.cv_text }) : null;
-          await supabase.from("posting_submissions").update(
-            scored
-              ? { ...stripEmpty(scored), score_status: "done", scored_at: new Date().toISOString() }
-              : { score_status: "failed", scored_at: new Date().toISOString() }
-          ).eq("id", row.id);
-        } catch (e) {
-          console.error(`[ats] score ${row.id}: ${e.message}`);
-          await supabase.from("posting_submissions")
-            .update({ score_status: "failed", scored_at: new Date().toISOString() }).eq("id", row.id);
-        }
-      }));
-
-      await sleep(PACE_MS);
+async function drainPosting(supabase, postingId) {
+  for (let n=0;n<500;n++) {
+    const {data:batch,error}=await supabase.rpc('claim_posting_scores',{p_posting:postingId});
+    if(error)throw error;
+    if(!batch?.length)return;
+    const row=batch[0];
+    // Read after claiming: changing criteria invalidates this lease, so an
+    // old scan can never overwrite a result for the new requirements.
+    const {data:posting,error:postingError}=await supabase.from('job_postings')
+      .select('id,org_id,title,description,screening_criteria').eq('id',postingId).maybeSingle();
+    if(postingError)throw postingError;
+    if(!posting)return;
+    try {
+      const scored=await scoreCandidate({posting,cvText:row.cv_text || ''});
+      const {error:saveError}=await supabase.from('posting_submissions').update({...scored,score_status:'done',scored_at:new Date().toISOString(),score_claim_token:null,score_claimed_at:null})
+        .eq('id',row.id).eq('org_id',posting.org_id).eq('score_claim_token',row.claim_token);
+      if(saveError)throw saveError;
+    } catch(e) {
+      console.error('[ats] scan failed:',e.code || e.message);
+      const {error:failure}=await supabase.from('posting_submissions').update({score_status:'failed',score_claim_token:null,score_claimed_at:null})
+        .eq('id',row.id).eq('org_id',posting.org_id).eq('score_claim_token',row.claim_token);
+      if(failure)throw failure; // Leave the lease recoverable; never claim success.
     }
-  } catch (e) {
-    console.error(`[ats] scoring queue ${postingId}: ${e.message}`);
-  } finally {
-    running.delete(postingId);
   }
+}
+export function runScoringQueue(supabase,postingId) {
+  queued.set(postingId,supabase);
+  if(!draining) {
+    draining=(async()=>{
+      while(queued.size) {
+        const [id,db]=queued.entries().next().value;
+        queued.delete(id);
+        try {await drainPosting(db,id);} catch(e){console.error('[ats] queue:',e.code || e.message);}
+      }
+    })().finally(()=>{draining=null;});
+  }
+  return draining;
+}
+export function startScoringRecovery(supabase) {
+  let active=false;
+  const recover=async()=>{
+    if(active)return;active=true;
+    try {
+      const cutoff=new Date(Date.now()-5*60000).toISOString();
+      const {data,error}=await supabase.from('posting_submissions').select('posting_id')
+        .or(`score_status.eq.pending,and(score_status.eq.scoring,score_claimed_at.lt.${cutoff}),and(score_status.eq.scoring,score_claimed_at.is.null)`)
+        .order('created_at',{ascending:true}).limit(100);
+      if(error)throw error;
+      for(const id of new Set((data || []).map(s=>s.posting_id)))await runScoringQueue(supabase,id);
+    }catch(e){console.error('[ats] recovery:',e.code || e.message);}finally{active=false;}
+  };
+  void recover();
+  const timer=setInterval(recover,60000);timer.unref?.();
+  return ()=>clearInterval(timer);
 }
 
 /* -- helpers ------------------------------------------------ */
 
-// Never overwrite a real value with a null the model happened to omit.
-// A CV that stated a name on upload should not lose it on a rescore.
-function stripEmpty(obj) {
-  const out = {};
-  for (const [k, v] of Object.entries(obj)) {
-    if (v === null || v === undefined) continue;
-    if (Array.isArray(v) && !v.length) continue;
-    out[k] = v;
-  }
-  return out;
-}
-
 function str(v) { return typeof v === "string" && v.trim() ? v.trim() : null; }
-function num(v) { const n = Number(v); return Number.isFinite(n) && n >= 0 ? n : null; }
 // For values where zero is not a value but a way of saying "I don't know".
 function posNum(v) { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : null; }
 function pick(v, allowed) { return allowed.includes(v) ? v : null; }
@@ -370,3 +318,4 @@ function arr(v, kind = "string") {
     : v.map((x) => (typeof x === "string" ? x.trim() : "")).filter(Boolean);
 }
 function cap(s) { return s ? s[0].toUpperCase() + s.slice(1) : s; }
+

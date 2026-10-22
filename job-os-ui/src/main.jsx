@@ -12,15 +12,15 @@
  * that navigation to gain nothing at three static paths. If a fourth path
  * with real parameters shows up, this is the function to replace.
  */
-import { StrictMode } from 'react'
+import { StrictMode, Suspense, lazy } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import './theme.css'
-import App from './App.jsx'
-import EmployerApp from './employer/EmployerApp.jsx'
-import ApplyPage from './ApplyPage.jsx'
+const App=lazy(()=>import('./App.jsx'));
+const EmployerApp=lazy(()=>import('./employer/EmployerApp.jsx'));
+const ApplyPage=lazy(()=>import('./ApplyPage.jsx'));
 
-export function Root() {
+function Surface() {
   const path = window.location.pathname;
 
   if (path === '/employer' || path.startsWith('/employer/')) return <EmployerApp />;
@@ -31,8 +31,11 @@ export function Root() {
   return <App />;
 }
 
+export function Root(){return <Suspense fallback={<div role="status" style={{padding:40,fontFamily:'system-ui'}}>Loading JobCopilot…</div>}><Surface/></Suspense>;}
+
 createRoot(document.getElementById('root')).render(
   <StrictMode>
     <Root />
   </StrictMode>,
 )
+

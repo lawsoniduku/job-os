@@ -14,7 +14,8 @@
     "test:eligibility": "node ingest/test_scoring.js && node ingest/test_eligibility_inference.js && node --test ingest/test_eligibility_guardrails.js ingest/test_classification_parity.js ingest/test_inference_queue.js",
     "test:jobhive": "node --test ingest/test_jobhive*.js ingest/test_jobhive*.mjs",
     "test:search": "node --test ingest/test_search.js ingest/test_discovery_policy.js ingest/test_search_cache.js ingest/test_search_capabilities.js ingest/test_source_policy.js ingest/test_discovery_recall.js",
-    "test:verification": "node --test ingest/test_posting_verification.js ingest/test_verification_writer.js ingest/test_job_signals_writer.js"
+    "test:verification": "node --test ingest/test_posting_verification.js ingest/test_verification_writer.js ingest/test_job_signals_writer.js",
+    "test:hiring": "node --test ingest/test_hiring*.js ingest/test_employer_posting.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.108.0",
@@ -24,5 +25,8 @@
     "dotenv": "^16.4.0",
     "express": "^4.19.0",
     "express-rate-limit": "^8.5.2"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.3.16"
   }
 }
