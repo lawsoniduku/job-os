@@ -1,6 +1,6 @@
 // JobHive owns only rows it originally inserted for this exact ATS. The native
 // pipeline retains its separate insert-only writer and ownership semantics.
-const COLUMNS = 'id,source,ats_source,apply_url,title,location,description,country_iso,eligibility_region,posted_at,remote,remote_type,elig_signals';
+const COLUMNS = 'elig_signals_etag,id,source,ats_source,apply_url,title,location,description,country_iso,eligibility_region,posted_at,remote,remote_type,elig_signals';
 const INPUT_FIELDS = ['title', 'location', 'description', 'country_iso', 'eligibility_region', 'remote', 'remote_type'];
 const sameInput = (a, b) => INPUT_FIELDS.every(key => (a[key] ?? null) === (b[key] ?? null));
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -58,7 +58,8 @@ export function createJobhiveRefreshWriter(db, {
       if (!row.posted_at && existing.posted_at) patch.posted_at = existing.posted_at;
       patch.elig_signals = signals;
       let query = db.from('jobs').update(patch).eq('id', existing.id).eq('source', 'jobhive').eq('ats_source', row.ats_source);
-      query = existing.elig_signals == null ? query.is('elig_signals', null) : query.eq('elig_signals', JSON.stringify(existing.elig_signals));
+      if (!existing.elig_signals_etag) throw new Error('Missing evidence etag; apply bounded_evidence_compare migration');
+      query = query.eq('elig_signals_etag', existing.elig_signals_etag);
       const { data, error } = await query.select('id');
       if (error) throw new Error(error.message);
       if (data?.length === 1) return 'updated';
@@ -124,3 +125,4 @@ export function createJobhiveRefreshWriter(db, {
     return result;
   };
 }
+

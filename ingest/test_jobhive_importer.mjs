@@ -31,7 +31,7 @@ test('streamed CLI dry run recovers worldwide jobs, accounts for negative observ
 
 test('full importer records new foreign restrictions on an owned job without inserting rejected new jobs',()=>{
  const now=Date.now(),url='https://example.recruitee.com/o/existing';
- const existing={id:'00000000-0000-0000-0000-000000000001',source:'jobhive',ats_source:'recruitee',apply_url:url,title:'Software Engineer',location:'Remote',description:'Work from anywhere.',remote:true,country_iso:'US',eligibility_region:'Global',posted_at:date(now-day),elig_signals:{v:5,source:{fetched_at:date(now-2*day)}}};
+ const existing={elig_signals_etag:'opaque-database-etag',id:'00000000-0000-0000-0000-000000000001',source:'jobhive',ats_source:'recruitee',apply_url:url,title:'Software Engineer',location:'Remote',description:'Work from anywhere.',remote:true,country_iso:'US',eligibility_region:'Global',posted_at:date(now-day),elig_signals:{v:5,source:{fetched_at:date(now-2*day)}}};
  const headers=['title','url','description','location','country_iso','is_remote','posted_at','fetched_at'];
  const values={title:'Software Engineer',description:'Applicants must reside in the United States.',location:'New York, United States',country_iso:'US',is_remote:'false',posted_at:date(now-day),fetched_at:date(now-3600000)};
  const rows=[{...values,url},{...values,url:'https://example.recruitee.com/o/new-foreign'}];
@@ -79,3 +79,4 @@ test('a zero new-row budget performs no candidate-by-candidate database reads',(
  assert.equal(out.writes.length,0);
  assert.equal(out.reads,1); // the bounded existing-owned inventory only
 });
+

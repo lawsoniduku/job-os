@@ -29,3 +29,12 @@ test('persistent conflicts fail without overwriting current evidence',async()=>{
  const result=await updateJobSignals(db,'1',current=>({...current,verification:{status:'ok'}}),{...options,attempts:3});
  assert.ok(result.error);assert.equal(db.rows.get('1').elig_signals.verification,undefined);
 });
+
+
+test('large evidence uses a bounded opaque CAS filter and retains all evidence',async()=>{
+ const db=evidenceDb([{id:'1',elig_signals:{quote:'x'.repeat(128000)}}]);
+ const original=db.from;let captured;
+ db.from=(...args)=>{const q=original(...args);const eq=q.eq;q.eq=(key,value)=>{if(key==='elig_signals_etag')captured=value;assert.notEqual(key,'elig_signals');return eq(key,value);};return q;};
+ const result=await updateJobSignals(db,'1',current=>({...current,checked:true}),options);
+ assert.equal(result.saved,true);assert.equal(captured.length,64);assert.equal(db.rows.get('1').elig_signals.quote.length,128000);
+});

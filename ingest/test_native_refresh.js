@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+const etag = row => createHash('sha256').update(JSON.stringify(row.elig_signals ?? null)).digest('hex');
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createNativeRefreshWriter } from './core/nativeRefreshWriter.js';
@@ -10,8 +12,8 @@ const canonicalRole={...role,title:'Graduate Customer Success Manager',company:'
 function fakeDb(initial=[],{onUpdate,onInsert,failReads=false,failWrites=false}={}) {
  const rows=new Map(initial.map(row=>[row.apply_url,clone(row)])); let reads=0,writes=0;
  return {rows,get reads(){return reads;},get writes(){return writes;},from(){let filters=[],patch,batch,projection;
- const matches=row=>filters.every(([key,value,op])=>op==='in'?value.includes(row[key]):key==='elig_signals'&&value!==null?JSON.stringify(row[key])===value:(row[key]??null)===value);
- const execute=async()=>{if(!patch&&!batch){reads++;return{data:failReads?null:[...rows.values()].filter(matches).map(row=>projection?Object.fromEntries(projection.split(',').map(key=>[key,clone(row[key])])):clone(row)),error:failReads?{message:'network'}:null};}writes++;if(failWrites)return{error:{message:'write failed'}};
+ const matches=row=>filters.every(([key,value,op])=>op==='in'?value.includes(row[key]):key==='elig_signals_etag'?etag(row)===value:key==='elig_signals'&&value!==null?JSON.stringify(row[key])===value:(row[key]??null)===value);
+ const execute=async()=>{if(!patch&&!batch){reads++;return{data:failReads?null:[...rows.values()].filter(matches).map(row=>projection?Object.fromEntries(projection.split(',').map(key=>[key,key==='elig_signals_etag'?etag(row):clone(row[key])])):clone(row)),error:failReads?{message:'network'}:null};}writes++;if(failWrites)return{error:{message:'write failed'}};
  if(batch){onInsert?.(rows,batch);const data=[];for(const item of batch){if(rows.has(item.apply_url))continue;const row={...clone(item),id:'new-'+rows.size};rows.set(row.apply_url,row);data.push({id:row.id,apply_url:row.apply_url});}return{data,error:null};}
  onUpdate?.(rows,patch);const row=[...rows.values()].find(matches);if(!row)return{data:[],error:null};Object.assign(row,clone(patch));return{data:[{id:row.id}],error:null};};
  const q={select(value){projection=value;return q;},eq(k,v){filters.push([k,v]);return q;},is(k,v){filters.push([k,v]);return q;},in(k,v){filters.push([k,v,'in']);return q;},update(p){patch=p;return q;},upsert(b){batch=b;return q;},async maybeSingle(){const r=await execute();return{...r,data:r.data?.[0]||null};},then(a,b){return execute().then(a,b);}};return q;}};
@@ -108,3 +110,4 @@ test('transient insert failure retries without duplicating source records',async
 test('connector-only hints are applied but never sent as database columns',async()=>{
  const db=fakeDb();await write(db)([{...role,location:'',description:'Analyse data.',_region_hint:'Nigeria',_source_observation:{updated_at:'2026-10-18T00:00:00Z'}}]);const saved=db.rows.get(role.apply_url);assert.equal(saved.eligibility_region,'Nigeria');assert.equal(saved._region_hint,undefined);assert.equal(saved._source_observation,undefined);assert.equal(saved.elig_signals.source.updated_at,'2026-10-18T00:00:00Z');
 });
+
