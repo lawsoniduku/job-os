@@ -1,5 +1,6 @@
 import {useState,useEffect,useRef} from 'react';
 import {getHiringReview,saveHiringReview,getSubmissionCv,getOriginalCv,STAGE_LABELS} from '../lib/employerApi';
+import CandidateCommunication from './CandidateCommunication';
 const active=['new','screening','shortlisted','interview','offer'];
 export default function ReviewDesk({submission,criteria,onClose,onSaved,showToast}) {
  const [data,setData]=useState(null),[cv,setCv]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(false);
@@ -56,8 +57,9 @@ export default function ReviewDesk({submission,criteria,onClose,onSaved,showToas
      </div>}
     </div>
     <div className="emp-review-actions">
+     <CandidateCommunication submission={submission} stage={savedStage} updatedAt={data.updated_at} showToast={showToast} onSent={async()=>{const updated=await getHiringReview(submission.id);setData(updated);setStage(updated.stage);setSavedStage(updated.stage);await onSaved();}}/>
      <section><h3>Next step</h3><p className="field-hint">Private planning for your hiring team. Saving here does not send a message.</p>
-      {active.includes(savedStage)&&<form onSubmit={e=>{e.preventDefault();save({stage});}} className="emp-inline-form"><label>Pipeline stage<select value={stage} onChange={e=>setStage(e.target.value)}>{active.map(s=><option key={s} value={s}>{STAGE_LABELS[s]}</option>)}</select></label><button className="btn" disabled={busy}>Save stage</button></form>}
+      {active.includes(savedStage)&&<form onSubmit={e=>{e.preventDefault();save({stage});}} className="emp-inline-form"><label>Pipeline stage<select value={stage} onChange={e=>setStage(e.target.value)}>{active.map(s=><option key={s} value={s}>{STAGE_LABELS[s]}</option>)}</select></label><button className="btn" disabled={busy}>Save stage only</button></form>}
       <form onSubmit={e=>{e.preventDefault();save({next_action:action,due_at:due?new Date(due).toISOString():null});}}>
        <label>What needs to happen?<input maxLength={300} value={action} onChange={e=>setAction(e.target.value)} placeholder="Arrange a 30-minute screening call"/></label>
        <label>Due date · your local time<input type="datetime-local" value={due} onChange={e=>setDue(e.target.value)}/></label>
