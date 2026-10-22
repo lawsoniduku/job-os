@@ -12,6 +12,7 @@ function loadScript(src) {
 }
 
 export async function extractTextFromFile(file) {
+  if(file.size>5*1024*1024)throw new Error("CV files must be 5 MB or smaller.");
   const name = file.name.toLowerCase();
 
   if (name.endsWith(".txt") || name.endsWith(".md")) {
@@ -29,7 +30,8 @@ export async function extractTextFromFile(file) {
               "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
           }
           const typedArray = new Uint8Array(e.target.result);
-          const pdf = await window.pdfjsLib.getDocument({ data: typedArray }).promise;
+          const pdf = await window.pdfjsLib.getDocument({ data: typedArray, isEvalSupported: false }).promise;
+          if(pdf.numPages>100)throw new Error("Please use a CV with at most 100 pages.");
           let text = "";
           for (let i = 1; i <= pdf.numPages; i++) {
             const page = await pdf.getPage(i);
@@ -45,7 +47,7 @@ export async function extractTextFromFile(file) {
     });
   }
 
-  if (name.endsWith(".docx") || name.endsWith(".doc")) {
+  if (name.endsWith(".docx")) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = async (e) => {
@@ -65,3 +67,4 @@ export async function extractTextFromFile(file) {
 
   throw new Error(`Unsupported file type: ${name.split(".").pop().toUpperCase()}. Please use PDF, DOCX, or TXT.`);
 }
+

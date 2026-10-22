@@ -124,7 +124,7 @@ export default function ApplyPage({ postingId }) {
                 {busy ? "Sending…" : "Apply with my CV"}
               </button>
               <p className="field-hint">
-                Sends {cv.filename || "your saved CV"} plus your country and availability. Nothing else.
+                Shares {cv.filename || "your saved CV"}, your country and availability with this hiring team for review against the role criteria. AI may assist their review; a person makes the hiring decision.
               </p>
             </>
           )}
@@ -146,3 +146,4 @@ function Shell({ children }) {
 }
 
 function cap(s) { return s ? s[0].toUpperCase() + s.slice(1) : s; }
+

@@ -33,6 +33,7 @@ const SENIORITY = [
 
 export default function PostingEditor({ posting, onCancel, onSaved, showToast }) {
   const isNew = !posting;
+  const [savedId,setSavedId]=useState(posting?.id || null);
   const [f, setF] = useState(() => ({
     title: posting?.title || "",
     description: posting?.description || "",
@@ -43,6 +44,8 @@ export default function PostingEditor({ posting, onCancel, onSaved, showToast })
     salary_min: posting?.salary_min || "",
     salary_max: posting?.salary_max || "",
     eligible_countries: (posting?.eligible_countries || []).join(", "),
+    required_criteria:(posting?.screening_criteria || []).filter(c=>c.importance==='required').map(c=>c.label).join("\n"),
+    preferred_criteria:(posting?.screening_criteria || []).filter(c=>c.importance==='preferred').map(c=>c.label).join("\n"),
   }));
   const [paste, setPaste] = useState("");
   const [parsing, setParsing] = useState(false);
@@ -88,15 +91,17 @@ export default function PostingEditor({ posting, onCancel, onSaved, showToast })
       salary_min: f.salary_min === "" ? null : Number(f.salary_min),
       salary_max: f.salary_max === "" ? null : Number(f.salary_max),
       eligible_countries: f.eligible_countries.split(",").map((s) => s.trim()).filter(Boolean),
+      screening_criteria:[...f.required_criteria.split("\n").filter(s=>s.trim()).map(label=>({label,importance:"required"})),...f.preferred_criteria.split("\n").filter(s=>s.trim()).map(label=>({label,importance:"preferred"}))],
     };
     try {
       let saved;
-      if (isNew) {
+      if (!savedId) {
         const r = await createPosting(body);
         saved = r.posting;
+        setSavedId(saved.id);
         if (status === "open") saved = (await updatePosting(saved.id, { status: "open" })).posting;
       } else {
-        saved = (await updatePosting(posting.id, status ? { ...body, status } : body)).posting;
+        saved = (await updatePosting(savedId, status ? { ...body, status } : body)).posting;
       }
       onSaved(saved);
     } catch (e) {
@@ -201,6 +206,15 @@ export default function PostingEditor({ posting, onCancel, onSaved, showToast })
           </span>
         </label>
 
+        <section className="emp-criteria-editor">
+          <h2>What should CV review look for?</h2>
+          <p>Up to 12 concrete skills or responsibilities. Each match shows the original CV quote. Anything not mentioned stays for your review.</p>
+          <div className="emp-row-2">
+            <label className="field"><span className="field-label">Required · one per line</span><textarea rows={5} value={f.required_criteria} onChange={set("required_criteria")} placeholder={"Customer service\nMicrosoft Excel\nZendesk"}/></label>
+            <label className="field"><span className="field-label">Preferred · one per line</span><textarea rows={5} value={f.preferred_criteria} onChange={set("preferred_criteria")} placeholder={"Salesforce\nTechnical support"}/></label>
+          </div>
+          <span className="field-hint">Use short, specific terms for reliable mention detection. You make every hiring decision. Saving changed criteria rescans existing applicants.</span>
+        </section>
         {error && <div className="auth-error">{error}</div>}
 
         <div className="emp-form-actions">
@@ -217,3 +231,4 @@ export default function PostingEditor({ posting, onCancel, onSaved, showToast })
     </div>
   );
 }
+

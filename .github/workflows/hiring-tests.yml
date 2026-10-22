@@ -1,0 +1,28 @@
+name: Employer hiring workflow checks
+on:
+  pull_request:
+    paths: ['api/employer*.js', 'api/hiring*.js', 'api/ats.js', 'api/auth.js', 'api/server.js', 'shared/hiringWorkflow.js', 'ingest/refresh_employer_postings.js', 'ingest/test_hiring*.js', 'ingest/test_employer_posting.js', 'ingest/test_support/hiring*.js', 'job-os-ui/**', 'supabase/migrations/*employer*', 'package*.json', '.github/workflows/hiring-tests.yml']
+  push:
+    branches: [main]
+    paths: ['api/employer*.js', 'api/hiring*.js', 'api/ats.js', 'shared/hiringWorkflow.js', 'ingest/refresh_employer_postings.js', 'ingest/test_hiring*.js', 'job-os-ui/**', 'supabase/migrations/*employer*', '.github/workflows/hiring-tests.yml']
+permissions:
+  contents: read
+jobs:
+  hiring:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm run test:hiring
+      - run: npm run test:eligibility
+      - run: npm run test:search
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: job-os-ui
+      - run: npx eslint src/employer/ReviewDesk.jsx src/employer/HiringOverview.jsx src/employer/ScreenQueue.jsx src/employer/PostingEditor.jsx src/employer/EmployerApp.jsx src/lib/employerApi.js
+        working-directory: job-os-ui
+      - run: node --test job-os-ui/src/lib/*.test.mjs job-os-ui/tests/*.test.mjs
+      - run: npm run build
+        working-directory: job-os-ui

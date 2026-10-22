@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 /**
  * api/employer.js — the employer side: post · screen · feedback · match.
  * ======================================================================
@@ -18,6 +19,9 @@
 import { Router } from "express";
 import { classifyJob, extractEligibilitySignals, SIGNALS_VERSION } from "./roleIntelligence.js";
 import { generateJSON, isLLMHealthy } from "../lib/llm.js";
+import { normalizeCriteria, validateReview } from "../shared/hiringWorkflow.js";
+import { employerSearchDescription } from "./employerPosting.js";
+import { hiringRouter } from "./hiring.js";
 import { draftJD, runScoringQueue } from "./ats.js";
 
 // Where a candidate lands when they click Apply on an employer posting.
@@ -67,6 +71,12 @@ function dbFail(res, error, fallback) {
 
 export function employerRouter({ supabase, requireAuth, requireEmployer, optionalAuth, searchLimit, llmLimit }) {
   const r = Router();
+  // Express 4 does not forward rejected async handlers automatically.
+  for(const method of ['get','post','patch','delete']) {
+    const register=r[method].bind(r);
+    r[method]=(path,...handlers)=>register(path,...handlers.map(handler=>(req,res,next)=>Promise.resolve().then(()=>handler(req,res,next)).catch(next)));
+  }
+  r.use(hiringRouter({supabase,requireAuth,requireEmployer,searchLimit,llmLimit}));
 
   /* ══════════════════════════════════════════════════════════════════
      ACCOUNT
@@ -194,7 +204,9 @@ ${text.slice(0, 12000)}`;
 
   r.post("/employer/postings", requireAuth, requireEmployer, searchLimit, async (req, res) => {
     const b = req.body || {};
-    if (!b.title?.trim()) return res.status(400).json({ error: "A job title is required." });
+    let criteria;
+    try {if(b.screening_criteria!==undefined)criteria=normalizeCriteria(b.screening_criteria);} catch(e){return res.status(400).json({error:e.message});}
+    if (typeof b.title!=="string" || !b.title.trim()) return res.status(400).json({ error: "A job title is required." });
 
     // Classified server-side, never taken from the client: role_cluster is
     // what the candidate search filters on, so letting a poster choose it
@@ -216,6 +228,7 @@ ${text.slice(0, 12000)}`;
         eligible_countries: normaliseCountries(b.eligible_countries),
         role_cluster,
         status: "draft",
+        screening_criteria: criteria || [],
         created_by: req.user.id,
         // Kept so the JD can be redrafted later without interviewing the
         // recruiter again (016 sec 3). jd_approved_at is stamped here
@@ -287,13 +300,17 @@ ${text.slice(0, 12000)}`;
   // or closing removes that mirror again.
   r.patch("/employer/postings/:id", requireAuth, requireEmployer, searchLimit, async (req, res) => {
     const b = req.body || {};
+    let criteria;
+    try {if(b.screening_criteria!==undefined)criteria=normalizeCriteria(b.screening_criteria);} catch(e){return res.status(400).json({error:e.message});}
 
     const { data: existing } = await supabase
       .from("job_postings").select("*")
       .eq("id", req.params.id).eq("org_id", req.orgId).maybeSingle();
     if (!existing) return res.status(404).json({ error: "Posting not found." });
 
+    if(b.title!==undefined && (typeof b.title!=="string" || !b.title.trim()))return res.status(400).json({error:"A job title is required."});
     const patch = {};
+    if(criteria!==undefined)patch.screening_criteria=criteria;
     for (const f of ["title", "description", "location", "remote_type", "employment_type", "seniority"]) {
       if (b[f] !== undefined) patch[f] = b[f];
     }
@@ -346,6 +363,7 @@ ${text.slice(0, 12000)}`;
       .select().single();
 
     if (error) return res.status(503).json({ error: "Couldn't save the change." });
+    if (criteria!==undefined)void runScoringQueue(supabase,data.id);
     res.json({ posting: data });
   });
 
@@ -385,7 +403,7 @@ ${text.slice(0, 12000)}`;
     const rows = [];
     let skipped = 0;
     for (const c of incoming) {
-      const text = String(c?.text || "").trim();
+      const text = String(c?.text || "").trim().slice(0,50000);
       if (text.length < 80) { skipped++; continue; }   // an empty or unreadable file
       const fp = fingerprint(text);
       if (seen.has(fp)) { skipped++; continue; }
@@ -436,7 +454,7 @@ ${text.slice(0, 12000)}`;
 
   r.get("/employer/postings/:id/submissions", requireAuth, requireEmployer, async (req, res) => {
     const { data: posting } = await supabase
-      .from("job_postings").select("id, title")
+      .from("job_postings").select("id, title, screening_criteria")
       .eq("id", req.params.id).eq("org_id", req.orgId).maybeSingle();
     if (!posting) return res.status(404).json({ error: "Posting not found." });
 
@@ -447,7 +465,7 @@ ${text.slice(0, 12000)}`;
       .from("posting_submissions")
       .select("id, candidate_id, source, applicant_name, applicant_email, cv_filename, " +
               "cv_skills, cv_years, country, availability, summary, match_score, match_reason, " +
-              "score_status, stage, created_at, decided_at")
+              "score_status, stage, created_at, decided_at, updated_at, stage_entered_at, assessment")
       .eq("posting_id", req.params.id)
       .eq("org_id", req.orgId)
       .order("match_score", { ascending: false, nullsFirst: false })
@@ -501,6 +519,9 @@ ${text.slice(0, 12000)}`;
           : undefined,
         summary: s.summary,
         score_status: s.score_status,
+        updated_at:s.updated_at,
+        stage_entered_at:s.stage_entered_at,
+        assessment:s.assessment,
         cv_skills: s.cv_skills,
         cv_years: s.cv_years,
         country: s.country,
@@ -516,22 +537,14 @@ ${text.slice(0, 12000)}`;
   });
 
   r.patch("/employer/submissions/:id", requireAuth, requireEmployer, searchLimit, async (req, res) => {
-    const { stage } = req.body || {};
-    if (!STAGES.includes(stage)) return res.status(400).json({ error: "Unknown stage." });
-    // 'withdrawn' is the candidate's word, not the employer's. An employer
-    // marking someone withdrawn would be putting words in their mouth.
-    if (stage === "withdrawn") return res.status(400).json({ error: "Only the candidate can withdraw." });
-
-    const { data, error } = await supabase
-      .from("posting_submissions")
-      .update({ stage, decided_at: new Date().toISOString(), decided_by: req.user.id })
-      .eq("id", req.params.id)
-      .eq("org_id", req.orgId)
-      .select().maybeSingle();
-
-    if (error) return res.status(503).json({ error: "Couldn't update." });
-    if (!data) return res.status(404).json({ error: "Applicant not found." });
-    res.json({ submission: data });
+    let review;
+    try {review=validateReview({stage:req.body?.stage});}catch(e){return res.status(400).json({error:e.message});}
+    const {data:existing,error:readError}=await supabase.from('posting_submissions').select('id,updated_at').eq('id',req.params.id).eq('org_id',req.orgId).maybeSingle();
+    if(readError)return res.status(503).json({error:"Couldn't load the applicant."});
+    if(!existing)return res.status(404).json({error:'Applicant not found.'});
+    const {error}=await supabase.rpc('save_hiring_review',{p_org:req.orgId,p_actor:req.user.id,p_submission:existing.id,p_expected:existing.updated_at,p_review:review});
+    if(error)return res.status(error.code==='40001'?409:400).json({error:'Could not move this applicant. Reload and try again.'});
+    res.json({submission:{id:existing.id,stage:review.stage}});
   });
 
   /* ══════════════════════════════════════════════════════════════════
@@ -559,64 +572,11 @@ ${text.slice(0, 12000)}`;
       return res.status(400).json({ error: "Pick a reason — a rejection without one is what we're fixing." });
     }
 
-    // Re-read the submissions under the org filter. This is what stops a
-    // caller sending feedback on another company's applicants by guessing
-    // ids: anything not belonging to req.orgId simply isn't returned.
-    const { data: allSubs, error: readErr } = await supabase
-      .from("posting_submissions")
-      .select("id, posting_id, candidate_id, source")
-      .eq("org_id", req.orgId)
-      .in("id", ids);
-
-    if (readErr) return res.status(503).json({ error: "Couldn't load those applicants." });
-    if (!allSubs?.length) return res.status(404).json({ error: "No matching applicants." });
-
-    // Uploaded CVs have no account here, so there is nowhere to deliver
-    // feedback to. Their STAGE still moves - the recruiter's queue must
-    // stay accurate - but no feedback row is written, and the response says
-    // how many were skipped so the UI can tell the truth about it rather
-    // than implying thirty people were notified when eleven were.
-    const subs = allSubs.filter((s) => s.source !== "upload" && s.candidate_id);
-    const uncontactable = allSubs.length - subs.length;
-
-    const now = new Date().toISOString();
-    const rows = subs.map((s) => ({
-      submission_id: s.id,
-      posting_id: s.posting_id,
-      org_id: req.orgId,
-      candidate_id: s.candidate_id,
-      decision,
-      reason_code: reason_code || null,
-      note: note?.trim()?.slice(0, 2000) || null,
-      created_by: req.user.id,
-      sent_at: hold ? null : now,
-    }));
-
-    let inserted = [];
-    if (rows.length) {
-      const { data, error } = await supabase
-        .from("candidate_feedback").insert(rows).select("id, submission_id");
-      if (error) return dbFail(res, error, "Couldn't record the feedback.");
-      inserted = data || [];
-    }
-
-    // Keep the queue honest: a decision communicated is a decision made.
-    // Applies to uploaded CVs too — their stage is the recruiter's own
-    // record, and it should move whether or not anyone could be told.
-    const stage = decision === "rejected" ? "rejected" : decision === "hired" ? "hired" : "shortlisted";
-    await supabase
-      .from("posting_submissions")
-      .update({ stage, decided_at: now, decided_by: req.user.id })
-      .eq("org_id", req.orgId)
-      .in("id", allSubs.map((s) => s.id));
-
-    res.status(201).json({
-      sent: hold ? 0 : inserted.length,
-      recorded: inserted.length,
-      held: !!hold,
-      uncontactable,
-      moved: allSubs.length,
+    const {data,error}=await supabase.rpc('record_hiring_decision',{
+      p_org:req.orgId,p_actor:req.user.id,p_ids:[...new Set(ids)],p_decision:decision,p_reason:reason_code || null,p_note:typeof note==='string'?note.trim().slice(0,2000):null,p_hold:!!hold,
     });
+    if(error)return res.status(error.code==='40001'?409:error.code==='P0002'?404:503).json({error:error.code==='40001'?'One of these applicants has already moved. Refresh the queue.':'Could not record this decision. Please retry.'});
+    res.status(201).json(data);
   });
 
   /* ══════════════════════════════════════════════════════════════════
@@ -843,7 +803,7 @@ ${text.slice(0, 12000)}`;
   // Apply. Snapshots the profile as submitted, then scores the match — in
   // that order, and with the score in a try/catch, because a model outage
   // must never be the reason someone's application doesn't exist.
-  r.post("/postings/:id/apply", requireAuth, llmLimit, async (req, res) => {
+  r.post("/postings/:id/apply", requireAuth, searchLimit, async (req, res) => {
     // The org name comes back with the posting rather than from the request
     // body. It ends up on the candidate's own application card, so a wrong
     // value is only ever self-inflicted — but there is no reason to ask the
@@ -855,69 +815,23 @@ ${text.slice(0, 12000)}`;
       return res.status(404).json({ error: "This role isn't accepting applications." });
     }
 
-    const [{ data: profile }, { data: cv }] = await Promise.all([
-      supabase.from("profiles").select("*").eq("id", req.user.id).maybeSingle(),
-      supabase.from("saved_cvs").select("cv_text").eq("user_id", req.user.id).maybeSingle(),
-    ]);
-
-    const cvText = req.body?.cvText || cv?.cv_text || null;
-    if (!cvText?.trim()) {
-      return res.status(400).json({ error: "Upload a CV before applying.", code: "no_cv" });
-    }
-
-    const now = new Date().toISOString();
-
-    // The candidate's own record, on their own board. Written first so the
-    // application shows up in their Pipeline even if anything below fails.
-    const { data: application } = await supabase
-      .from("applications")
-      .insert({
-        user_id: req.user.id,
-        job_id: posting.job_id,
-        job_title: posting.title,
-        company: posting.employer_orgs?.name || null,
-        location: posting.location,
-        salary_min: posting.salary_min,
-        salary_max: posting.salary_max,
-        source: "employer",
-        status: "applied",
-        role_cluster: posting.role_cluster,
-        applied_at: now,
-        apply_clicked_at: now,
-        apply_outcome: "applied",     // no guesswork: they applied in-app
-        outcome_at: now,
-      })
-      .select().maybeSingle();
-
-    const { data: submission, error } = await supabase
-      .from("posting_submissions")
-      .upsert({
-        posting_id: posting.id,
-        org_id: posting.org_id,
-        candidate_id: req.user.id,
-        application_id: application?.id || null,
-        cv_text: cvText.slice(0, 50000),
-        cv_skills: profile?.cv_skills || [],
-        cv_years: profile?.cv_years ?? null,
-        country: profile?.country || null,
-        availability: profile?.availability || null,
-        stage: "new",
-        source: "platform",
-        // Queued rather than scored inline, through the same paced worker
-        // the bulk upload uses. One applicant and thirty are then the same
-        // code path, and an applying candidate never waits on the model to
-        // find out whether their application went through.
-        score_status: "pending",
-      }, { onConflict: "posting_id,candidate_id" })
-      .select().single();
-
-    if (error) return dbFail(res, error, "Couldn't submit your application — try again.");
-
-    runScoringQueue(supabase, posting.id).catch(() => {});
-
-    res.status(201).json({ submitted: true, submission_id: submission.id });
+    const {data:cv,error:cvError}=await supabase.from('saved_cvs').select('cv_text').eq('user_id',req.user.id).maybeSingle();
+    if(cvError)return res.status(503).json({error:"Couldn't load your CV. Please retry."});
+    const cvText=typeof req.body?.cvText==='string'?req.body.cvText:cv?.cv_text;
+    if(!cvText?.trim())return res.status(400).json({error:'Upload a CV before applying.',code:'no_cv'});
+    const {data,error}=await supabase.rpc('submit_employer_application',{p_posting:posting.id,p_candidate:req.user.id,p_cv:cvText.slice(0,50000)});
+    if(error)return res.status(error.code==='P0002'?404:503).json({error:error.code==='P0002'?"This role isn't accepting applications.":"Couldn't submit your application. Please retry."});
+    const receipt=data?.[0];
+    if(!receipt)return res.status(503).json({error:'Could not confirm your application. Please retry.'});
+    void runScoringQueue(supabase,posting.id);
+    res.status(receipt.already_applied?200:201).json({submitted:true,...receipt});
   });
 
+  r.use((error,_req,res,next)=>{
+    console.error('[employer] request failed:',error.code || error.message);
+    if(res.headersSent)return next(error);
+    res.status(503).json({error:'Could not complete this request. Please retry.'});
+  });
   return r;
 }
 
@@ -928,7 +842,7 @@ ${text.slice(0, 12000)}`;
 // last_seen_at is stamped on every write and the source is 'employer', which
 // together are what keep prune_stale.js off it — see migration 015 §7 and
 // the matching guard in ingest/prune_stale.js.
-async function mirrorToJobs(supabase, posting, org, existingJobId) {
+export async function mirrorToJobs(supabase, posting, org, existingJobId) {
   const applyUrl = `${APP_URL}/apply/${posting.id}`;
   const now = new Date().toISOString();
 
@@ -937,7 +851,7 @@ async function mirrorToJobs(supabase, posting, org, existingJobId) {
     ats_source: "employer",
     company: org?.name || "Employer",
     title: posting.title,
-    description: posting.description,
+    description: employerSearchDescription(posting),
     location: posting.location,
     apply_url: applyUrl,
     remote: posting.remote_type === "remote",
@@ -985,9 +899,7 @@ function fingerprint(text = "") {
   // whitespace first, because the same document exported twice differs in
   // spacing far more often than in words.
   const norm = String(text).toLowerCase().replace(/\s+/g, " ").trim();
-  let h = 0;
-  for (let i = 0; i < norm.length; i++) h = (Math.imul(31, h) + norm.charCodeAt(i)) | 0;
-  return `${norm.length}:${h}`;
+  return createHash('sha256').update(norm).digest('hex');
 }
 
 // A stable, non-reversible-looking handle for an anonymous candidate card.
@@ -1021,3 +933,4 @@ function overlap(skills, posting) {
   }
   return n;
 }
+

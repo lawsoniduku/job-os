@@ -1,3 +1,4 @@
+import { startScoringRecovery } from "./ats.js";
 import { createSearchCapabilities } from './searchCapabilities.js';
 /**
  * JOB COPILOT API SERVER v3.1 (refactored)
@@ -1057,6 +1058,8 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   // Warm tiny schema probes during startup instead of charging the first search.
   void loadSearchCapabilities();
+  startScoringRecovery(supabase);
   console.log(`\n🚀 Job Copilot v3.1 → http://localhost:${PORT}`);
   console.log(`🤖 ${llmConfig.model} @ ${llmConfig.url}\n`);
 });
+
