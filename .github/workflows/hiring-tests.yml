@@ -1,10 +1,10 @@
 name: Employer hiring workflow checks
 on:
   pull_request:
-    paths: ['api/employer*.js', 'api/hiring*.js', 'api/ats.js', 'api/auth.js', 'api/server.js', 'shared/hiringWorkflow.js', 'ingest/refresh_employer_postings.js', 'ingest/test_hiring*.js', 'ingest/test_employer_posting.js', 'ingest/test_support/hiring*.js', 'job-os-ui/**', 'supabase/migrations/*employer*', 'package*.json', '.github/workflows/hiring-tests.yml']
+    paths: ['api/employer*.js', 'api/hiring*.js', 'api/ats.js', 'api/auth.js', 'api/server.js', 'shared/hiringWorkflow.js', 'ingest/refresh_employer_postings.js', 'ingest/test_hiring*.js', 'ingest/test_employer_posting.js', 'ingest/test_support/hiring*.js', 'job-os-ui/**', 'supabase/migrations/*employer*', 'supabase/migrations/*recruiter*', 'package*.json', '.github/workflows/hiring-tests.yml']
   push:
     branches: [main]
-    paths: ['api/employer*.js', 'api/hiring*.js', 'api/ats.js', 'shared/hiringWorkflow.js', 'ingest/refresh_employer_postings.js', 'ingest/test_hiring*.js', 'job-os-ui/**', 'supabase/migrations/*employer*', '.github/workflows/hiring-tests.yml']
+    paths: ['api/employer*.js', 'api/hiring*.js', 'api/ats.js', 'shared/hiringWorkflow.js', 'ingest/refresh_employer_postings.js', 'ingest/test_hiring*.js', 'job-os-ui/**', 'supabase/migrations/*employer*', 'supabase/migrations/*recruiter*', '.github/workflows/hiring-tests.yml']
 permissions:
   contents: read
 jobs:

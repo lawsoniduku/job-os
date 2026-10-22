@@ -50,7 +50,7 @@ export function hiringRouter({supabase,requireAuth,requireEmployer,searchLimit,l
    if(review.error || activity.error)throw review.error || activity.error;
    let ai_review=null;
    if(review.data?.ai_review) {
-    const {data:current,error}=await supabase.from('posting_submissions').select('cv_text,job_postings(screening_criteria)').eq('id',s.id).eq('org_id',req.orgId).maybeSingle();
+    const {data:current,error}=await supabase.from('posting_submissions').select('cv_text,job_postings(title,description,screening_criteria)').eq('id',s.id).eq('org_id',req.orgId).maybeSingle();
     if(error)throw error;
     if(current && analysisIsCurrent(review.data.ai_review,current.job_postings,current.cv_text))ai_review=review.data.ai_review;
    }
@@ -64,7 +64,7 @@ export function hiringRouter({supabase,requireAuth,requireEmployer,searchLimit,l
   if(!expected || !Number.isFinite(Date.parse(expected)))return res.status(400).json({error:'Reload the applicant before saving.'});
   try {
    if(review.scorecard) {
-    const {data:s,error}=await supabase.from('posting_submissions').select('job_postings(screening_criteria)')
+    const {data:s,error}=await supabase.from('posting_submissions').select('job_postings(title,description,screening_criteria)')
       .eq('id',req.params.id).eq('org_id',req.orgId).maybeSingle();
     if(error)throw error;if(!s)return res.status(404).json({error:'Applicant not found.'});
     const allowed=new Set((s.job_postings?.screening_criteria || []).map(c=>c.id));
@@ -85,7 +85,7 @@ export function hiringRouter({supabase,requireAuth,requireEmployer,searchLimit,l
   if(analyzing.has(key))return res.status(409).json({error:'This CV is already being reviewed. Try again shortly.'});
   analyzing.add(key);
   try {
-   const {data:s,error}=await supabase.from('posting_submissions').select('id,cv_text,job_postings(title,screening_criteria)').eq('id',req.params.id).eq('org_id',req.orgId).maybeSingle();
+   const {data:s,error}=await supabase.from('posting_submissions').select('id,cv_text,job_postings(title,description,screening_criteria)').eq('id',req.params.id).eq('org_id',req.orgId).maybeSingle();
    if(error)throw error;if(!s)return res.status(404).json({error:'Applicant not found.'});
    if(!s.job_postings?.screening_criteria?.length)return res.status(400).json({error:'Set screening criteria on this role first.'});
    const analysis=await analyzeHiringCv({posting:s.job_postings,cvText:s.cv_text});
@@ -103,7 +103,7 @@ export function hiringRouter({supabase,requireAuth,requireEmployer,searchLimit,l
   try {
    const {data:p,error}=await supabase.from('job_postings').select('id').eq('id',req.params.id).eq('org_id',req.orgId).maybeSingle();
    if(error)throw error;if(!p)return res.status(404).json({error:'Posting not found.'});
-   const {error:write}=await supabase.from('posting_submissions').update({score_status:'pending'})
+   const {error:write}=await supabase.from('posting_submissions').update({score_status:'pending',score_retry_at:null,score_retry_reason:null,score_failures:0})
     .eq('posting_id',p.id).eq('org_id',req.orgId).eq('score_status','failed');
    if(write)throw write;
    void runScoringQueue(supabase,p.id);

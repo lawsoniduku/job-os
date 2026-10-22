@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHiringDb,fixtureId as id} from './test_support/hiringDb.js';
-import {scoreCandidate} from '../api/ats.js';
+import {scoreCandidate,scanCandidate} from '../api/ats.js';
 
 test('real employer migrations enforce transactions, leases and private review access',async()=>{
  const db=await createHiringDb();
@@ -52,8 +52,8 @@ test('real employer migrations enforce transactions, leases and private review a
  }finally{await db.close();}
 });
 test('CV scanning is immediate without an AI provider and carries source evidence',async()=>{
- const out=await scoreCandidate({posting:{screening_criteria:[{id:'criterion_1',label:'SQL',importance:'required'}]},cvText:'Built SQL reporting.'});
- assert.equal(out.match_score,100);assert.equal(out.assessment.criteria[0].evidence,'Built SQL reporting.');
+ const out=scanCandidate({posting:{screening_criteria:[{id:'criterion_1',label:'SQL',importance:'required'}]},cvText:'Built SQL reporting.'});
+ assert.equal(out.match_score,null);assert.equal(out.assessment.criteria[0].evidence,'Built SQL reporting.');
  assert.equal(out.assessment.method,'literal_cv_evidence');
  const unknown=await scoreCandidate({posting:{},cvText:'A CV'});assert.equal(unknown.match_score,null);
 });

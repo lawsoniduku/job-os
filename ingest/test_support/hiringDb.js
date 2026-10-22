@@ -11,7 +11,7 @@ export async function createHiringDb() {
  create table public.applications(id uuid primary key default gen_random_uuid(),user_id uuid references auth.users(id),job_id uuid references public.jobs(id),job_title text,company text,location text,salary_min integer,salary_max integer,source text,status text,role_cluster text,applied_at timestamptz,apply_clicked_at timestamptz,apply_outcome text,outcome_at timestamptz);
  create table public.saved_cvs(user_id uuid primary key references auth.users(id),cv_text text,filename text);
  create function public.touch_updated_at() returns trigger language plpgsql as $$begin new.updated_at=clock_timestamp();return new;end$$;`);
- for(const path of ['015a_employer_tables.sql','015b_employer_constraints.sql','015c_employer_rls.sql','016_ats_drafting_and_uploads.sql','20261022195717_employer_review_workspace.sql']) {
+ for(const path of ['015a_employer_tables.sql','015b_employer_constraints.sql','015c_employer_rls.sql','016_ats_drafting_and_uploads.sql','20261022195717_employer_review_workspace.sql','20261022213129_recruiter_semantic_matching.sql']) {
   await db.exec(await readFile(new URL('../../supabase/migrations/'+path,import.meta.url),'utf8'));
  }
  const id=fixtureId;
