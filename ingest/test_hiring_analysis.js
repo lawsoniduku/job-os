@@ -12,7 +12,7 @@ test('semantic review is traceable and stale CVs or changed criteria invalidate 
  const cvText='Handled customer requests and resolved support issues.';
  const out=await analyzeHiringCv({posting:{title:'Support',screening_criteria:criteria},cvText,generate:async()=>({criteria:[{criterion_id:'criterion_1',status:'evidence_found',evidence:cvText,question:'How did you measure response quality?'}]})});
  assert.equal(out.criteria[0].status,'evidence_found');assert.ok(out.model);assert.ok(out.at);
- assert.ok(analysisIsCurrent(out,{screening_criteria:criteria},cvText));
+ assert.ok(analysisIsCurrent(out,{title:'Support',screening_criteria:criteria},cvText));
  assert.equal(analysisIsCurrent(out,{screening_criteria:[]},cvText),false);
  assert.equal(analysisIsCurrent(out,{screening_criteria:criteria},'New CV'),false);
 });

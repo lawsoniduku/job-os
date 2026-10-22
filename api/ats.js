@@ -21,6 +21,8 @@
 import { generateJSON, isLLMHealthy } from "../lib/llm.js";
 import { scanCriteria } from "../shared/hiringWorkflow.js";
 import { createHash } from "node:crypto";
+import {analyzeHiringCv,validateHiringAnalysis,rankHiringEvidence} from './hiringAnalysis.js';
+import {llmConfig} from '../lib/llm.js';
 import { classifyJob } from "./roleIntelligence.js";
 
 /* ============================================================
@@ -227,7 +229,7 @@ export function renderJD(jd) {
 // review. A database lease is authoritative across restarts and API instances.
 const queued = new Map();
 let draining = null;
-export async function scoreCandidate({ posting, cvText }) {
+export function scanCandidate({ posting, cvText }) {
   const criteria = scanCriteria(cvText, posting.screening_criteria || []);
   const mentioned = criteria.filter(c=>c.status==='mentioned').length;
   const assessment = {
@@ -244,10 +246,23 @@ export async function scoreCandidate({ posting, cvText }) {
   return {
     ...contact,
     assessment,
-    match_score:criteria.length ? Math.round(100*mentioned/criteria.length) : null,
+    match_score:null,
     match_reason:criteria.length ? `${mentioned} of ${criteria.length} screening criteria mentioned in the CV.` : 'Set screening criteria to compare CV evidence.',
     summary:criteria.length ? `${criteria.find(c=>c.evidence)?.evidence?.slice(0,250) || "No explicit criterion mentions found."} ${criteria.length-mentioned} criteria need a closer review.` : 'Ready for manual review. Add job-related criteria to scan this CV.',
   };
+}
+export async function scoreCandidate({posting,cvText,analyze=analyzeHiringCv}) {
+ const scanned=scanCandidate({posting,cvText});
+ if(!posting.screening_criteria?.length)return scanned;
+ const analysis=await analyze({posting,cvText});
+ // Revalidate even injected/cached analyses. A fabricated quote cannot earn credit.
+ const criteria=validateHiringAnalysis(analysis,posting.screening_criteria,cvText);
+ const result={...analysis,criteria};
+ return {...scanned,...rankHiringEvidence(result,posting),assessment:{...scanned.assessment,...result,
+  v:2,method:'semantic_role_match',model:analysis.model || llmConfig.model,
+  at:analysis.at || new Date().toISOString(),
+  criteria:criteria.map(c=>({...c,id:c.criterion_id})),
+  caveat:'Documented role fit, not a prediction of performance. A recruiter makes every hiring decision.'}};
 }
 async function drainPosting(supabase, postingId) {
   for (let n=0;n<500;n++) {
@@ -262,15 +277,24 @@ async function drainPosting(supabase, postingId) {
     if(postingError)throw postingError;
     if(!posting)return;
     try {
-      const scored=await scoreCandidate({posting,cvText:row.cv_text || ''});
-      const {error:saveError}=await supabase.from('posting_submissions').update({...scored,score_status:'done',scored_at:new Date().toISOString(),score_claim_token:null,score_claimed_at:null})
+      const scored=await scoreCandidate({posting,cvText:row.cv_text || '',analyze:supabase.hiringAnalyze || analyzeHiringCv});
+      const {error:saveError}=await supabase.from('posting_submissions').update({...scored,score_status:'done',scored_at:new Date().toISOString(),score_claim_token:null,score_claimed_at:null,score_retry_at:null,score_retry_reason:null,score_failures:0})
         .eq('id',row.id).eq('org_id',posting.org_id).eq('score_claim_token',row.claim_token);
       if(saveError)throw saveError;
     } catch(e) {
       console.error('[ats] scan failed:',e.code || e.message);
-      const {error:failure}=await supabase.from('posting_submissions').update({score_status:'failed',score_claim_token:null,score_claimed_at:null})
+      const deferred=e.deferred || e.rateLimited;
+      const failures=(row.failures || 0)+(deferred?0:1);
+      const retry=deferred || failures<3;
+      const retryAt=retry?new Date(Math.max(Date.now()+60000,Number(e.retryAt) || Date.now()+(deferred?10:Math.pow(3,failures))*60000)).toISOString():null;
+      const scanned=scanCandidate({posting,cvText:row.cv_text || ''});
+      const {error:failure}=await supabase.from('posting_submissions').update({...scanned,
+        match_reason:retry?'AI assessment queued. You can review the CV now.':'AI assessment unavailable. Review manually or retry.',
+        summary:retry?'Waiting for a grounded role assessment. No match score has been assigned.':'The CV is available for human review. No match score has been assigned.',
+        score_status:retry?'pending':'failed',score_retry_at:retryAt,score_retry_reason:deferred?'capacity':'provider_error',score_failures:failures,score_claim_token:null,score_claimed_at:null})
         .eq('id',row.id).eq('org_id',posting.org_id).eq('score_claim_token',row.claim_token);
       if(failure)throw failure; // Leave the lease recoverable; never claim success.
+      if(deferred)return;
     }
   }
 }
@@ -294,7 +318,7 @@ export function startScoringRecovery(supabase) {
     try {
       const cutoff=new Date(Date.now()-5*60000).toISOString();
       const {data,error}=await supabase.from('posting_submissions').select('posting_id')
-        .or(`score_status.eq.pending,and(score_status.eq.scoring,score_claimed_at.lt.${cutoff}),and(score_status.eq.scoring,score_claimed_at.is.null)`)
+        .or(`and(score_status.eq.pending,or(score_retry_at.is.null,score_retry_at.lte.${new Date().toISOString()})),and(score_status.eq.scoring,score_claimed_at.lt.${cutoff}),and(score_status.eq.scoring,score_claimed_at.is.null)`)
         .order('created_at',{ascending:true}).limit(100);
       if(error)throw error;
       for(const id of new Set((data || []).map(s=>s.posting_id)))await runScoringQueue(supabase,id);

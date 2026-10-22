@@ -465,7 +465,7 @@ ${text.slice(0, 12000)}`;
       .from("posting_submissions")
       .select("id, candidate_id, source, applicant_name, applicant_email, cv_filename, " +
               "cv_skills, cv_years, country, availability, summary, match_score, match_reason, " +
-              "score_status, stage, created_at, decided_at, updated_at, stage_entered_at, assessment")
+              "score_status, score_retry_at, score_retry_reason, stage, created_at, decided_at, updated_at, stage_entered_at, assessment")
       .eq("posting_id", req.params.id)
       .eq("org_id", req.orgId)
       .order("match_score", { ascending: false, nullsFirst: false })
@@ -519,6 +519,7 @@ ${text.slice(0, 12000)}`;
           : undefined,
         summary: s.summary,
         score_status: s.score_status,
+        score_retry_at:s.score_retry_at,score_retry_reason:s.score_retry_reason,
         updated_at:s.updated_at,
         stage_entered_at:s.stage_entered_at,
         assessment:s.assessment,
