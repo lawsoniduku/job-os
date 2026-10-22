@@ -29,3 +29,9 @@ counts are computed server-side. The browser initially renders 50 candidates.
 Validation uses synthetic files and an isolated Postgres database: exact original
 bytes, duplicate recovery, immutable attachments, tenant/candidate access, archive
 limits, ranking order, the complete API journey, frontend checks and build.
+
+Google OAuth keeps Supabase's existing root callback, then restores an employer
+or application page from a short-lived, allowlisted local path. Callback tokens
+remain in the URL fragment for the client library and are never put in the
+return-intent record. Ordinary candidate homepage visits do not redirect, and
+blocked browser storage does not break the landing page.

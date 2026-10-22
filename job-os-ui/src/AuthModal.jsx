@@ -9,6 +9,7 @@
  * COUNTRY_OPTIONS keys MUST match COUNTRY_TERMS keys in api/roleIntelligence.js.
  */
 import { useState } from "react";
+import {rememberAuthReturn,clearAuthReturn,authReturnStorage} from "./lib/authReturn";
 import { supabase } from "./lib/supabaseClient";
 
 export const COUNTRY_OPTIONS = [
@@ -50,11 +51,13 @@ export default function AuthModal({ onClose, onAuthed }) {
   async function handleGoogle() {
     if (!supabase) return;
     setError("");
+    rememberAuthReturn(authReturnStorage(window),window.location.pathname);
     const { error: gErr } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: { redirectTo: window.location.origin },
     });
     if (gErr) {
+      clearAuthReturn(authReturnStorage(window));
       setError(
         /not enabled|provider/i.test(gErr.message || "")
           ? "Google sign-in isn't enabled yet — use email for now."
@@ -68,6 +71,7 @@ export default function AuthModal({ onClose, onAuthed }) {
     e.preventDefault();
     if (!supabase) return;
     setLoading(true); setError(""); setInfo("");
+    clearAuthReturn(authReturnStorage(window));
     try {
       if (mode === "signup") {
         // Country goes in as metadata; the handle_new_user trigger writes the
@@ -82,11 +86,13 @@ export default function AuthModal({ onClose, onAuthed }) {
           setLoading(false);
           return;
         }
+        clearAuthReturn(authReturnStorage(window));
         onAuthed?.();
         onClose?.();
       } else {
         const { error: inErr } = await supabase.auth.signInWithPassword({ email, password });
         if (inErr) throw inErr;
+        clearAuthReturn(authReturnStorage(window));
         onAuthed?.();
         onClose?.();
       }
@@ -158,3 +164,4 @@ export default function AuthModal({ onClose, onAuthed }) {
     </div>
   );
 }
+
