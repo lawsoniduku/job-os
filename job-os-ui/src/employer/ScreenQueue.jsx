@@ -1,408 +1,69 @@
-/**
- * employer/ScreenQueue.jsx - the applicant queue, and the feedback that
- * leaves it.
- *
- * TWO THINGS THIS SCREEN IS OPTIMISED FOR, in this order:
- *
- *   1. Deciding fast. One applicant focused at a time, j/k moves, a
- *      advances, r rejects. A queue that needs a mouse round-trip per
- *      person is a queue that gets abandoned at applicant nine.
- *
- *   2. Never letting a decision leave without a reason attached. Rejecting
- *      opens the reason picker rather than completing silently - the API
- *      refuses a reasonless rejection anyway (015 sec 4), and a UI that
- *      lets you try and then errors is a worse version of the same rule.
- *
- * ONE QUEUE, TWO SOURCES. People who applied through the platform and CVs
- * the recruiter dropped in from their own pipeline are ranked against each
- * other here, because that is the comparison a recruiter is actually making
- * (016 sec 1). They differ in exactly two ways, both of which the UI states
- * rather than hides: an uploaded CV shows a name (the recruiter already has
- * it, so concealing it would be theatre), and an uploaded CV cannot be sent
- * feedback, because that person has no account here to receive it.
- */
-import { useState, useEffect, useCallback, useRef } from "react";
-import {
-  listSubmissions, sendFeedback, uploadCandidates, getSubmissionCv, rescanApplicants,
-  REASON_OPTIONS, REASON_LABELS, STAGE_LABELS, AVAILABILITY_LABELS,
-} from "../lib/employerApi";
-import ReviewDesk from "./ReviewDesk";
-import { extractTextFromFile } from "../lib/extractText";
-
-export default function ScreenQueue({ postingId, initialReviewId, showToast, onChanged }) {
-  const [subs, setSubs] = useState([]);
-  const [criteria,setCriteria]=useState([]);
-  const [reviewing,setReviewing]=useState(null);
-  const [query,setQuery]=useState("");
-  const [sort,setSort]=useState("oldest");
-  const [busy,setBusy]=useState(false);
-  const openedInitial=useRef(null);
-  const [scoring, setScoring] = useState({ outstanding: 0, failed: 0, total: 0 });
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [focus, setFocus] = useState(0);
-  const [selected, setSelected] = useState(() => new Set());
-  const [rejecting, setRejecting] = useState(null);
-  const [expanded, setExpanded] = useState(null);
-  const [cvCache, setCvCache] = useState({});
-  const [filter, setFilter] = useState("open");
-  const [upload, setUpload] = useState(null);      // { done, total, phase }
-  const [dragging, setDragging] = useState(false);
-  const listRef = useRef(null);
-  const fileRef = useRef(null);
-
-  const load = useCallback(async (quiet = false) => {
-    if (!quiet) setLoading(true);
-    try {
-      const r = await listSubmissions(postingId);
-      setSubs(r.submissions || []);
-      setCriteria(r.posting?.screening_criteria || []);
-      setScoring(r.scoring || { outstanding: 0, failed: 0, total: 0 });
-      setError(null);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      if (!quiet) setLoading(false);
-    }
-  }, [postingId]);
-
-  useEffect(() => { load(); }, [load]);
-  useEffect(()=>{if(initialReviewId&&subs.length&&openedInitial.current!==initialReviewId){openedInitial.current=initialReviewId;setReviewing(subs.find(s=>s.id===initialReviewId)||null);}},[initialReviewId,subs]);
-
-  // Scoring is paced and asynchronous, so the list refreshes itself while
-  // anything is outstanding and stops the moment nothing is. Polling only
-  // while there is something to wait for is the difference between a
-  // progress indicator and a background tab burning someone's data.
-  useEffect(() => {
-    if (!scoring.outstanding) return;
-    const t = setInterval(() => load(true), 4000);
-    return () => clearInterval(t);
-  }, [scoring.outstanding, load]);
-
-  function changeFilter(next) {
-    setFilter(next);
-    setFocus(0);
-    setSelected(new Set());
-  }
-
-  const visible = subs.filter((s) =>
-    filter === "all" ? true
-    : filter === "open" ? !["rejected", "hired", "withdrawn"].includes(s.stage)
-    : filter === "uploaded" ? s.source === "upload"
-    : filter === "applied" ? s.source === "platform"
-    : s.stage === filter
-  ).filter(s=>!query.trim() || [s.candidate_ref,s.summary,...s.cv_skills || []].some(x=>String(x || "").toLowerCase().includes(query.trim().toLowerCase()))).sort((a,b)=>sort==="evidence"?(b.match_score??-1)-(a.match_score??-1):sort==="newest"?Date.parse(b.created_at)-Date.parse(a.created_at):Date.parse(a.created_at)-Date.parse(b.created_at));
-
-  /* -- keyboard ---------------------------------------------- */
-  useEffect(() => {
-    function onKey(e) {
-      if (rejecting || upload || reviewing || busy) return;
-      const tag = e.target.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-      if (!visible.length) return;
-
-      if (e.key === "j" || e.key === "ArrowDown") { e.preventDefault(); setFocus((i) => Math.min(i + 1, visible.length - 1)); }
-      else if (e.key === "k" || e.key === "ArrowUp") { e.preventDefault(); setFocus((i) => Math.max(i - 1, 0)); }
-      else if (e.key === "a") { e.preventDefault(); advance([visible[Math.min(focus,visible.length-1)].id]); }
-      else if (e.key === "r") { e.preventDefault(); setRejecting({ ids: [visible[Math.min(focus,visible.length-1)].id], subs: [visible[Math.min(focus,visible.length-1)]] }); }
-      else if (e.key === "x") { e.preventDefault(); toggleSelect(visible[Math.min(focus,visible.length-1)].id); }
-      else if (e.key === "Enter") { e.preventDefault(); openCv(visible[Math.min(focus,visible.length-1)]); }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  });
-
-  useEffect(() => {
-    listRef.current?.querySelector(`[data-idx="${focus}"]`)?.scrollIntoView({ block: "nearest" });
-  }, [focus]);
-
-  function toggleSelect(id) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
-  }
-
-  // The CV is fetched only when someone opens it. The queue carries fifty
-  // summaries, not fifty documents.
-  async function openCv(s) {
-    if (expanded === s.id) { setExpanded(null); return; }
-    setExpanded(s.id);
-    if (cvCache[s.id]) return;
-    try {
-      const r = await getSubmissionCv(s.id);
-      setCvCache((c) => ({ ...c, [s.id]: r.cv_text || "No CV text on file." }));
-    } catch (e) {
-      setCvCache((c) => ({ ...c, [s.id]: `Couldn't load the CV: ${e.message}` }));
-    }
-  }
-
-  async function advance(ids) {
-    if(busy)return;setBusy(true);
-    try {
-      const r = await sendFeedback({ submission_ids: ids, decision: "advanced" });
-      showToast(describeSend(r, "advanced"));
-      setSelected(new Set());
-      await load();
-      onChanged?.();
-    } catch (e) {
-      showToast(e.message);
-    } finally {setBusy(false);}
-  }
-
-  async function reject({ ids, reason_code, note }) {
-    if(busy)return;setBusy(true);
-    try {
-      const r = await sendFeedback({ submission_ids: ids, decision: "rejected", reason_code, note });
-      showToast(describeSend(r, "rejected"));
-      setRejecting(null);
-      setSelected(new Set());
-      await load();
-      onChanged?.();
-    } catch (e) {
-      showToast(e.message);
-      throw e;
-    } finally {setBusy(false);}
-  }
-
-  /* -- bulk upload ------------------------------------------- */
-  async function handleFiles(fileList) {
-    const files = [...fileList].filter((f) => /\.(pdf|docx|txt|md)$/i.test(f.name));
-    if (!files.length) { showToast("Only PDF, DOCX and TXT files can be read."); return; }
-    if (files.length > 50) { showToast("50 CVs at a time - split the batch."); return; }
-
-    setUpload({ done: 0, total: files.length, phase: "reading" });
-    const parsed = [];
-    const unreadable = [];
-
-    // Extraction happens here, in the browser, one file at a time so a
-    // 40-file drop doesn't lock the tab. A file that can't be read is
-    // named rather than silently dropped - a recruiter needs to know which
-    // three of their thirty didn't make it.
-    for (let i = 0; i < files.length; i++) {
-      try {
-        const text = await extractTextFromFile(files[i]);
-        if (text?.trim().length > 80) parsed.push({ filename: files[i].name, text });
-        else unreadable.push(files[i].name);
-      } catch {
-        unreadable.push(files[i].name);
-      }
-      setUpload({ done: i + 1, total: files.length, phase: "reading" });
-    }
-
-    if (!parsed.length) {
-      setUpload(null);
-      showToast(`Couldn't read ${unreadable.length === 1 ? "that file" : "any of those files"}.`);
-      return;
-    }
-
-    setUpload({ done: 0, total: parsed.length, phase: "uploading" });
-    try {
-      const r = await uploadCandidates(postingId, parsed, (done, total) =>
-        setUpload({ done, total, phase: "uploading" }));
-      const bits = [`${r.added} CV${r.added === 1 ? "" : "s"} added`];
-      if (r.skipped) bits.push(`${r.skipped} already there`);
-      if (unreadable.length) bits.push(`${unreadable.length} unreadable`);
-      showToast(bits.join(" · ") + " — ranking now.");
-      await load();
-      onChanged?.();
-    } catch (e) {
-      showToast(e.message);
-    } finally {
-      setUpload(null);
-    }
-  }
-
-  if (loading) return <div className="emp-loading">Loading applicants...</div>;
-  if (error) return <div className="emp-error">{error} <button className="btn" onClick={() => load()}>Retry</button></div>;
-
-  const unanswered = subs.filter((s) => !s.feedback && s.source === "platform").length;
-
-  return (
-    <div
-      className={`emp-queue ${dragging ? "dragging" : ""}`}
-      onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-      onDragLeave={() => setDragging(false)}
-      onDrop={(e) => { e.preventDefault(); setDragging(false); handleFiles(e.dataTransfer.files); }}
-    >
-      <div className="emp-queue-bar">
-        <div className="emp-filters">
-          {[["open", "Open"], ["applied", "Applied here"], ["uploaded", "Uploaded"],
-            ["screening", "Screening"], ["shortlisted", "Shortlisted"], ["interview", "Interview"], ["offer", "Offer"], ["hired", "Hired"], ["rejected", "Rejected"], ["all", "All"]].map(([v, l]) => (
-            <button key={v} className={`filter-pill ${filter === v ? "active" : ""}`} onClick={() => changeFilter(v)}>{l}</button>
-          ))}
-        </div>
-        <div className="emp-queue-tools">
-          <button className="btn" onClick={() => fileRef.current?.click()}>Upload CVs</button>
-          <input
-            ref={fileRef} type="file" multiple hidden
-            accept=".pdf,.docx,.txt,.md"
-            onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }}
-          />
-        </div>
-      </div>
-
-      <div className="emp-search-tools">
-        <input aria-label="Search applicants" value={query} onChange={e=>{setQuery(e.target.value);setFocus(0);}} placeholder="Search CV summaries, skills or reference"/>
-        <select aria-label="Sort applicants" value={sort} onChange={e=>setSort(e.target.value)}><option value="oldest">Waiting longest first</option><option value="newest">Newest first</option><option value="evidence">CV evidence coverage</option></select>
-        <span>{visible.length} shown</span>
-      </div>
-      {criteria.length===0 && <div className="emp-nudge">Add screening criteria in Edit to scan each CV against the same requirements.</div>}
-      {subs.length > 0 && (
-        <div className="emp-queue-hint">
-          <kbd>j</kbd><kbd>k</kbd> move · <kbd>a</kbd> advance · <kbd>r</kbd> reject · <kbd>x</kbd> select · <kbd>↵</kbd> CV
-          <span className="emp-drophint">or drop a folder of CVs anywhere on this page</span>
-        </div>
-      )}
-
-      {upload && (
-        <div className="emp-progress">
-          <div className="emp-progress-bar"><span style={{ width: `${Math.round((upload.done / upload.total) * 100)}%` }} /></div>
-          {upload.phase === "reading"
-            ? `Reading ${upload.done} of ${upload.total} CVs...`
-            : `Uploading ${upload.done} of ${upload.total}...`}
-        </div>
-      )}
-
-      {scoring.outstanding > 0 && (
-        <div className="emp-progress">
-          <div className="emp-progress-bar indeterminate"><span /></div>
-          Scanning {scoring.outstanding} of {scoring.total} CVs for the criteria you set. You can review them now.
-        </div>
-      )}
-
-      {scoring.failed > 0 && (
-        <div className="emp-nudge">
-          {scoring.failed} CV{scoring.failed === 1 ? "" : "s"} could not be scanned. <button className="btn" onClick={async()=>{try{await rescanApplicants(postingId);await load(true);}catch(e){showToast(e.message);}}}>Retry scans</button>
-        </div>
-      )}
-
-      {unanswered > 0 && (
-        <div className="emp-nudge">
-          <strong>{unanswered}</strong> {unanswered === 1 ? "person is" : "people are"} still waiting to hear from you.
-        </div>
-      )}
-
-      {selected.size > 0 && (
-        <div className="emp-bulk">
-          <span>{selected.size} selected</span>
-          <button className="btn" onClick={() => advance([...selected])}>Advance all</button>
-          <button
-            className="btn danger"
-            onClick={() => setRejecting({ ids: [...selected], subs: subs.filter((s) => selected.has(s.id)) })}
-          >
-            Reject all with a reason
-          </button>
-          <button className="btn ghost" onClick={() => setSelected(new Set())}>Clear</button>
-        </div>
-      )}
-
-      {!subs.length && (
-        <div className="emp-empty">
-          <h2>No applicants yet</h2>
-          <p>
-            People who apply through JobCopilot arrive here already scored against this
-            role and already checked for whether you can employ them where they are.
-          </p>
-          <p>
-            You can also bring your own. Drop a folder of CVs anywhere on this page and
-            they'll be read, ranked against this posting and summarised — sitting in the
-            same list, so you're comparing everyone at once.
-          </p>
-          <button className="btn primary lg" onClick={() => fileRef.current?.click()}>Upload CVs</button>
-        </div>
-      )}
-
-      <div className="emp-list" ref={listRef}>
-        {visible.map((s, i) => (
-          <article
-            key={s.id}
-            data-idx={i}
-            className={`emp-card ${i === focus ? "focused" : ""} ${selected.has(s.id) ? "selected" : ""}`}
-            onClick={() => setFocus(i)}
-          >
-            <div className="emp-card-top">
-              <input
-                type="checkbox"
-                checked={selected.has(s.id)}
-                onChange={() => toggleSelect(s.id)}
-                onClick={(e) => e.stopPropagation()}
-                aria-label="Select applicant"
-              />
-              <span className="emp-ref">{s.candidate_ref}</span>
-              <Score value={s.match_score} status={s.score_status} />
-              {s.assessment?.criteria?.length>0 && <span className="emp-chip">CV mentions</span>}
-              <span className={`emp-chip src-${s.source}`}>
-                {s.source === "upload" ? "Uploaded" : "Applied here"}
-              </span>
-              <span className={`emp-stage st-${s.stage}`}>{STAGE_LABELS[s.stage]}</span>
-              <span className="emp-card-spacer" />
-              <button className="btn primary" onClick={e=>{e.stopPropagation();setReviewing(s);}}>Review applicant</button>
-              {!s.feedback && !["rejected","withdrawn","hired"].includes(s.stage) && (
-                <>
-                  <button className="btn" onClick={(e) => { e.stopPropagation(); advance([s.id]); }}>Advance</button>
-                  <button className="btn danger" onClick={(e) => { e.stopPropagation(); setRejecting({ ids: [s.id], subs: [s] }); }}>Reject</button>
-                </>
-              )}
-            </div>
-
-            {/* The short description that exists so a recruiter doesn't
-                open thirty PDFs to find the three worth opening. */}
-            {s.summary && <p className="emp-summary">{s.summary}</p>}
-            {s.match_reason && <p className="emp-reason">{s.match_reason}</p>}
-
-            <div className="emp-facts">
-              {s.applicant_email && <Fact k="Email" v={s.applicant_email} />}
-              {s.country && <Fact k="Location" v={cap(s.country)} />}
-              {s.availability && <Fact k="Can start" v={AVAILABILITY_LABELS[s.availability] || s.availability} />}
-              {s.cv_years != null && <Fact k="Experience" v={`${s.cv_years} yr`} claimed />}
-              <Fact k={s.source === "upload" ? "Uploaded" : "Applied"} v={ago(s.created_at)} />
-            </div>
-
-            {s.cv_skills?.length > 0 && (
-              <div className="emp-skills">
-                {/* "Claimed" is not hedging - it is the honest word. These
-                    are read from a CV the candidate wrote, and calling them
-                    verified would be a lie the product can't back. */}
-                <span className="emp-skills-label">CV mentions</span>
-                {s.cv_skills.slice(0, 12).map((k) => <span key={k} className="kw-pill">{k}</span>)}
-                {s.cv_skills.length > 12 && <span className="emp-more">+{s.cv_skills.length - 12}</span>}
-              </div>
-            )}
-
-            {s.feedback && (
-              <div className={`emp-sent d-${s.feedback.decision}`}>
-                {s.feedback.decision === "rejected" ? "Rejected" : s.feedback.decision === "hired" ? "Hired" : "Advanced"}
-                {s.feedback.reason_code && <> — told: "{REASON_LABELS[s.feedback.reason_code]}"</>}
-                {s.feedback.seen_at ? <span className="emp-seen">· read</span> : s.feedback.sent_at ? <span className="emp-seen">· sent</span> : null}
-              </div>
-            )}
-
-            <button className="emp-cv-toggle" onClick={(e) => { e.stopPropagation(); openCv(s); }}>
-              {expanded === s.id ? "Hide CV" : "Read CV"}
-              {s.cv_filename && <span className="emp-cv-name"> · {s.cv_filename}</span>}
-            </button>
-            {expanded === s.id && (
-              <pre className="emp-cv">{cvCache[s.id] ?? "Loading CV..."}</pre>
-            )}
-          </article>
-        ))}
-        {subs.length > 0 && !visible.length && <p className="emp-rail-empty">Nothing in this filter.</p>}
-      </div>
-
-      {reviewing && <ReviewDesk submission={reviewing} criteria={criteria} onClose={()=>setReviewing(null)} onSaved={()=>{load(true);onChanged?.();}} showToast={showToast}/>}
-      {rejecting && (
-        <RejectDialog
-          subs={rejecting.subs}
-          onCancel={() => setRejecting(null)}
-          onSend={(reason_code, note) => reject({ ids: rejecting.ids, reason_code, note })}
-        />
-      )}
-    </div>
-  );
+import {useState,useEffect,useCallback,useRef} from 'react';
+import {listSubmissions,sendFeedback,uploadCandidates,rescanApplicants,REASON_OPTIONS,REASON_LABELS,STAGE_LABELS} from '../lib/employerApi';
+import {collectCvFiles} from '../lib/cvArchive';
+import {extractTextFromFile} from '../lib/extractText';
+import {compareHiringCandidates} from '../../../shared/hiringWorkflow.js';
+import ReviewDesk from './ReviewDesk';
+export default function ScreenQueue({postingId,initialReviewId,showToast,onChanged}) {
+ const [subs,setSubs]=useState([]),[criteria,setCriteria]=useState([]),[reviewing,setReviewing]=useState(null);
+ const [loading,setLoading]=useState(true),[error,setError]=useState(''),[query,setQuery]=useState(''),[sort,setSort]=useState('match');
+ const [pageSize,setPageSize]=useState(50);
+ const [filter,setFilter]=useState('all'),[selected,setSelected]=useState(new Set()),[rejecting,setRejecting]=useState(null);
+ const [upload,setUpload]=useState(null),[report,setReport]=useState(null),[dragging,setDragging]=useState(false),[busy,setBusy]=useState(false);
+ const fileRef=useRef(null),openedInitial=useRef(null);
+ const load=useCallback(async()=>{try{const r=await listSubmissions(postingId);setSubs(r.submissions);setCriteria(r.posting.screening_criteria || []);setError('');}catch(e){setError(e.message);}finally{setLoading(false);}},[postingId]);
+ useEffect(()=>{let cancelled=false;listSubmissions(postingId).then(r=>{if(!cancelled){setSubs(r.submissions);setCriteria(r.posting.screening_criteria || []);setError('');}}).catch(e=>{if(!cancelled)setError(e.message);}).finally(()=>{if(!cancelled)setLoading(false);});return()=>{cancelled=true;};},[postingId]);
+ useEffect(()=>{if(initialReviewId&&subs.length&&openedInitial.current!==initialReviewId){openedInitial.current=initialReviewId;setReviewing(subs.find(s=>s.id===initialReviewId)||null);}},[initialReviewId,subs]);
+ const pending=subs.filter(s=>['pending','scoring'].includes(s.score_status)).length;
+ useEffect(()=>{if(!pending)return;const t=setInterval(()=>load(true),5000);return()=>clearInterval(t);},[pending,load]);
+ const counts=Object.fromEntries(['new','screening','shortlisted','interview','offer','hired','rejected'].map(stage=>[stage,subs.filter(s=>s.stage===stage).length]));
+ const visible=subs.filter(s=>filter==='all'||(filter==='upload'||filter==='platform'?s.source===filter:s.stage===filter)).filter(s=>!query.trim()||[s.candidate_ref,s.summary,...s.cv_skills || []].some(v=>String(v || '').toLowerCase().includes(query.trim().toLowerCase()))).sort(sort==='match'?compareHiringCandidates:sort==='newest'?(a,b)=>Date.parse(b.created_at)-Date.parse(a.created_at):(a,b)=>Date.parse(a.created_at)-Date.parse(b.created_at));
+ async function advance(ids){if(busy)return;setBusy(true);try{const r=await sendFeedback({submission_ids:ids,decision:'advanced'});showToast(describeSend(r,'advanced'));setSelected(new Set());await load(true);onChanged?.();}catch(e){showToast(e.message);}finally{setBusy(false);}}
+ async function reject(reason_code,note){if(busy)return;setBusy(true);try{const r=await sendFeedback({submission_ids:rejecting.ids,decision:'rejected',reason_code,note});showToast(describeSend(r,'rejected'));setRejecting(null);setSelected(new Set());await load(true);onChanged?.();}catch(e){showToast(e.message);throw e;}finally{setBusy(false);}}
+ async function handleFiles(input){
+  if(upload)return;setReport(null);setUpload({phase:'Opening files',done:0,total:1});
+  const parsed=[],issues=[];
+  try {
+   const collected=await collectCvFiles([...input]);const files=collected.files,ignored=collected.skipped;
+   for(let i=0;i<files.length;i++){
+    setUpload({phase:'Reading CVs',done:i,total:files.length});
+    try{const text=await extractTextFromFile(files[i]);if(text.trim().length<80)throw Error('Not enough readable text. A scanned PDF needs a text layer.');parsed.push({filename:files[i].name,text,file:files[i]});}catch(e){issues.push({filename:files[i].name,error:e.message,file:files[i]});}
+   }
+   let result={added:0,skipped:0,errors:[]};
+   if(parsed.length)result=await uploadCandidates(postingId,parsed,(done,total)=>setUpload({phase:'Saving CVs and originals',done,total}));
+   setReport({added:result.added,skipped:result.skipped,ignored,issues:[...issues,...result.errors]});
+   await load(true);onChanged?.();
+   showToast(`${result.added} CVs added. Assessments run automatically.`);
+  }catch(e){setError(e.message);}finally{setUpload(null);}
+ }
+ function toggle(id){setSelected(prev=>{const next=new Set(prev);next.has(id)?next.delete(id):next.add(id);return next;});}
+ if(loading)return <div className="emp-loading" role="status">Preparing your candidate workspace…</div>;
+ return <div className={`emp-queue ${dragging?'dragging':''}`} onDragOver={e=>{e.preventDefault();setDragging(true);}} onDragLeave={()=>setDragging(false)} onDrop={e=>{e.preventDefault();setDragging(false);handleFiles(e.dataTransfer.files);}}>
+  <div className="emp-role-stats">{[[subs.length,'Total applicants','01'],[counts.shortlisted,'Shortlisted','02'],[counts.interview,'In interview','03'],[counts.offer,'At offer','04']].map(([value,label,n])=><article key={label}><div><span>{label}</span><small>{n}</small></div><strong>{value}<span>{label==='Total applicants'?' people in your pipeline':''}</span></strong></article>)}</div>
+  <section className="emp-import-banner"><span className="emp-import-icon" aria-hidden="true">↥</span><div><h3>Great people. One organised shortlist.</h3><p>Drop a ZIP of CVs or upload individual files. JobCopilot assesses everyone against the same role criteria.</p><small>Up to 50 CVs · ZIP, PDF, DOCX, TXT · 5 MB per CV</small></div><button className="btn primary" disabled={!!upload} onClick={()=>fileRef.current?.click()}>＋ Import CVs</button><input ref={fileRef} type="file" multiple hidden accept=".zip,.pdf,.docx,.txt,.md" onChange={e=>{handleFiles(e.target.files);e.target.value='';}}/></section>
+  {error&&<div className="emp-error" role="alert">{error} <button className="btn" onClick={()=>{setError('');load(true);}}>Retry</button></div>}
+  {upload&&<div className="emp-progress" role="status"><div className="emp-progress-bar"><span style={{width:`${100*upload.done/Math.max(upload.total,1)}%`}}/></div>{upload.phase} · {upload.done} of {upload.total}</div>}
+  {report&&<details className="emp-import-report" open><summary>Import complete · {report.added} added · {report.skipped} already present · {report.issues.length} need attention{report.ignored.length?` · ${report.ignored.length} unsupported files skipped`:''}</summary>{report.issues.map((issue,i)=><p key={i}><strong>{issue.filename}</strong> · {issue.error}</p>)}{report.issues.length>0&&<button className="btn" onClick={()=>handleFiles(report.issues.map(i=>i.file))}>Retry these files</button>}</details>}
+  <div className="emp-candidates-heading"><div><span className="eyebrow">YOUR TALENT PIPELINE</span><h2>Candidates <span>{subs.length}</span></h2></div><p>Evidence first. Your decision, always.</p></div>
+  <div className="emp-stage-tabs" aria-label="Filter applicants by stage">{[['all','All candidates',subs.length],...['new','screening','shortlisted','interview','offer','hired','rejected'].map(s=>[s,STAGE_LABELS[s],counts[s]])].map(([value,label,count])=><button key={value} className={filter===value?'active':''} aria-pressed={filter===value} onClick={()=>{setFilter(value);setSelected(new Set());}}>{label}<span>{count}</span></button>)}</div>
+  <div className="emp-search-tools"><label className="emp-search-box"><span aria-hidden="true">⌕</span><input aria-label="Search candidates" value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search candidates, skills or evidence…"/></label><select aria-label="Sort candidates" value={sort} onChange={e=>setSort(e.target.value)}><option value="match">Best role match</option><option value="newest">Newest first</option><option value="oldest">Waiting longest</option></select><select aria-label="Candidate source" value={['platform','upload'].includes(filter)?filter:''} onChange={e=>setFilter(e.target.value || 'all')}><option value="">All sources</option><option value="platform">Direct applications</option><option value="upload">CV imports</option></select></div>
+  {!criteria.length&&<div className="emp-nudge">Set the role’s screening criteria in Edit to enable match scores. CVs are ready for your review.</div>}
+  {pending>0&&<div className="emp-assessment-notice" role="status"><span className="emp-pulse"/>{pending} assessment{pending===1?'':'s'} queued or running. You can open the originals now.{subs.some(s=>s.score_retry_reason==='capacity')?' AI capacity is temporarily full; queued CVs retry automatically.':''}</div>}
+  {subs.some(s=>s.score_status==='failed')&&<div className="emp-nudge">Some assessments need a retry. <button className="btn" onClick={async()=>{try{await rescanApplicants(postingId);await load(true);}catch(e){showToast(e.message);}}}>Retry assessments</button></div>}
+  {selected.size>0&&<div className="emp-bulk"><strong>{selected.size} selected</strong><button className="btn" disabled={busy} onClick={()=>advance([...selected])}>Shortlist selected</button><button className="btn danger" disabled={busy} onClick={()=>setRejecting({ids:[...selected],subs:subs.filter(s=>selected.has(s.id))})}>Reject with a reason</button><button className="btn ghost" onClick={()=>setSelected(new Set())}>Clear</button></div>}
+  <div className="emp-candidate-table"><div className="emp-candidate-table-head"><span/><span>Candidate & role evidence</span><span>Role match</span><span>Stage</span><span>Received</span><span>Review</span></div>
+   {!visible.length&&<div className="emp-empty"><span className="emp-empty-symbol">⌘</span><h2>{subs.length?'No candidates in this view':'Your next great hire starts here.'}</h2><p>{subs.length?'Try another stage or search term.':'Share the live posting or import a ZIP of CVs. We’ll bring the evidence into one shortlist.'}</p>{!subs.length&&<button className="btn primary" onClick={()=>fileRef.current?.click()}>Import your first CVs</button>}</div>}
+   {visible.slice(0,pageSize).map((s,i)=><article className={`emp-candidate-row ${selected.has(s.id)?'selected':''}`} key={s.id}>
+    <input type="checkbox" checked={selected.has(s.id)} onChange={()=>toggle(s.id)} aria-label={`Select ${s.candidate_ref}`}/>
+    <button className="emp-candidate-identity" onClick={()=>setReviewing(s)}><span className={`emp-avatar tone-${i%4}`}>{s.source==='platform'?'JC':s.candidate_ref.replace(/\.[^.]+$/,'').split(/\s+/).slice(0,2).map(w=>w[0]).join('').toUpperCase()}</span><span><strong>{s.candidate_ref}</strong><small>{s.source==='upload'?'CV import':'Direct application'}{s.country?` · ${cap(s.country)}`:''}</small><span className="emp-candidate-summary">{s.summary || 'Assessment queued. Open the original CV to begin your review.'}</span></span></button>
+    <div className="emp-match-cell"><Score value={s.assessment?.method==='semantic_role_match'?s.match_score:null} status={s.score_status}/><small>{s.assessment?.method==='semantic_role_match'?'documented fit':'not yet assessed'}</small>{s.match_score!=null&&s.assessment?.method==='semantic_role_match'&&<span className="emp-match-track"><span style={{width:`${s.match_score}%`}}/></span>}</div>
+    <div><span className={`emp-stage st-${s.stage}`}>{STAGE_LABELS[s.stage]}</span></div><time dateTime={s.created_at}>{ago(s.created_at)}</time><button className="emp-review-arrow" onClick={()=>setReviewing(s)} aria-label={`Review ${s.candidate_ref}`}>↗</button>
+   </article>)}
+  </div>{visible.length>pageSize&&<button className="btn emp-more-candidates" onClick={()=>setPageSize(n=>n+50)}>Show more candidates ({visible.length-pageSize} remaining)</button>}<p className="emp-rank-note">Ranked by evidence against your required and preferred criteria. A match score is not a prediction of performance. Review the CV before deciding.</p>
+  {reviewing&&<ReviewDesk submission={subs.find(s=>s.id===reviewing.id) || reviewing} criteria={criteria} onClose={()=>setReviewing(null)} onSaved={()=>{load(true);onChanged?.();}} showToast={showToast}/>}
+  {rejecting&&<RejectDialog subs={rejecting.subs} onCancel={()=>setRejecting(null)} onSend={reject}/>}
+ </div>;
 }
-
 /* -- The reason picker --------------------------------------------------
    Deliberately has no "skip" button. The whole product claim is that people
    hear back with something they can use; an escape hatch here would be
@@ -478,16 +139,7 @@ function Score({ value, status }) {
   }
   if (value == null) return <span className="emp-score none" title="Not scored.">—</span>;
   const band = value >= 70 ? "hi" : value >= 45 ? "mid" : "lo";
-  return <span className={`emp-score ${band}`}>{value}</span>;
-}
-
-function Fact({ k, v, claimed }) {
-  return (
-    <span className="emp-fact">
-      <span className="emp-fact-k">{k}</span>
-      <span className="emp-fact-v">{v}{claimed && <em title="Read from their CV, not independently verified."> claimed</em>}</span>
-    </span>
-  );
+  return <span className={`emp-score ${band}`}>{value}%</span>;
 }
 
 // The API reports how many were actually notified vs merely moved, and the

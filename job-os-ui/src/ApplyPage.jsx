@@ -14,8 +14,9 @@
 import { useState, useEffect } from "react";
 import { useSession } from "./lib/useSession";
 import { supabase } from "./lib/supabaseClient";
-import { getPublicPosting, applyToPosting } from "./lib/employerApi";
+import { getPublicPosting, applyToPosting, uploadOriginalCv } from "./lib/employerApi";
 import { fmtSalary } from "./lib/api";
+import {extractTextFromFile} from "./lib/extractText";
 import AuthModal from "./AuthModal";
 import "./employer/employer.css";
 
@@ -27,6 +28,7 @@ export default function ApplyPage({ postingId }) {
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
   const [showAuth, setShowAuth] = useState(false);
+  const [file,setFile]=useState(null),[fileText,setFileText]=useState(''),[receipt,setReceipt]=useState(null),[originalError,setOriginalError]=useState('');
 
   useEffect(() => {
     getPublicPosting(postingId).then(setData).catch((e) => setErr(e.message));
@@ -41,15 +43,15 @@ export default function ApplyPage({ postingId }) {
       .then(({ data }) => setCv(data || null));
   }, [user]);
 
+  async function attach(event) {
+    const chosen=event.target.files?.[0];if(!chosen)return;
+    setBusy(true);setErr(null);
+    try{const text=await extractTextFromFile(chosen);if(text.trim().length<80)throw Error('Please use a readable CV with selectable text.');setFile(chosen);setFileText(text.slice(0,50000));}catch(e){setErr(e.message);}finally{setBusy(false);}
+  }
+  async function saveOriginal(submissionId){if(!file)return;setBusy(true);try{await uploadOriginalCv(submissionId,file,true);setOriginalError('');}catch(e){setOriginalError(e.message);}finally{setBusy(false);}}
   async function submit() {
-    setBusy(true);
-    try {
-      await applyToPosting(postingId);
-      setDone(true);
-    } catch (e) {
-      setErr(e.message);
-      setBusy(false);
-    }
+    setBusy(true);setErr(null);
+    try{const result=await applyToPosting(postingId,fileText?{cvText:fileText}:{});setReceipt(result);setDone(true);if(file)await saveOriginal(result.submission_id);}catch(e){setErr(e.message);}finally{setBusy(false);}
   }
 
   if (err && !data) return <Shell><div className="emp-error">{err}</div></Shell>;
@@ -69,6 +71,7 @@ export default function ApplyPage({ postingId }) {
             you'll get an answer here either way — and if it's a no, it comes with a
             reason. It lands in your Pipeline.
           </p>
+          {originalError&&<div className="emp-error">Your application was received, but the original file could not be attached: {originalError} <button className="btn" disabled={busy} onClick={()=>saveOriginal(receipt.submission_id)}>Retry original upload</button></div>}
           <a className="btn primary lg" href="/">Back to JobCopilot</a>
         </div>
       </Shell>
@@ -112,19 +115,20 @@ export default function ApplyPage({ postingId }) {
               <p className="field-hint">Applying takes one click once you're in — your CV is already on file.</p>
             </>
           )}
-          {user && !cv?.cv_text && (
+          {user&&<label className="apply-upload"><strong>Attach your original CV</strong><input type="file" accept=".pdf,.docx,.txt" disabled={busy} onChange={attach}/><span className="field-hint">{file?`${file.name} will be shared with this hiring team for document review.`:'PDF preferred, up to 5 MB. You can also apply with the saved CV text below.'}</span></label>}
+          {user && !cv?.cv_text && !fileText && (
             <>
               <a className="btn primary lg" href="/">Upload a CV first</a>
               <p className="field-hint">Add your CV in the You tab, then come back to this page.</p>
             </>
           )}
-          {user && cv?.cv_text && (
+          {user && (cv?.cv_text || fileText) && (
             <>
               <button className="btn primary lg" onClick={submit} disabled={busy}>
                 {busy ? "Sending…" : "Apply with my CV"}
               </button>
               <p className="field-hint">
-                Shares {cv.filename || "your saved CV"}, your country and availability with this hiring team for review against the role criteria. AI may assist their review; a person makes the hiring decision.
+                Shares {file?.name || cv?.filename || "your saved CV"}, your country and availability with this hiring team for review against the role criteria. AI may assist their review; a person makes the hiring decision.
               </p>
             </>
           )}

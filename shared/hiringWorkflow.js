@@ -69,3 +69,8 @@ export function hiringMetrics(rows, now=Date.now()) {
   }
   return {total:rows.length,stages,overdue,waiting,unreviewed};
 }
+
+export function compareHiringCandidates(a,b) {
+ const score=s=>s.score_status==='done'&&s.assessment?.method==='semantic_role_match'&&Number.isFinite(s.match_score)?s.match_score:-1;
+ return score(b)-score(a)||Date.parse(a.created_at)-Date.parse(b.created_at)||String(a.id).localeCompare(String(b.id));
+}
