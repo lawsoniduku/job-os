@@ -36,6 +36,20 @@ test('temporary board failures are visible while successful source rows remain r
 test('a known missing employer board remains distinct from a transient source outage',async()=>{
  assert.deepEqual(await runBatched([{slug:'retired'}],async()=>{throw Object.assign(new Error('not found'),{response:{status:404}});},'Fixture',5),[]);
 });
+test('a transient employer outage retries only the failed board and preserves every successful board',async()=>{
+ const calls={},delays=[];
+ const rows=await runBatched([{slug:'good'},{slug:'flaky'}],async c=>{
+  calls[c.slug]=(calls[c.slug] || 0)+1;
+  if(c.slug==='flaky'&&calls[c.slug]<3)throw Object.assign(Error('temporary'),{response:{status:503}});
+  return [{title:c.slug}];
+ },'Fixture',5,{sleep:async ms=>delays.push(ms)});
+ assert.equal(calls.good,1);assert.equal(calls.flaky,3);assert.equal(rows.length,2);assert.deepEqual(delays,[1000,2000]);
+});
+test('forbidden and missing boards are not retried; a failed board names its slug and HTTP status',async()=>{
+ let calls=0;
+ await assert.rejects(()=>runBatched([{slug:'restricted'}],async()=>{calls++;throw Object.assign(Error('not public'),{response:{status:403}});},'Fixture'),/restricted: HTTP 403/);
+ assert.equal(calls,1);
+});
 
 import {GREENHOUSE_COMPANIES} from './connectors/registry.js';
 test('Moniepoint uses the observed public board API that returns its official requisitions',async t=>{
@@ -44,3 +58,4 @@ test('Moniepoint uses the observed public board API that returns its official re
  await fetchGreenhouse([GREENHOUSE_COMPANIES.find(c=>c.slug==='moniepoint')]);
  assert.equal(requested,'https://boards-api.greenhouse.io/v1/boards/moniepoint/jobs?content=true');
 });
+

@@ -48,25 +48,42 @@ export async function fetchGreenhouse(companies) {
 }
 
 // shared bounded-concurrency runner used by all ATS connectors
-export async function runBatched(companies, fetchOne, label, batch = 5) {
+export async function runBatched(companies, fetchOne, label, batch = 5, {attempts=3,sleep=ms=>new Promise(r=>setTimeout(r,ms))}={}) {
   const all = [];
   let ok = 0, empty = 0;
   const failures = [];
   for (let i = 0; i < companies.length; i += batch) {
     const slice = companies.slice(i, i + batch);
-    const results = await Promise.allSettled(slice.map(fetchOne));
-    for (const r of results) {
+    const results = await Promise.allSettled(slice.map(async company=>{
+      for(let attempt=0;attempt<attempts;attempt++) {
+        try{return await fetchOne(company);}catch(e) {
+          const status=e.response?.status;
+          const transient=[408,429,500,502,503,504].includes(status)||['ECONNABORTED','ECONNRESET','ETIMEDOUT','EAI_AGAIN','ERR_NETWORK'].includes(e.code);
+          const header=e.response?.headers?.['retry-after'];
+          const retryAfter=header==null?null:/^\d+(\.\d+)?$/.test(String(header))?Number(header)*1000:Date.parse(header)-Date.now();
+          const delay=retryAfter==null?1000*2**attempt:Math.max(1000,retryAfter);
+          if(!transient||attempt+1>=attempts||!Number.isFinite(delay)||delay>10000)throw e;
+          await sleep(delay);
+        }
+      }
+    }));
+    for (const [index,r] of results.entries()) {
       if (r.status === "fulfilled" && r.value?.length) { all.push(...r.value); ok++; }
-      else if (r.status === "rejected" && r.reason?.response?.status !== 404) failures.push(r.reason);
+      else if (r.status === "rejected" && r.reason?.response?.status !== 404) {
+        const status=r.reason?.response?.status;
+        const code=String(r.reason?.code || 'invalid_response').replace(/[^a-z0-9_]/gi,'').slice(0,40);
+        failures.push(new Error(`${slice[index].slug || slice[index].sub || 'board'}: ${status?'HTTP '+status:code}`));
+      }
       else empty++;
     }
     if (i + batch < companies.length) await new Promise((r) => setTimeout(r, 300));
   }
   console.log(`  ${failures.length ? "⚠" : "✔"} ${label}: ${all.length} jobs from ${ok} boards (${empty} empty/404; ${failures.length} failed)`);
   if (failures.length) {
-    const error = new AggregateError(failures,`${label}: ${failures.length} employer board fetches failed`);
+    const error = new AggregateError(failures,`${label}: ${failures.length} employer board fetches failed (${failures.map(e=>e.message).join('; ')})`);
     error.partialJobs = all;
     throw error;
   }
   return all;
 }
+
