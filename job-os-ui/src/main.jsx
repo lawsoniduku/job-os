@@ -14,6 +14,7 @@
  */
 import { StrictMode, Suspense, lazy } from 'react'
 import { createRoot } from 'react-dom/client'
+import {consumeAuthReturn,authReturnStorage} from './lib/authReturn.js'
 import './index.css'
 import './theme.css'
 const App=lazy(()=>import('./App.jsx'));
@@ -33,7 +34,9 @@ function Surface() {
 
 export function Root(){return <Suspense fallback={<div role="status" style={{padding:40,fontFamily:'system-ui'}}>Loading JobCopilot…</div>}><Surface/></Suspense>;}
 
-createRoot(document.getElementById('root')).render(
+const returnPath=consumeAuthReturn(authReturnStorage(window),window.location);
+if(returnPath)window.location.replace(returnPath+window.location.search+window.location.hash);
+else createRoot(document.getElementById('root')).render(
   <StrictMode>
     <Root />
   </StrictMode>,
