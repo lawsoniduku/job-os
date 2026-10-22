@@ -13,6 +13,7 @@
  * runs on the same connections the candidate side does.
  */
 import { supabase } from "./supabaseClient";
+import {cvUploadBatches,cvImportPayload} from "./cvUploadBatches";
 import { API } from "./api";
 
 export class ApiError extends Error {
@@ -118,17 +119,21 @@ export const getSubmissionCv = (id) => call(`/employer/submissions/${id}/cv`, { 
  * cost one chunk rather than the whole drop.
  */
 export async function uploadCandidates(postingId,candidates,onProgress) {
- let added=0,skipped=0;const errors=[];
- for(let i=0;i<candidates.length;i++) {
-  const c=candidates[i];
-  try {
-   const r=await call(`/employer/postings/${postingId}/candidates`,{method:'POST',body:{candidates:[{text:c.text,filename:c.filename}]},timeoutMs:60000});
-   added+=r.added;skipped+=r.skipped;
-   const row=r.candidates?.[0];
-   if(row?.error)errors.push({filename:c.filename,error:row.error,file:c.file});
-   if(row?.id&&c.file){try{await uploadOriginalCv(row.id,c.file);}catch(e){errors.push({filename:c.filename,error:'CV text saved; original upload failed: '+e.message,id:row.id,file:c.file});}}
-  }catch(e){errors.push({filename:c.filename,error:'CV import failed: '+e.message,file:c.file});}
-  onProgress?.(i+1,candidates.length);
+ let added=0,skipped=0,done=0;const errors=[];
+ const batches=cvUploadBatches(candidates);
+ for(const batch of batches) {
+  let result;
+  try{result=await call(`/employer/postings/${postingId}/candidates`,{method:'POST',body:cvImportPayload(batch),timeoutMs:60000});added+=result.added;skipped+=result.skipped;}
+  catch(e){for(const c of batch)errors.push({filename:c.filename,error:'CV import failed: '+e.message,file:c.file});done+=batch.length;onProgress?.(done,candidates.length);continue;}
+  const queue=batch.map((c,index)=>({c,index}));
+  await Promise.all(Array.from({length:Math.min(3,queue.length)},async()=>{
+   while(queue.length){
+    const {c,index}=queue.shift(),row=result.candidates?.find(r=>r.index===index);
+    if(!row?.id)errors.push({filename:c.filename,error:row?.error || 'Could not confirm the import. Retry this file.',file:c.file});
+    else if(c.file){try{await uploadOriginalCv(row.id,c.file);}catch(e){errors.push({filename:c.filename,error:'CV text saved; original upload failed: '+e.message,id:row.id,file:c.file});}}
+    done++;onProgress?.(done,candidates.length);
+   }
+  }));
  }
  return {added,skipped,errors};
 }

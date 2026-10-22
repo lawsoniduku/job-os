@@ -61,6 +61,11 @@ const searchLimit = rateLimit({ windowMs: 60_000, max: 60, standardHeaders: true
 const llmLimit = rateLimit({ windowMs: 60_000, max: 12, standardHeaders: true, legacyHeaders: false,
   message: { error: "Too many AI requests — wait a minute and try again." } });
 
+// Importing a 50-CV batch includes JSON records and original-file requests.
+// Count authenticated accounts here; the shared search/IP budget is unrelated.
+const uploadLimit=rateLimit({windowMs:60000,max:120,keyGenerator:req=>req.user.id,
+  standardHeaders:true,legacyHeaders:false,message:{error:'Upload capacity reached. Wait a minute, then retry the remaining CVs.'}});
+
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
 // ── WHICH KEY ARE WE HOLDING? ────────────────────────────────────────────
@@ -1052,6 +1057,7 @@ app.use(
     optionalAuth: makeOptionalAuth(supabase),
     searchLimit,
     llmLimit,
+    uploadLimit,
   })
 );
 

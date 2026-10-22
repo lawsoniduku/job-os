@@ -71,7 +71,7 @@ function dbFail(res, error, fallback) {
   return res.status(503).json({ error: fallback });
 }
 
-export function employerRouter({ supabase, requireAuth, requireEmployer, optionalAuth, searchLimit, llmLimit }) {
+export function employerRouter({ supabase, requireAuth, requireEmployer, optionalAuth, searchLimit, llmLimit, uploadLimit=searchLimit }) {
   const r = Router();
   // Express 4 does not forward rejected async handlers automatically.
   for(const method of ['get','post','patch','delete']) {
@@ -79,7 +79,7 @@ export function employerRouter({ supabase, requireAuth, requireEmployer, optiona
     r[method]=(path,...handlers)=>register(path,...handlers.map(handler=>(req,res,next)=>Promise.resolve().then(()=>handler(req,res,next)).catch(next)));
   }
   r.use(hiringCommunicationsRouter({supabase,requireAuth,requireEmployer,searchLimit,dispatch:()=>dispatchHiringMail(supabase)}));
-  r.use(hiringDocumentsRouter({supabase,requireAuth,requireEmployer,searchLimit}));
+  r.use(hiringDocumentsRouter({supabase,requireAuth,requireEmployer,searchLimit:uploadLimit}));
   r.use(hiringRouter({supabase,requireAuth,requireEmployer,searchLimit,llmLimit}));
 
   /* ══════════════════════════════════════════════════════════════════
@@ -374,7 +374,7 @@ ${text.slice(0, 12000)}`;
   // never consented to anything, and nothing in this route adds them to the
   // pool other employers can search. They are one recruiter's private
   // shortlist for one posting (016 sec 1).
-  r.post("/employer/postings/:id/candidates", requireAuth, requireEmployer, searchLimit, async (req, res) => {
+  r.post("/employer/postings/:id/candidates", requireAuth, requireEmployer, uploadLimit, async (req, res) => {
     const { data: posting } = await supabase
       .from("job_postings").select("id, org_id")
       .eq("id", req.params.id).eq("org_id", req.orgId).maybeSingle();

@@ -35,3 +35,8 @@ or application page from a short-lived, allowlisted local path. Callback tokens
 remain in the URL fragment for the client library and are never put in the
 return-intent record. Ordinary candidate homepage visits do not redirect, and
 blocked browser storage does not break the landing page.
+
+Bulk imports have a separate account-scoped upload budget, so 50 originals do
+not exhaust the shared search limit. JSON batches are bounded by UTF-8 bytes,
+not just file count; originals upload with concurrency three and explicit
+per-file acknowledgements. Failed batches remain safe to retry.
