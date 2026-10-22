@@ -8,7 +8,7 @@
  * a salary band would be worse than no parsing at all.
  */
 import { useState } from "react";
-import { createPosting, updatePosting, parseJD } from "../lib/employerApi";
+import { createPosting, updatePosting, parseJD, suggestRoleCriteria } from "../lib/employerApi";
 
 const REMOTE = [
   { v: "", l: "—" },
@@ -80,6 +80,11 @@ export default function PostingEditor({ posting, onCancel, onSaved, showToast })
     } finally {
       setParsing(false);
     }
+  }
+
+  async function suggestCriteria(){
+    setParsing(true);setError(null);
+    try{const {criteria}=await suggestRoleCriteria({title:f.title,description:f.description});if(!criteria.length){setError('No clear job requirements found. Add the concrete skills and responsibilities you want to assess.');return;}setF(prev=>({...prev,required_criteria:criteria.filter(c=>c.importance==='required').map(c=>c.label).join('\n'),preferred_criteria:criteria.filter(c=>c.importance==='preferred').map(c=>c.label).join('\n')}));showToast?.('Draft criteria ready. Review and edit them before saving.');}catch(e){setError(e.message);}finally{setParsing(false);}
   }
 
   async function save(status) {
@@ -207,8 +212,8 @@ export default function PostingEditor({ posting, onCancel, onSaved, showToast })
         </label>
 
         <section className="emp-criteria-editor">
-          <h2>What should CV review look for?</h2>
-          <p>Up to 12 concrete skills or responsibilities. Each match shows the original CV quote. Equivalent experience counts; unclear evidence becomes an interview question.</p>
+          <h2>What should CV review look for?</h2><button className="btn" onClick={suggestCriteria} disabled={parsing||busy||f.description.trim().length<40}>{parsing?"Reading role requirements…":"✳ Suggest from the description"}</button>
+          <p>Up to 12 concrete skills or responsibilities. Use the AI suggestion to draft these from your description, then review them. Each match shows the original CV quote. Equivalent experience counts; unclear evidence becomes an interview question.</p>
           <div className="emp-row-2">
             <label className="field"><span className="field-label">Required · one per line</span><textarea rows={5} value={f.required_criteria} onChange={set("required_criteria")} placeholder={"Customer service\nMicrosoft Excel\nZendesk"}/></label>
             <label className="field"><span className="field-label">Preferred · one per line</span><textarea rows={5} value={f.preferred_criteria} onChange={set("preferred_criteria")} placeholder={"Salesforce\nTechnical support"}/></label>

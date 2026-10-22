@@ -69,6 +69,7 @@ export default function JDComposer({ onCancel, onSaved }) {
         salary_min: jd.salary_min,
         salary_max: jd.salary_max,
         eligible_countries: jd.eligible_countries,
+        screening_criteria:[...(jd.must_have || []).filter(label=>label.trim()).map(label=>({label,importance:'required'})),...(jd.nice_to_have || []).filter(label=>label.trim()).map(label=>({label,importance:'preferred'}))],
         jd_source: "drafted",
         // Kept so this posting can be redrafted later without asking the
         // same questions again.
@@ -118,6 +119,7 @@ export default function JDComposer({ onCancel, onSaved }) {
             </button>
             <button className="btn" onClick={() => onCancel("manual")}>I'd rather fill in a form</button>
           </div>
+          <section className="emp-criteria-editor"><h2>Review the matching criteria</h2><p>Every CV is assessed against these. Keep up to 12 concrete requirements across both lists.</p><div className="emp-row-2"><label className="field"><span className="field-label">Required · one per line</span><textarea rows={4} value={(jd.must_have || []).join('\n')} onChange={e=>setJd({...jd,must_have:e.target.value.split('\n')})}/></label><label className="field"><span className="field-label">Preferred · one per line</span><textarea rows={4} value={(jd.nice_to_have || []).join('\n')} onChange={e=>setJd({...jd,nice_to_have:e.target.value.split('\n')})}/></label></div></section>
           {error && <div className="auth-error">{error}</div>}
         </section>
       )}
@@ -253,3 +255,4 @@ function Fact({ k, v, note }) {
 }
 
 function cap(s) { return s ? s[0].toUpperCase() + s.slice(1) : s; }
+

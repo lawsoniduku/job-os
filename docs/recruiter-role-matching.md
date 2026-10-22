@@ -25,3 +25,10 @@ repeat calls on every search, sort or review.
 Validation: isolated database/API journey, grounded/fabricated quote cases,
 semantic equivalents, required-vs-preferred ranking and identity invariance;
 existing eligibility and search suites. No real applicant messages are sent.
+
+The role editor can propose a draft rubric from exact requirement phrases in the
+job description. Suggestions with fabricated quotes, missing labels, negated
+requirements or protected attributes are discarded; preferred/optional wording
+stays preferred. Recruiters review the draft criteria before saving. Manual entry
+remains available when AI capacity is full. The guided JD composer also carries
+its reviewed required/preferred requirements into the same scoring pipeline.

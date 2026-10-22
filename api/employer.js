@@ -20,6 +20,7 @@ import { classifyJob, extractEligibilitySignals, SIGNALS_VERSION } from "./roleI
 import { generateJSON, isLLMHealthy } from "../lib/llm.js";
 import { normalizeCriteria, validateReview } from "../shared/hiringWorkflow.js";
 import { employerSearchDescription } from "./employerPosting.js";
+import {suggestHiringCriteria} from './hiringCriteria.js';
 import {hiringCommunicationsRouter,dispatchHiringMail} from './hiringCommunications.js';
 import {hiringDocumentsRouter} from './hiringDocuments.js';
 import { hiringRouter } from "./hiring.js";
@@ -179,6 +180,12 @@ ${text.slice(0, 12000)}`;
     } catch {
       res.status(502).json({ error: "Couldn't read that — fill the form in manually." });
     }
+  });
+
+  r.post('/employer/postings/criteria/suggest',requireAuth,requireEmployer,llmLimit,async(req,res)=>{
+    if(typeof req.body?.description!=='string'||req.body.description.trim().length<40)return res.status(400).json({error:'Add the role responsibilities and requirements first.'});
+    try{const criteria=await suggestHiringCriteria({title:req.body.title,description:req.body.description});res.json({criteria});}
+    catch(e){res.status(e.deferred||e.rateLimited?429:503).json({error:'AI suggestions are temporarily unavailable. Your role is unchanged; enter criteria manually or retry.'});}
   });
 
   // Plain language in; either a posting or the few questions we refuse to

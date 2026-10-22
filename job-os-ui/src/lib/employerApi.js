@@ -229,3 +229,5 @@ export const requestAiHiringReview=id=>call(`/employer/submissions/${id}/analyze
 export const getCandidateCommunications=id=>call(`/employer/submissions/${id}/communications`);
 export const communicateCandidate=(id,body)=>call(`/employer/submissions/${id}/communicate`,{method:'POST',body,attempts:1});
 export const retryCandidateEmail=id=>call(`/employer/messages/${id}/retry`,{method:'POST',attempts:1});
+
+export const suggestRoleCriteria=({title,description})=>call('/employer/postings/criteria/suggest',{method:'POST',body:{title,description},timeoutMs:60000,attempts:1});
