@@ -18,10 +18,17 @@ on:
     - cron: "0 18 * * *"  # 18:00 UTC
   workflow_dispatch: {}    # lets you click "Run workflow" manually on GitHub to test
 
+concurrency:
+  group: native-job-refresh-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
 jobs:
   ingest:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -30,10 +37,11 @@ jobs:
           node-version: 22
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci --ignore-scripts --no-audit --no-fund
 
       - name: Run ingestion pipeline
         run: node ingest/pipeline.js
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+
