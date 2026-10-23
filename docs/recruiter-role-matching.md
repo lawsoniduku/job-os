@@ -32,3 +32,11 @@ requirements or protected attributes are discarded; preferred/optional wording
 stays preferred. Recruiters review the draft criteria before saving. Manual entry
 remains available when AI capacity is full. The guided JD composer also carries
 its reviewed required/preferred requirements into the same scoring pipeline.
+
+Assessment prompts retain the existing 14,000-character CV window but do not
+repeat a full job description for every candidate: the approved role criteria
+are the rubric. A request-budget regression covers the maximum rubric and
+leaves the existing token reserve within Groq's published free-plan TPM budget
+(using the client's token estimate). Provider headers and daily limits still
+govern admission; this does not promise unlimited bulk inference.
+Reference: https://console.groq.com/docs/rate-limits
