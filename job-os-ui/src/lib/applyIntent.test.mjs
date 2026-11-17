@@ -1,86 +1,113 @@
-/**
- * lib/applyIntent.test.mjs — pipeline status transitions
- * ======================================================
- * Run: node job-os-ui/src/lib/applyIntent.test.mjs
- *
- * These are the rules that decide WHICH COLUMN a card lands in. They are
- * asserted here rather than only in the UI because two bugs in this logic
- * shipped looking fine:
- *
- *   - "Save for later" upserted with ignoreDuplicates, so once apply-intent
- *     capture had already created the row, saving changed nothing and the card
- *     stayed under Applied while the toast said it was saved.
- *   - "Not yet" deliberately left the status alone, which meant applied_intent
- *     — and applied_intent renders in the Applied column, so the card sat under
- *     Applied while the toast said "Kept in Saved".
- *
- * Both were invisible to any test that checked the write succeeded, because
- * both writes DID succeed. What was wrong was where the card ended up, so that
- * is what these assert.
- */
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { PGlite } from '@electric-sql/pglite';
+import { hiringApiDb } from '../../../ingest/test_support/hiringApiDb.js';
+import { pipelineColumn, pendingApplyQuestion, closePipelinePatch } from './pipelineState.js';
+import { createApplicationTracking } from './applicationTracking.js';
 
-// Mirrors Pipeline.jsx COLS. If that changes, this must change with it.
-const COLUMN_OF = {
-  saved: "Saved", shortlist: "Saved", interested: "Saved", cv_tailored: "Saved",
-  applied: "Applied", applied_intent: "Applied",
-  assessment: "In process", interview: "In process", in_process: "In process",
-  offer: "Offer",
-  rejected: "Closed", archived: "Closed", closed: "Closed",
-};
-
-const EARLY_STAGES = ["saved", "shortlist", "interested", "cv_tailored", "applied_intent"];
-
-// Mirrors resolveApplyIntent's status map.
-function moveFor(outcome, reason = null) {
-  if (outcome === "applied")   return "applied";
-  if (outcome === "not_yet")   return "saved";
-  if (outcome === "abandoned") return reason === "broken" ? "saved" : "closed";
-  return null;
+const user={id:'00000000-0000-4000-8000-000000000001'};
+const job={id:'00000000-0000-4000-8000-000000000002',title:'Customer support',company:'Example',apply_url:'https://example.invalid/apply'};
+const now='2026-11-17T12:00:00.000Z';
+async function fixture(run) {
+ const db=new PGlite();
+ await db.exec(`create table applications(id uuid primary key default gen_random_uuid(),user_id uuid not null,job_id uuid,job_title text,company text,location text,apply_url text,salary_min integer,salary_max integer,source text,role_cluster text,verdict text,verdict_reason text,cv_label text,status text,applied_at timestamptz,apply_clicked_at timestamptz,apply_outcome text,outcome_reason text,outcome_at timestamptz,nudge_count integer default 0,nudged_at timestamptz,created_at timestamptz default now(),updated_at timestamptz default now(),unique(user_id,job_id));`);
+ const client=hiringApiDb(db),events=[];
+ let tick=0;
+ const tracking=createApplicationTracking({client,now:()=>new Date(Date.parse(now)+tick++*1000).toISOString(),onChange:()=>events.push('change')});
+ const row=async()=>(await db.query('select to_jsonb(a) as row from applications a where user_id=$1',[user.id])).rows[0]?.row;
+ try{await run({db,client,tracking,row,events});}finally{await db.close();}
 }
 
-// Mirrors saveForLater: insert-if-missing, then move when still early.
-function saveForLater(currentStatus) {
-  if (currentStatus === null) return "saved";                    // fresh insert
-  return EARLY_STAGES.includes(currentStatus) ? "saved" : currentStatus;
-}
+test('opening, ignoring, dismissing and declining a role never creates a pipeline card',()=>fixture(async({tracking,row,events})=>{
+ await tracking.recordClick({user,job});
+ let app=await row();assert.equal(pipelineColumn(app),null);assert.equal(pendingApplyQuestion(app),true);
+ // Dismissing has no state mutation. Reasons retain feedback, not a board card.
+ for(const reason of ['expired','location','visa','experience','salary','broken','other']){
+  await tracking.recordClick({user,job});app=await row();
+  assert.equal((await tracking.resolve(app,'abandoned',reason)).error,null);
+  app=await row();assert.equal(app.outcome_reason,reason);assert.equal(app.status,'applied_intent');
+  assert.equal(pipelineColumn(app),null);assert.equal(pendingApplyQuestion(app),false);
+ }
+ assert.ok(events.length);
+}));
 
-let pass = 0, fail = 0;
-const t = (name, got, want) => {
-  const ok = got === want;
-  ok ? pass++ : fail++;
-  console.log(`  ${ok ? "✅" : "❌"} ${name}`);
-  if (!ok) console.log(`       got "${got}", wanted "${want}"`);
-};
+test('explicit save and confirmed application are the only ways a click enters the board',()=>fixture(async({tracking,row})=>{
+ await tracking.recordClick({user,job});await tracking.resolve(await row(),'not_yet');
+ assert.equal(pipelineColumn(await row()),'saved');
+ await tracking.recordClick({user,job});assert.equal(pipelineColumn(await row()),'saved','reopening preserves an explicit save');
+ await tracking.resolve(await row(),'applied');
+ const app=await row();assert.equal(pipelineColumn(app),'applied');assert.ok(Date.parse(app.applied_at)>=Date.parse(now));
+ await tracking.recordClick({user,job});assert.equal(pendingApplyQuestion(await row()),false);
+}));
 
-console.log("\n📌 SAVE FOR LATER — the reported bug");
-t("after clicking the posting (applied_intent) → Saved",
-  COLUMN_OF[saveForLater("applied_intent")], "Saved");
-t("on a job never seen before → Saved",
-  COLUMN_OF[saveForLater(null)], "Saved");
-t("on an already-saved job → stays Saved",
-  COLUMN_OF[saveForLater("saved")], "Saved");
+test('stale negative answers cannot downgrade an interview or overwrite a newer explicit save',()=>fixture(async({tracking,row,db})=>{
+ await tracking.recordClick({user,job});const stale=await row();
+ await tracking.persist({user,job,status:'saved'});
+ assert.equal((await tracking.resolve(stale,'abandoned','other')).changed,false);
+ assert.equal(pipelineColumn(await row()),'saved');
+ await tracking.persist({user,job,status:'applied'});await db.query("update applications set status='interview'");
+ assert.equal((await tracking.resolve(stale,'abandoned','location')).changed,false);
+ assert.equal((await row()).status,'interview');assert.equal((await row()).apply_outcome,'applied');
+}));
 
-console.log("\n🛡️  SAVE FOR LATER — must never drag a real application backwards");
-t("a job at interview stays In process", COLUMN_OF[saveForLater("interview")], "In process");
-t("a job at applied stays Applied",      COLUMN_OF[saveForLater("applied")],   "Applied");
-t("a job at offer stays Offer",          COLUMN_OF[saveForLater("offer")],     "Offer");
+test('search actions preserve advanced stages and the original applied date',()=>fixture(async({tracking,row,db})=>{
+ await tracking.persist({user,job,status:'applied'});const applied=(await row()).applied_at;
+ for(const status of ['applied','interview','in_process','offer','closed']){
+  await db.query('update applications set status=$1',[status]);
+  await tracking.persist({user,job,status:'saved'});await tracking.persist({user,job,status:'applied'});
+  assert.equal((await row()).status,status);assert.equal((await row()).applied_at,applied);
+ }
+}));
 
-console.log("\n💬 NUDGE ANSWERS — the card must land where the toast says");
-t("'Yes, applied' → Applied",            COLUMN_OF[moveFor("applied")],            "Applied");
-t("'Not yet — keep it' → Saved",         COLUMN_OF[moveFor("not_yet")],            "Saved");
-t("'Not applying' + expired → Closed",   COLUMN_OF[moveFor("abandoned","expired")], "Closed");
-t("'Not applying' + location → Closed",  COLUMN_OF[moveFor("abandoned","location")],"Closed");
-t("broken form → Saved, not Closed",     COLUMN_OF[moveFor("abandoned","broken")],  "Saved");
+test('legacy false Closed entries hide and can be explicitly saved again without deletion',()=>fixture(async({tracking,row,db})=>{
+ await tracking.recordClick({user,job});await db.query("update applications set status='closed',apply_outcome='abandoned',outcome_reason='location'");
+ const previous=await row();assert.equal(pipelineColumn(previous),null);
+ await tracking.persist({user,job,status:'saved'});
+ assert.equal((await row()).id,previous.id);assert.equal(pipelineColumn(await row()),'saved');
+ assert.equal((await db.query('select count(*)::int as n from applications')).rows[0].n,1);
+}));
 
-console.log("\n🔁 NO ANSWER LEAVES A CARD UNDER 'Applied' BY ACCIDENT");
-for (const outcome of ["applied", "not_yet"]) {
-  const landed = COLUMN_OF[moveFor(outcome)];
-  t(`'${outcome}' resolves to a real column (not applied_intent)`,
-    moveFor(outcome) === "applied_intent" ? "applied_intent" : landed, landed);
-}
-t("applied_intent is the ONLY status that renders as unconfirmed Applied",
-  Object.entries(COLUMN_OF).filter(([s, c]) => c === "Applied" && s !== "applied").map(([s]) => s).join(","),
-  "applied_intent");
+test('only genuine application history renders in Closed; unknown states never fall back to Saved',()=>{
+ for(const status of ['saved','shortlist','interested','cv_tailored'])assert.equal(pipelineColumn({status}),'saved');
+ for(const status of ['assessment','interview','in_process'])assert.equal(pipelineColumn({status}),'in_process');
+ assert.equal(pipelineColumn({status:'offer'}),'offer');
+ for(const status of ['closed','rejected','archived']){
+  assert.equal(pipelineColumn({status,apply_outcome:'abandoned'}),null);
+  assert.equal(pipelineColumn({status,applied_at:now,apply_outcome:'abandoned'}),'closed');
+  assert.equal(pipelineColumn({status,apply_outcome:'applied'}),'closed');
+ }
+ for(const status of ['applied_intent','unknown',null])assert.equal(pipelineColumn({status}),null);
+ assert.equal(pendingApplyQuestion({status:'interview',apply_clicked_at:now}),false);
+});
 
-console.log(`\n${pass} passed, ${fail} failed\n`);
-process.exit(fail ? 1 : 0);
+test('removing an unsent Saved card hides it; closing an interview preserves application history',()=>{
+ const removed={status:'saved',...closePipelinePatch({status:'saved'},now)};
+ assert.equal(pipelineColumn(removed),null);assert.equal(removed.apply_outcome,'abandoned');
+ for(const status of ['applied','interview','offer']){
+  const closed={status,...closePipelinePatch({status},now)};
+  assert.equal(pipelineColumn(closed),'closed');assert.equal(closed.applied_at,undefined);
+ }
+});
+
+test('reopening pipeline rows uses job_id; orphan snapshots never use the application ID',()=>fixture(async({tracking,row,db})=>{
+ await tracking.persist({user,job,status:'saved'});const saved=await row();
+ await tracking.recordClick({user,job:saved});await tracking.recordClick({user,job:{...saved,job_id:null}});
+ assert.equal((await db.query('select count(*)::int as n from applications')).rows[0].n,1);
+}));
+
+test('failed writes are returned without half an outcome or false success',()=>fixture(async({client,tracking,row,db,events})=>{
+ await tracking.recordClick({user,job});const before=await row();events.length=0;
+ await db.exec('alter table applications add constraint block_answer check (apply_outcome is null)');
+ assert.ok((await tracking.resolve(before,'applied')).error);
+ assert.equal((await row()).apply_outcome,null);assert.equal((await row()).status,'applied_intent');assert.equal(events.length,0);
+ const failing=createApplicationTracking({client:{from:()=>{throw Error('network unavailable');}}});
+ assert.match((await failing.persist({user,job,status:'saved'})).error.message,/network/);
+ assert.equal((await createApplicationTracking({client}).resolve(before,'unsupported')).changed,false);
+}));
+
+test('an application now owned by another account cannot be resolved',()=>fixture(async({tracking,row,db})=>{
+ await tracking.recordClick({user,job});const app=await row();
+ await db.query('update applications set user_id=$1',['00000000-0000-4000-8000-000000000099']);
+ assert.equal((await tracking.resolve(app,'applied')).changed,false);
+ assert.equal((await db.query('select status from applications')).rows[0].status,'applied_intent');
+}));

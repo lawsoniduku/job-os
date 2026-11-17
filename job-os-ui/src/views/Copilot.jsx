@@ -17,7 +17,7 @@ import { supabase } from "../lib/supabaseClient";
 import { jobTrust } from "../lib/eligibility";
 import { JobTrustDetails } from "../components/JobTrustDetails";
 import { track } from "../lib/track";
-import { recordApplyIntent, EARLY_STAGES } from "../lib/applyIntent";
+import { recordApplyIntent, persistPipelineJob } from "../lib/applyIntent";
 import { extractTextFromFile } from "../lib/extractText";
 import { downloadCvPdf, cvFilename } from "../lib/pdf";
 
@@ -359,50 +359,14 @@ export default function Copilot({ shared, active, initialQuery, onInitialConsume
   async function saveForLater(job) {
     if (!requireAuth()) return false;
     const v = verdictOf(job);
-    const { error } = await supabase.from("applications").upsert({
-      user_id: user.id,
-      job_id: job.id,
-      job_title: job.title,
-      company: job.company,
-      location: job.location,
-      apply_url: job.apply_url,
-      salary_min: job.salary_min,
-      salary_max: job.salary_max,
-      source: job.source,
-      role_cluster: job.role_cluster || null,
-      verdict: v.key,
-      verdict_reason: job.eligibility?.reason || null,
-      status: "saved",
-    }, { onConflict: "user_id,job_id", ignoreDuplicates: true });
+    const { error, changed, app } = await persistPipelineJob({user,job:{...job,verdict:v.key},status:"saved"});
     if (error) {
       showToast(`Couldn't save: ${error.message}`);
       return false;
     }
-
-    // The upsert above only INSERTS — ignoreDuplicates leaves an existing row
-    // completely untouched. That was harmless until apply-intent capture
-    // started creating the row first: opening the posting from this same modal
-    // writes status "applied_intent", so the save then changed nothing and the
-    // card sat under Applied while the toast said it was saved.
-    //
-    // "Save for later" is an explicit statement of intent, so it moves the
-    // card — but only from a stage where that is not a downgrade. A row at
-    // interview stays at interview.
-    const { error: moveErr } = await supabase.from("applications")
-      .update({
-        status: "saved",
-        // Saving IS the answer to "did you apply?" — no, not yet. Recording it
-        // here stops ReturnNudge asking about a job they have just filed away,
-        // and keeps apply_outcome consistent with where the card now sits.
-        apply_outcome: "not_yet",
-        outcome_at: new Date().toISOString(),
-      })
-      .eq("user_id", user.id)
-      .eq("job_id", job.id)
-      .in("status", EARLY_STAGES);
-    if (moveErr) {
-      showToast(`Couldn't save: ${moveErr.message}`);
-      return false;
+    if (!changed && app?.status !== "saved") {
+      showToast("Already tracked in Pipeline — your current stage was kept");
+      return true;
     }
     track(user, "saved_for_later", { job_id: job.id, company: job.company });
     showToast(`${job.company || job.title} saved — find it in Pipeline`);
@@ -923,22 +887,11 @@ function TailorModal({ job, shared, onSaveForLater, onClose }) {
   async function markApplied() {
     if (!requireAuth()) return;
     const v = verdictOf(job);
-    const { error: e } = await supabase.from("applications").upsert({
-      user_id: user.id, job_id: job.id,
-      job_title: job.title, company: job.company, location: job.location,
-      apply_url: job.apply_url, salary_min: job.salary_min, salary_max: job.salary_max,
-      source: job.source, role_cluster: job.role_cluster || null,
-      verdict: v.key, verdict_reason: job.eligibility?.reason || null,
-      // A hand-confirmed "I applied" is the strongest answer the nudge could
-      // ever get, so record it in the same shape and skip asking later.
-      status: "applied", applied_at: new Date().toISOString(),
-      apply_outcome: "applied", outcome_at: new Date().toISOString(),
-      cv_label: `CV · ${job.company || job.title}`,
-    }, { onConflict: "user_id,job_id" });
+    const {error:e,changed} = await persistPipelineJob({user,job:{...job,verdict:v.key},status:"applied",cvLabel:`CV · ${job.company || job.title}`});
     if (e) showToast(`Couldn't record: ${e.message}`);
     else {
       track(user, "marked_applied", { job_id: job.id, company: job.company });
-      showToast("Recorded in Pipeline — interview prep is ready on that card");
+      showToast(changed ? "Recorded in Pipeline — interview prep is ready on that card" : "Already tracked — your current stage and application date were kept");
       onClose();
     }
   }
