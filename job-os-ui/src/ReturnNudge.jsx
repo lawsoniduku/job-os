@@ -30,6 +30,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "./lib/supabaseClient";
 import { track } from "./lib/track";
 import { resolveApplyIntent, markNudged } from "./lib/applyIntent";
+import { EARLY_STAGES, pendingApplyQuestion } from "./lib/pipelineState";
 
 const DWELL_MIN_MS   = 15 * 1000;            // faster than this = didn't apply
 const INTENT_MAX_AGE = 14 * 24 * 3600 * 1000; // after a fortnight, don't bother
@@ -90,7 +91,10 @@ export default function ReturnNudge({ user, showToast }) {
 
     const { data, error } = await supabase
       .from("applications")
-      .select("id, job_id, job_title, company, apply_url, applied_at, apply_clicked_at, nudge_count, nudged_at")
+      .select("id, user_id, job_id, job_title, company, status, apply_outcome, apply_url, applied_at, apply_clicked_at, nudge_count, nudged_at")
+      .eq("user_id", user.id)
+      .in("status", EARLY_STAGES)
+      .is("applied_at", null)
       .is("apply_outcome", null)
       .not("apply_clicked_at", "is", null)
       .lt("nudge_count", MAX_NUDGES)
@@ -99,7 +103,7 @@ export default function ReturnNudge({ user, showToast }) {
     if (error || !data?.length) return;
 
     for (const a of data) {
-      if (dismissed.current.has(a.id)) continue;
+      if (dismissed.current.has(a.id) || !pendingApplyQuestion(a)) continue;
       const clicked = new Date(a.apply_clicked_at).getTime();
       const away = now - clicked;
 
@@ -165,7 +169,7 @@ export default function ReturnNudge({ user, showToast }) {
 
   async function answer(outcome, reason = null) {
     setBusy(true);
-    const { error } = await resolveApplyIntent(app, outcome, reason);
+    const { error, changed } = await resolveApplyIntent(app, outcome, reason);
     setBusy(false);
     if (error) { showToast?.(`Couldn't save that: ${error.message}`); return; }
 
@@ -173,7 +177,9 @@ export default function ReturnNudge({ user, showToast }) {
     dismissed.current.add(app.id);
     setApp(null);
 
-    // The reply is the payoff, not a thank-you — say what we'll now do.
+    if (!changed) { showToast?.("Your newer Pipeline update was kept."); return; }
+
+    // The reply names the explicit action taken.
     // Each line names where the card actually went. They are worth keeping in
     // step with the status map in resolveApplyIntent — the previous "Kept in
     // Saved" was said while the card stayed under Applied, which teaches
@@ -181,11 +187,9 @@ export default function ReturnNudge({ user, showToast }) {
     if (outcome === "applied") {
       showToast?.("Tracked. I'll flag it in Briefing if there's no reply by day 7.");
     } else if (outcome === "not_yet") {
-      showToast?.("Moved back to Saved — it'll resurface in your Briefing.");
-    } else if (reason === "broken") {
-      showToast?.("Back in Saved so you can retry — and noted, that helps.");
+      showToast?.("Saved for later — find it in Pipeline.");
     } else {
-      showToast?.("Moved to Closed. That feedback tunes what reaches you.");
+      showToast?.("Not added to Pipeline. Your feedback was noted.");
     }
   }
 
@@ -210,13 +214,12 @@ export default function ReturnNudge({ user, showToast }) {
           <div className="nudge-acts">
             {/* Three answers with three different outcomes, so each label has
                 to carry its consequence. "Not yet" and "Didn't apply" read as
-                near-synonyms while doing opposite things — one keeps the job,
-                the other closes it. */}
+                near-synonyms, so saving must explicitly say it keeps the job. */}
             <button className="btn primary" onClick={() => answer("applied")} disabled={busy}>Yes, applied</button>
-            <button className="btn" onClick={() => answer("not_yet")} disabled={busy}>Not yet — keep it</button>
+            <button className="btn" onClick={() => answer("not_yet")} disabled={busy}>Save for later</button>
             <button className="btn subtle" onClick={() => setAsking(true)} disabled={busy}>Not applying</button>
           </div>
-          <button className="nudge-x" onClick={dismiss} aria-label="Dismiss">✕</button>
+          <button className="nudge-x" onClick={dismiss} aria-label="Dismiss" disabled={busy}>✕</button>
         </>
       ) : (
         <>
@@ -224,7 +227,7 @@ export default function ReturnNudge({ user, showToast }) {
             <div className="nudge-q">What stopped you?</div>
             <div className="nudge-sub">
               This is the signal that keeps roles you can't apply to out of your results.
-              The job moves to Closed — except a broken form, which goes back to Saved so you can retry.
+              This will not add the job to your Pipeline. Use Save for later if you want to keep it.
             </div>
           </div>
           <div className="nudge-reasons">
@@ -234,7 +237,7 @@ export default function ReturnNudge({ user, showToast }) {
               </button>
             ))}
           </div>
-          <button className="nudge-x" onClick={() => setAsking(false)} aria-label="Back">✕</button>
+          <button className="nudge-x" onClick={() => setAsking(false)} aria-label="Back" disabled={busy}>✕</button>
         </>
       )}
     </div>

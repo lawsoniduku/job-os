@@ -1,42 +1,20 @@
-/**
- * views/Pipeline.jsx — every application, saved to closed.
- *
- * The DB accepts the full lifecycle (migration 006); the UI maps those
- * statuses into 5 clear columns:
- *   Saved       <- saved | shortlist | interested | cv_tailored
- *   Applied     <- applied
- *   In process  <- assessment | interview | in_process
- *   Offer       <- offer
- *   Closed      <- rejected | archived | closed
- */
+/** Pipeline contains deliberate saves and real applications, never browsing history. */
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { aiInterviewCoach, fmtSalary, daysSince } from "../lib/api";
 import { track } from "../lib/track";
-import { openApply, resolveApplyIntent } from "../lib/applyIntent";
+import { openApply, PIPELINE_CHANGED, notifyPipelineChanged } from "../lib/applyIntent";
+import { PIPELINE_COLUMNS as COLS, pipelineColumn, closePipelinePatch } from "../lib/pipelineState";
 import { REASON_LABELS } from "../lib/employerApi";
 
-const COLS = [
-  { key: "saved",      label: "Saved",      statuses: ["saved", "shortlist", "interested", "cv_tailored"] },
-  // applied_intent sits here rather than in a column of its own: an
-  // unconfirmed application is a STATE of an application, not a stage of a
-  // search. The card renders as unconfirmed and asks in place.
-  { key: "applied",    label: "Applied",    statuses: ["applied", "applied_intent"] },
-  { key: "in_process", label: "In process", statuses: ["assessment", "interview", "in_process"] },
-  { key: "offer",      label: "Offer",      statuses: ["offer"] },
-  { key: "closed",     label: "Closed",     statuses: ["rejected", "archived", "closed"] },
-];
-// Advancing moves a card to the canonical status of the next column.
 const NEXT = { saved: "applied", applied: "in_process", in_process: "offer" };
-
-function colOf(status) {
-  return COLS.find((c) => c.statuses.includes(status))?.key || "saved";
-}
+const ADVANCE_LABEL = {saved:"Mark as applied",applied:"Move to In progress",in_process:"Mark offer"};
 
 export default function Pipeline({ shared, active }) {
   const { user, requireAuth, showToast, setView } = shared;
   const [apps, setApps] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [loadError,setLoadError] = useState("");
   const [prepApp, setPrepApp] = useState(null);
   // application_id -> the employer's answer, for applications made to a
   // posting inside JobCopilot. EmployerInbox shows a rejection ONCE, as a
@@ -48,11 +26,15 @@ export default function Pipeline({ shared, active }) {
   const load = useCallback(async () => {
     if (!user) { setApps([]); setAnswers({}); return; }
     setLoading(true);
+    setLoadError("");
     const { data, error } = await supabase
       .from("applications")
       .select("*")
+      .eq("user_id",user.id)
+      .neq("status","applied_intent")
       .order("updated_at", { ascending: false });
-    if (!error) setApps(data || []);
+    if (error) { setLoadError("Could not load your Pipeline. Please retry."); setLoading(false); return; }
+    setApps((data || []).filter(a=>pipelineColumn(a)));
 
     // Feedback keys on submission, and submission is what knows the
     // application it came from — so it takes both reads to get from "this
@@ -73,39 +55,47 @@ export default function Pipeline({ shared, active }) {
     setLoading(false);
   }, [user]);
 
-  useEffect(() => { if (active) load(); }, [active, load]);
+  useEffect(() => {
+    if (!active) return;
+    const refresh=()=>{ void load(); };
+    refresh();
+    window.addEventListener(PIPELINE_CHANGED,refresh);
+    return ()=>window.removeEventListener(PIPELINE_CHANGED,refresh);
+  }, [active, load]);
 
   async function advance(app) {
-    const next = NEXT[colOf(app.status)];
+    const next = NEXT[pipelineColumn(app)];
     if (!next) return;
     const patch = { status: next };
-    if (next === "applied" && !app.applied_at) patch.applied_at = new Date().toISOString();
-    const { error } = await supabase.from("applications").update(patch).eq("id", app.id);
+    if (next === "applied") {
+      patch.applied_at = app.applied_at || new Date().toISOString();
+      patch.apply_outcome = "applied";
+      patch.outcome_at = new Date().toISOString();
+      patch.outcome_reason = null;
+    }
+    const { data,error } = await supabase.from("applications").update(patch).eq("id",app.id).eq("user_id",user.id).eq("status",app.status).select("id");
     if (error) return showToast(`Couldn't move it: ${error.message}`);
-    track(user, "pipeline_advance", { from: colOf(app.status), to: next });
-    showToast(next === "offer" ? "Moved to Offer 🎉" : `Moved to ${COLS.find((c) => c.key === colOf(next)).label}`);
-    load();
-  }
-
-  // In-place answer to the same question ReturnNudge asks. A user scanning
-  // their board is the other natural moment to confirm, so the card carries
-  // the control rather than making them wait to be asked.
-  async function confirmApplied(app) {
-    const { error } = await resolveApplyIntent(app, "applied");
-    if (error) return showToast(`Couldn't confirm: ${error.message}`);
-    track(user, "apply_confirmed", { job_id: app.job_id, via: "pipeline_card" });
-    showToast("Confirmed — follow-up reminders start from today");
-    load();
+    if (!data?.length) { showToast("This job changed. Your latest stage was kept."); load(); return; }
+    notifyPipelineChanged();
+    track(user, "pipeline_advance", { from: pipelineColumn(app), to: next });
+    showToast(next === "offer" ? "Moved to Offer 🎉" : `Moved to ${COLS.find((c) => c.key === pipelineColumn({status:next})).label}`);
   }
 
   async function closeApp(app) {
-    const { error } = await supabase.from("applications").update({ status: "closed" }).eq("id", app.id);
-    if (!error) { showToast("Moved to Closed"); load(); }
+    const patch=closePipelinePatch(app,new Date().toISOString());
+    if (!patch) return;
+    const {data,error}=await supabase.from("applications").update(patch)
+      .eq("id",app.id).eq("user_id",user.id).eq("status",app.status).select("id");
+    if (error) return showToast(`Couldn't update it: ${error.message}`);
+    if (!data?.length) { showToast("This job changed. Your latest stage was kept."); load(); return; }
+    showToast(patch.status==="closed" ? "Moved to Closed" : "Removed from Saved");
+    notifyPipelineChanged();
   }
 
   async function remove(app) {
-    const { error } = await supabase.from("applications").delete().eq("id", app.id);
-    if (!error) { showToast("Removed"); load(); }
+    const { error } = await supabase.from("applications").delete().eq("id", app.id).eq("user_id",user.id);
+    if (error) return showToast(`Couldn't remove it: ${error.message}`);
+    showToast("Removed"); notifyPipelineChanged();
   }
 
   if (!user) {
@@ -113,7 +103,7 @@ export default function Pipeline({ shared, active }) {
       <div className="scrollarea"><div className="page">
         <div className="page-eyebrow">Applications</div>
         <h1>Pipeline</h1>
-        <p className="sub">Track every application from saved to offer — each card keeps the job snapshot, dates, and the CV version you sent, even after the posting expires.</p>
+        <p className="sub">Track saved jobs and applications from applied to offer — each card keeps the job snapshot, dates, and the CV version you sent, even after the posting expires.</p>
         <button className="btn primary" onClick={requireAuth}>Sign in or create account</button>
       </div></div>
     );
@@ -124,11 +114,13 @@ export default function Pipeline({ shared, active }) {
       <div className="page-eyebrow">Applications</div>
       <h1>Pipeline</h1>
       <p className="sub">
-        Everything in flight. Cards keep their job snapshot even after the posting expires.
+        Only jobs you saved or applied for. Closed keeps completed applications, not jobs you only viewed.
         {loading ? " Loading…" : ""}
       </p>
 
-      {apps.length === 0 && !loading && (
+      {loadError && <div role="alert" className="studio-card"><p>{loadError}</p><button className="btn" onClick={load}>Retry</button></div>}
+
+      {apps.length === 0 && !loading && !loadError && (
         <div className="studio-card">
           <h3>Nothing in flight yet</h3>
           <div className="s-sub">Open any job in Copilot with Tailor & apply — "Save for later" or "Mark as applied" lands it here.</div>
@@ -139,7 +131,7 @@ export default function Pipeline({ shared, active }) {
       {apps.length > 0 && (
         <div className="board">
           {COLS.map((col) => {
-            const cards = apps.filter((a) => colOf(a.status) === col.key);
+            const cards = apps.filter((a) => pipelineColumn(a) === col.key);
             return (
               <div className="col" key={col.key}>
                 <div className="col-head">{col.label}<span className="ccount">{cards.length}</span></div>
@@ -156,7 +148,6 @@ export default function Pipeline({ shared, active }) {
                     onClose={closeApp}
                     onRemove={remove}
                     onPrep={setPrepApp}
-                    onConfirm={confirmApplied}
                   />
                 ))}
               </div>
@@ -170,34 +161,24 @@ export default function Pipeline({ shared, active }) {
   );
 }
 
-function AppCard({ app, answer, user, onAdvance, onClose, onRemove, onPrep, onConfirm }) {
-  const col = colOf(app.status);
+function AppCard({ app, answer, user, onAdvance, onClose, onRemove, onPrep }) {
+  const col = pipelineColumn(app);
   const days = daysSince(app.applied_at || app.created_at);
   const sal = fmtSalary(app.salary_min, app.salary_max);
   // Prep is available on ANY card that still links to a live job record —
   // users prepare before applying too, not only once "in process".
   const canPrep = !!app.job_id;
-  // We saw them click through but they've never told us what happened.
-  const unconfirmed = app.status === "applied_intent" && !app.apply_outcome;
-  const clickedDays = daysSince(app.apply_clicked_at);
 
   return (
-    <div className={`p-card ${unconfirmed ? "unconfirmed" : ""}`}>
+    <div className="p-card">
       <div className="pc-title">{app.job_title}</div>
       <div className="pc-co">{app.company || "—"}</div>
       <div className="pc-meta">
-        {unconfirmed ? `Opened ${clickedDays === 0 ? "today" : `${clickedDays}d ago`}` :
-         col === "applied" && days !== null ? `Applied · day ${Math.max(days, 0) + 1}` :
+        {col === "applied" && days !== null ? `Applied · day ${Math.max(days, 0) + 1}` :
          col === "saved" ? `Saved ${days === 0 ? "today" : `${days}d ago`}` :
          `Updated ${daysSince(app.updated_at) === 0 ? "today" : `${daysSince(app.updated_at)}d ago`}`}
         {sal ? ` · ${sal}` : ""}
       </div>
-      {unconfirmed && (
-        <div className="pc-confirm">
-          <span className="pc-unconf">Did you apply?</span>
-          <button onClick={() => onConfirm(app)}>Yes, I applied</button>
-        </div>
-      )}
       {/* Only ever present on applications made to a posting inside
           JobCopilot — which is the whole argument for applying here rather
           than clicking through to a careers page. */}
@@ -216,13 +197,13 @@ function AppCard({ app, answer, user, onAdvance, onClose, onRemove, onPrep, onCo
       )}
       {app.cv_label && <div className="pc-cv">{app.cv_label}</div>}
       <div className="pc-actions">
-        {NEXT[col] && <button onClick={() => onAdvance(app)}>Advance →</button>}
+        {NEXT[col] && <button onClick={() => onAdvance(app)}>{ADVANCE_LABEL[col]}</button>}
         {canPrep && <button onClick={() => onPrep(app)}>Prep interview</button>}
         {app.apply_url && (
           <button onClick={() => openApply({ user, job: app, source: "pipeline_card" })}>Open ↗</button>
         )}
         {col !== "closed" ? (
-          <button className="danger" onClick={() => onClose(app)}>Close</button>
+          <button className="danger" onClick={() => onClose(app)}>{col === "saved" ? "Remove saved" : "Close application"}</button>
         ) : (
           <button className="danger" onClick={() => onRemove(app)}>Remove</button>
         )}

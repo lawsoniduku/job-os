@@ -27,6 +27,7 @@
     "express-rate-limit": "^8.5.2"
   },
   "devDependencies": {
-    "@electric-sql/pglite": "0.3.16"
+    "@electric-sql/pglite": "0.3.16",
+    "jsdom": "26.1.0"
   }
 }
